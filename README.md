@@ -1,5 +1,23 @@
 # Instructions on how to build and run this Dockerfile and the Erlang environment:
 
+### 0. Git Workflow
+    git add .       #Saves a new version to local git
+    git commit -m "Describe what changed"   #with comments
+    git push        #Saves it to Github
+
+    3. Optional - Use Branches (For New Features or Experiments):
+bash
+Copy
+Edit
+git checkout -b new-feature
+Work on your new feature, then:
+        git checkout -b new-feature
+
+        git add .
+        git commit -m "Added new feature"
+        git push -u origin new-feature
+
+
 ### 1. Build the Docker image (ONLY ONCE):
     # a. Open terminal/PowerShell.
     # b. Navigate to the directory containing this Dockerfile.
