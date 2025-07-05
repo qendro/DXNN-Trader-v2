@@ -18,12 +18,7 @@
 	high,
 	low,
 	close,
-	volume,
-	diff,
-	ema6,
-	ema14,
-	ema26,
-	ema50}).
+	volume}).
 -record(metadata,{
 	feature, %P={Currency,Feature}
 	first,
@@ -41,12 +36,7 @@
 	high,
 	low,
 	close,
-	volume,
-	diff,
-	ema6,
-	ema14,
-	ema26,
-	ema50]).
+	volume]).
 
 -record(technical_e,{
 	id,	%%%key={Year,Month,Day,Hour,Minute,Second}
@@ -900,10 +890,10 @@ update_ForexDB(TableName,CurrencyPair,SamplingRate,List)->
 	case (Second == 0) and ((Open+High+Low+Close) < 1000) and ((Open+High+Low+Close) > -1000) of
 		true ->
 			case member(TableName,Id) of
-				false ->%{key,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate},open,high,low,close,volume,diffema6,ema14,ema26,ema50}).
+				false ->%{key,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate},open,high,low,close,volume}).
 					Record = #technical{id=Id,open=Open,high=High,low=Low,close=Close,volume=Volume},
 					insert(TableName,Record),
-					io:format("New record inserted into table:~p~n",[TableName]),
+					%io:format("New record inserted into table:~p~n",[TableName]),
 					case get(new_id) of
 						undefined ->
 							put(new_id,Id);

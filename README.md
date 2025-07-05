@@ -6,13 +6,9 @@
     git push        #Saves it to Github
 
     3. Optional - Use Branches (For New Features or Experiments):
-bash
-Copy
-Edit
-git checkout -b new-feature
-Work on your new feature, then:
-        git checkout -b new-feature
 
+    git checkout -b new-feature
+    #Work on your new feature, then:
         git add .
         git commit -m "Added new feature"
         git push -u origin new-feature

@@ -27,7 +27,7 @@ start(Id)->
 		init_specie_size=100, %qChangeFrom 10,
 		polis_id = mathema,
 		generation_limit = inf,
-		evaluations_limit = 10, %qChangeFrom 10000,
+		evaluations_limit = 10000, %qChangeFrom 10000, optimized from 10
 		fitness_goal = inf
 	},
 	E=#experiment{
