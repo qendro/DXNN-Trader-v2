@@ -17,6 +17,10 @@ Work on your new feature, then:
         git commit -m "Added new feature"
         git push -u origin new-feature
 
+        git log --oneline   # Log of all versions
+        git log --stat      # Log with changes
+
+
 
 ### 1. Build the Docker image (ONLY ONCE):
     # a. Open terminal/PowerShell.
