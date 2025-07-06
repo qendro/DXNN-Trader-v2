@@ -1,0 +1,121 @@
+# Erlang/OTP specific
+*.beam
+*.boot
+*.app
+erl_crash.dump
+ebin/
+deps/
+_build/
+.rebar/
+.rebar3/
+rebar.lock
+logs/
+log/
+*.log
+
+# Mnesia database files
+Mnesia.*/
+mnesia_*/
+FALLBACK.BUP
+
+# Compiled files
+*.o
+*.so
+*.dll
+*.dylib
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.#*
+#*#
+
+# Build artifacts
+*.tar.gz
+*.zip
+rel/
+relx
+_rel/
+
+# Test artifacts
+.eunit/
+test/*.beam
+eunit.coverdata
+ct_run.*/
+logs/
+
+# Documentation
+doc/
+docs/
+*.html
+edoc-info
+
+# Node.js (if using any JS tooling)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (if using any Python scripts)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# Docker
+.dockerignore
+
+# Data files that might be generated
+*.csv
+*.dat
+*.backup
+*.bak
+
+# Trading/Forex specific data (if sensitive)
+# Uncomment if these contain sensitive trading data:
+# fx_tables/
+# benchmarks/
+
+# Project specific
+# Add any project-specific files to ignore here
+results/
+outputs/
+graphs/
+reports/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Erlang shell history
+.erlang_history
+
+# Cover tool
+cover/
+*.coverdata
+
+# Dialyzer
+.plt/
+dialyzer_warnings
+
+# Local configuration
+config/local.config
+priv/local/
