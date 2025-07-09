@@ -18,6 +18,10 @@ Mnesia.*/
 mnesia_*/
 FALLBACK.BUP
 
+# FX Trading Data Files (ignore the large binary data files but keep .txt and folder structure)
+fx_tables/*
+!fx_tables/*.txt
+
 # Compiled files
 *.o
 *.so
