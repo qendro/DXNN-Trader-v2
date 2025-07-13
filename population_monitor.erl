@@ -466,7 +466,7 @@ init_population(Init_State,Specie_Constraints)->
 			Specie_Id = genotype:generate_UniqueId(),
 			create_specie(Population_Id,Specie_Id,SpecieSize,[],SpeCon,Fingerprint).
 		create_specie(Population_Id,Specie_Id,0,IdAcc,SpeCon,Fingerprint)->
-			io:format("Specie_Id:~p Morphology:~p~n",[Specie_Id,SpeCon#constraint.morphology]),
+			%io:format("Specie_Id:~p Morphology:~p~n",[Specie_Id,SpeCon#constraint.morphology]), %qq
 			Specie = #specie{
 				id = Specie_Id,
 				population_id = Population_Id,

@@ -48,6 +48,7 @@ start(Agent_Id,PM_PId)->
 	start(Agent_Id,PM_PId,gt).
 
 start(Agent_Id,PM_PId,OpMode)->
+	%io:format("Starting exoself:~n  Agent_Id: ~p~n  PM_PId: ~p~n  OpMode: ~p~n", [Agent_Id, PM_PId, OpMode]),
 	spawn(exoself,prep,[Agent_Id,PM_PId,OpMode]).
 %The start/3 function spawns a new Agent_Id exoself process, belonging to the population_monitor process with the pid PM_PId, and using the OpMode with which it was spawned.
 

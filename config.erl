@@ -8,9 +8,9 @@
 get(Key, Default) ->
     case Key of
         fx_table -> 'EURUSD1';%%'EURUSD15'; 'EURUSD1';
-        specie_size_limit -> 100;
-        init_specie_size -> 100;
-        evaluations_limit -> 10000;
+        specie_size_limit -> 10;
+        init_specie_size -> 10;
+        evaluations_limit -> 100;
         tot_runs -> 3;
         morphology -> forex_trader;
         _ -> Default

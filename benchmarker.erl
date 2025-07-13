@@ -41,6 +41,8 @@ start(Id)->
 		started={date(),time()},
 		interruptions=[]
 	},
+	io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
+    io:format("Experiment record: ~p~n", [E]), %qq
 	genotype:write(E),
 	register(benchmarker,spawn(benchmarker,prep,[E])).
 
