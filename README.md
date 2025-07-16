@@ -28,28 +28,120 @@
 
 ## Windows (other shells):
     # Command Prompt: docker run -it --rm -v %cd%:/app -w /app erlang-dev
-    # Git Bash: docker run -it --rmdocker build -t erlang-dev . -v $(pwd):/app -w /app erlang-dev
+    # Git Bash: docker run -it --rm -v $(pwd):/app -w /app erlang-dev
 
-## Data Configuration
+## Experiment Configuration
 
-This system supports multiple EURUSD timeframes for forex trading evolution:
+This system now supports configurable experiment parameters via the `config.erl` module. You can easily switch between different datasets, population sizes, and other experiment settings without modifying the core code.
+
+### Configuration Parameters
+
+Edit `config.erl` to change experiment settings:
+
+```erlang
+% In config.erl, modify these values:
+get(fx_table, _Default) -> 'EURUSD15';        % Data source to use
+get(specie_size_limit, _Default) -> 10;       % Population size per species  
+get(agent_encoding, _Default) -> neural;      % Neural network encoding
+get(selection_algorithm, _Default) -> top3;   % Selection method
+get(op_mode, _Default) -> benchmark;          % Operation mode
+```
+
+### Available Data Sources
+
+The system includes multiple EURUSD timeframes:
 - **EURUSD1** - 1-minute intervals (for high-frequency trading)
-- **EURUSD15** - 15-minute intervals (CURRENTLY ACTIVE)
-- **EURUSD30** - 30-minute intervals
+- **EURUSD15** - 15-minute intervals (DEFAULT)
+- **EURUSD30** - 30-minute intervals  
 - **EURUSD60** - 60-minute intervals
 
-The neural networks are currently configured to use **EURUSD15** (15-minute data) for:
-- **fx_PCI sensor** - Price Chart Input (50x20 resolution chart encoding)
-- **fx_PLI sensor** - Price List Input (10 data points sliding window)
+### Quick Start Workflow
 
-To switch to other timeframes, modify the sensor configurations in `sensor.erl`.
+**Step 1: Start Docker and Erlang Shell**
+```bash
+docker run -it --rm -v $(pwd):/app -w /app erlang-dev
+```
+q
+**Step 2: Initialize System (in Erlang shell)**
+```erlang
+mnesia:create_schema([node()]).
+mnesia:start().
+make:all().
+fx:init().
+fx:start().
+polis:create().
+polis:start().
+```
+
+**Step 3: Run Experiment**
+```erlang
+benchmarker:start(sliding_window_5).
+```
+
+**Step 4: Check Results**
+```erlang
+genotype_utils:print_best_genotype(all).
+```
+
+### How to Use Different Configurations
+
+1. **Change the data source**: Edit `fx_table` in `config.erl`
+2. **Recompile**: Run `make:all().` in the Erlang shell
+3. **Run experiment**: `benchmarker:start(sliding_window_5).`
+
+**Example - Switch to 1-minute data:**
+```erlang
+% Edit config.erl: 
+get(fx_table, _Default) -> 'EURUSD1';
+
+% Then in Erlang shell:
+make:all().
+benchmarker:start(sliding_window_10).
 
 ## Initialize and start fx.erl
+    
+c(actuator).
+c(benchmarker).
+c(cortex).
+c(exoself).
+c(fitness_postprocessor).
+c(functions).
+c(fx).
+c(genome_mutator).
+c(genotype_utils).
+c(genotype).
+c(morphology).
+c(neuron).
+c(plasticity).
+c(polis).
+c(population_monitor).
+c(scape).
+c(selection_algorithm).
+c(sensor).
+c(signal_aggregator).
+c(substrate_cep).
+c(substrate_cpp).
+c(substrate).
+c(tot_topological_mutations).
+c(tuning_duration).
+c(tuning_selection).
+
     make:all().
+    mnesia:create_schema([node()]).
+    mnesia:start().
     fx:init().
     fx:start().
+    polis:create().
     polis:start().
+    polis:sync().
     benchmarker:start(sliding_window_5).
+    
+    benchmarker:start(chart_plane_5x10).
+
+    benchmarker:start(sliding_window_5).
+    .
+
+
     benchmarker:start(sliding_window_10).
     benchmarker:start(sliding_window_20).
     benchmarker:start(sliding_window_50).
@@ -66,8 +158,11 @@ To switch to other timeframes, modify the sensor configurations in `sensor.erl`.
 
 
 # Reseting Mnesia
+   #bash find . -name "*.beam" -delete
     # Stop mnesia
     mnesia:stop().
+    mnesia:delete_schema([node()]).
+    q().
 
     # Delete the entire database
     mnesia:delete_schema([node()]).
