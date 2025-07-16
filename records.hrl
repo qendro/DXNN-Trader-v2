@@ -20,7 +20,7 @@
 -record(object,{id,sector,type,color,loc,pivot,parameters=[]}).
 
 -record(constraint,{
-	morphology=xor_mimic, %xor_mimic 
+	morphology=forex_trader, %forex_trader 
 	connection_architecture = recurrent, %recurrent|feedforward 
 	neural_afs=[tanh,cos,gaussian,absolute], %[tanh,cos,gaussian,absolute,sin,sqrt,sigmoid],
 	neural_pfns=[none], %[none,hebbian_w,hebbian,ojas_w,ojas,self_modulationV1,self_modulationV2,self_modulationV2,self_modulationV3,self_modulationV4,self_modulationV5,self_modulationV6,neuromodulation]

@@ -41,27 +41,7 @@ pts(ExoSelf_PId,Result,_Scape)->
 	{1,0}.
 %The pts/2 actuation function simply prints to screen the vector passed to it.
 
-xor_SendOutput(ExoSelf_PId,Output,_Parameters,Scape)->
-	Scape ! {self(),action,Output},
-	receive 
-		{Scape,Fitness,HaltFlag}->
-			{Fitness,HaltFlag}
-	end.
-%xor_sim/2 function simply forwards the Output vector to the XOR simulator, and waits for the resulting Fitness and EndFlag from the simulation process.
 
-pb_SendOutput(ExoSelf_PId,Output,Parameters,Scape)->
-	Scape ! {self(),push,Parameters,Output},
-	receive 
-		{Scape,Fitness,HaltFlag}->
-			{Fitness,HaltFlag}
-	end.
-	
-dtm_SendOutput(ExoSelf_PId,Output,Parameters,Scape)->
-	Scape ! {self(),move,Parameters,Output},
-	receive 
-		{Scape,Fitness,HaltFlag}->
-			{Fitness,HaltFlag}
-	end.
 % Actuator allows the agent to send a trade commmand to the Scape and receive the fitness and halt flag in return.
 % TradeSignal will be:
 % -1 → Short (sell).

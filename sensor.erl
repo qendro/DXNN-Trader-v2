@@ -40,47 +40,6 @@ rng1(VL,Acc)->
 	rng1(VL-1,[random:uniform()|Acc]).
 %rng/2 is a simple random number generator that produces a vector of random values, each between 0 and 1. The length of the vector is defined by the VL, which itself is specified within the sensor record.
 
-xor_GetInput(ExoSelf_PId,VL,_Parameters,Scape)->
-	Scape ! {self(),sense},
-	receive
-		{Scape,percept,SensoryVector}->
-			case length(SensoryVector)==VL of
-				true ->
-					SensoryVector;
-				false ->
-					io:format("Error in sensor:xor_sim/3, VL:~p SensoryVector:~p~n",[VL,SensoryVector]),
-					lists:duplicate(VL,0)
-			end
-	end.
-%xor_GetInput/2 contacts the XOR simulator and requests the sensory vector, which in this case should be a binary vector of length 2. The sensor checks that the incoming sensory signal, the percept, is indeed of length 2. If the vector length differs, then this is printed to the console and a dummy vector of appropriate length is constructed.
-
-pb_GetInput(ExoSelf_PId,VL,Parameters,Scape)->
-	Scape ! {self(),sense,Parameters},
-	receive
-		{Scape,percept,SensoryVector}->
-			case length(SensoryVector)==VL of
-				true ->
-					SensoryVector;
-				false ->
-					io:format("Error in sensor:pb_GetInput/3, VL:~p SensoryVector:~p~n",[VL,SensoryVector]),
-					lists:duplicate(VL,0)
-			end
-	end.
-	
-dtm_GetInput(ExoSelf_PId,VL,Parameters,Scape)->
-	Scape ! {self(),sense,Parameters},
-	receive
-		{Scape,percept,SensoryVector}->
-			%io:format("self():~p SensoryVector:~p~n",[self(),SensoryVector]),
-			case length(SensoryVector)==VL of
-				true ->
-					SensoryVector;
-				false ->
-					io:format("Error in sensor:dtm_GetInput/3, VL:~p SensoryVector:~p~n",[VL,SensoryVector]),
-					lists:duplicate(VL,0)
-			end
-	end.
-
 %This function encodes the Price Chart Input (PCI) sensor data.
 % A reconstructed visual representation of price data, similar to a candlestick chart.
 % Encoded as a reduced-resolution grid (e.g., 100x20 or 10x10) to preserve geometric patterns.

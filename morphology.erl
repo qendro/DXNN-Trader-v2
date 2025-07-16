@@ -86,48 +86,6 @@ get_SubstrateCEPs(Dimensions,Plasticity)->
 	end.
 	
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MORPHOLOGIES %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-xor_mimic(sensors)->
-	[
-		#sensor{name=xor_GetInput,type=standard,scape={private,xor_sim},vl=2}
-	];
-xor_mimic(actuators)->
-	[
-		#actuator{name=xor_SendOutput,type=standard,scape={private,xor_sim},vl=1}
-	].
-%*Every sensor and actuator uses some kind of function associated with it. A function that either polls the environment for sensory signals (in the case of a sensor) or acts upon the environment (in the case of an actuator). It is a function that we need to define and program before it is used, and the name of the function is the same as the name of the sensor or actuator it self. For example, the create_Sensor/1 has specified only the rng sensor, because that is the only sensor function we've finished developing. The rng function has its own vl specification, which will determine the number of weights that a neuron will need to allocate if it is to accept this sensor's output vector. The same principles apply to the create_Actuator function. Both, create_Sensor and create_Actuator function, given the name of the sensor or actuator, will return a record with all the specifications of that element, each with its own unique Id.
-
-pole_balancing(sensors)->
-	[
-		#sensor{name=pb_GetInput,type=standard,scape={private,pb_sim},vl=3,parameters=[3]}
-	];
-pole_balancing(actuators)->
-	[
-		#actuator{name=pb_SendOutput,type=standard,scape={private,pb_sim},vl=1,parameters=[with_damping,1]}
-	].
-%Both, the pole balancing sensor and actuator, interface with the pole balancing simulation, a private scape. The type of problem the pole balancing simulation is used as depends on the sensor and acutuator parameters. The sensor's vl and parameters specify that the sensor will request the private scape for the cart's and pole's position and angular position respectively. The actuator's parameters specify that the scape should use without_damping type of fitness, and that since only a single pole is being used, that the termination condition associated with the second pole will be zeroed out, by being multiplied by the specified 0 value. When instead of using 0, we use 1, the private scape would use the angular position of the second pole as an element in calculating the fitness score of the interfacing agent, and using that angular position for the purpose of calculating whether termination condition has been reached by the problem.
-
-discrete_tmaze(sensors)->
-	[
-		#sensor{name=dtm_GetInput,type=standard,scape={private,dtm_sim},vl=4,parameters=[all]}
-	];
-discrete_tmaze(actuators)->
-	[
-		#actuator{name=dtm_SendOutput,type=standard,scape={private,dtm_sim},vl=1,parameters=[]}
-	].
-
-predator(actuators)->
-	prey(actuators);
-predator(sensors)->
-	prey(sensors).
-
-prey(actuators)->
-	Movement = [#actuator{name=differential_drive,type=standard,scape={public,flatland}, vl=2, parameters=[2]}],
-	Movement;
-prey(sensors)->
-	Pi = math:pi(),
-	Color_Scanners = [#sensor{name=color_scanner,type=standard,scape={public,flatland},vl=Density, parameters=[Spread,Density,ROffset]} || Spread <-[Pi/2], Density <-[5], ROffset<-[Pi*0/2]],
-	Range_Scanners = [#sensor{name=range_scanner,type=standard,scape={public,flatland},vl=Density, parameters=[Spread,Density,ROffset]} || Spread <-[Pi/2], Density <-[5], ROffset<-[Pi*0/2]],
-	Color_Scanners++Range_Scanners.
 
 %	This sets up the link so that when the neural network outputs a value, it calls fx_Trade to send that trade to the Forex simulator.
 forex_trader(actuators)->
