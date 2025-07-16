@@ -22,16 +22,16 @@
 -record(constraint,{
 	morphology=forex_trader, %forex_trader 
 	connection_architecture = recurrent, %recurrent|feedforward 
-	neural_afs=[tanh,cos,gaussian,absolute], %[tanh,cos,gaussian,absolute,sin,sqrt,sigmoid],
-	neural_pfns=[none], %[none,hebbian_w,hebbian,ojas_w,ojas,self_modulationV1,self_modulationV2,self_modulationV2,self_modulationV3,self_modulationV4,self_modulationV5,self_modulationV6,neuromodulation]
+	neural_afs=config:neural_activation_functions(), %[tanh,cos,gaussian,absolute,sin,sqrt,sigmoid],
+	neural_pfns=config:neural_plasticity_functions(), %[none,hebbian_w,hebbian,ojas_w,ojas,self_modulationV1,self_modulationV2,self_modulationV2,self_modulationV3,self_modulationV4,self_modulationV5,self_modulationV6,neuromodulation]
 	substrate_plasticities=[none],
 	substrate_linkforms = [l2l_feedforward],%[l2l_feedfrward,jordan_recurrent,fully_connected]
 	neural_aggr_fs=[dot_product], %[dot_product, mult_product, diff]
 	tuning_selection_fs=[dynamic_random], %[all,all_random, recent,recent_random, lastgen,lastgen_random]
-	tuning_duration_f={const,10}, %[{const,20},{nsize_proportional,0.5},{nweight_proportional,0.5}...]
-	annealing_parameters=[1], %[1,0.9]
-	perturbation_ranges=[1], %[0.5,1,2,3...]
-	agent_encoding_types= [neural], %[neural,substrate]
+	tuning_duration_f=config:tuning_duration(), %[{const,20},{nsize_proportional,0.5},{nweight_proportional,0.5}...]
+	annealing_parameters=config:annealing_parameters(), %[1,0.9]
+	perturbation_ranges=config:perturbation_ranges(), %[0.5,1,2,3...]
+	agent_encoding_types= config:agent_encoding_types(), %[neural,substrate]
 	heredity_types = [darwinian], %[darwinian,lamarckian]
 	mutation_operators= [
 		{mutate_weights,1},

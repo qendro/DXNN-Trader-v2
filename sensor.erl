@@ -52,9 +52,9 @@ fx_PCI(Exoself_Id,VL,Parameters,Scape)->
 	case get(opmode) of
 		gt	->
 			%Normal, assuming we have 10000 rows, we start from 1000 to 200
-			Scape ! {self(),sense,'EURUSD15',close,[HRes,VRes,graph_sensor],1000,200};
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_start_index(),config:data_end_index()};
 		benchmark ->
-			Scape ! {self(),sense,'EURUSD15',close,[HRes,VRes,graph_sensor],200,last}
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_end_index(),config:benchmark_end_index()}
 	end,
 	receive 
 		{_From,Result}->
@@ -69,9 +69,9 @@ fx_PLI(Exoself_Id,VL,Parameters,Scape)->
 	case get(opmode) of
 		gt	->
 			%Normal, assuming we have 10000 rows, we start from 1000 to 200
-			Scape ! {self(),sense,'EURUSD15',close,[HRes,list_sensor],1000,200};
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_start_index(),config:data_end_index()};
 		benchmark ->
-			Scape ! {self(),sense,'EURUSD15',close,[HRes,list_sensor],200,last}
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_end_index(),config:benchmark_end_index()}
 	end,
 	receive 
 		{_From,Result}->

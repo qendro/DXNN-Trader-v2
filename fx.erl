@@ -10,8 +10,8 @@
 -define(ALL_TABLES,[metadata,'EURUSD1','EURUSD15','EURUSD30','EURUSD60']).
 %-define(T2D,[{'EURUSD1',1},{'EURUSD15',15},{'EURUSD30',30},{'EURUSD60',60}]).
 %-define(SOURCE_DIR,"/home/puter/.wine/dosdevices/c:/Program Files/MetaTrader - Alpari (US)/experts/files/").
--define(FX_TABLES_DIR,"fx_tables/").
--define(SOURCE_DIR,"fx_tables/").
+-define(FX_TABLES_DIR,config:fx_tables_directory()).
+-define(SOURCE_DIR,config:source_directory()).
 -record(technical,{
 	id,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate}
 	open,
@@ -78,13 +78,25 @@
 	trix9
 }).
 
--define(ACTUATOR_CA_TAG,false).
--define(SENSE_CA_TAG,false).
+-define(ACTUATOR_CA_TAG,config:actuator_debug_tag()).
+-define(SENSE_CA_TAG,config:sensor_debug_tag()).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FX SIMULATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -record(state,{table_name,feature,index_start,index_end,index,price_list=[]}).
--record(account,{leverage=50,lot=10000,spread=0.000150,margin=0,balance=300,net_asset_value=300,realized_PL=0,unrealized_PL=0,order}).
+-record(account,{leverage,lot,spread,margin,balance,net_asset_value,realized_PL=0,unrealized_PL=0,order}).
 -record(order,{pair,position,entry,current,units,change,percentage_change,profit}).
+
+%% Helper function to create account with config values
+create_account() ->
+    Balance = config:account_initial_balance(),
+    #account{
+        leverage = config:account_leverage(),
+        lot = config:account_lot_size(),
+        spread = config:account_spread(),
+        margin = config:account_margin(),
+        balance = Balance,
+        net_asset_value = Balance
+    }.
 
 go()->
 	Signals =[-1,-1,-1,-1,0,0,0,1,1,1,-1,-1,1,1,0,0,-1,-1,-1,1,1,1,1,1,1,1,1,-1,-1,-1,1,1,
@@ -120,14 +132,14 @@ go()->
 	
 market_properties()->
 	random:seed(now()),
-	market_properties('EURUSD15',close,[3,list_sensor],800,200).
+	market_properties(config:primary_currency_pair(),close,[config:internal_sensor_dimensions(),list_sensor],config:market_props_start(),config:market_props_end()).
 market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 	max(CurrencyPair,Feature,Parameters,StartIndex,EndIndex),
 	erase().
 
 	random(CurrencyPair,Feature,Parameters,Start,Finish)->
 		S = #state{},
-		A = #account{},
+		A = create_account(),
 		InitS = init_state(S,CurrencyPair,Feature,Start,Finish),
 		AvgRandomProfit=lists:sum([random_profit(CurrencyPair,InitS,A) || _<-lists:seq(1,1000)])/1000,
 		erase().
@@ -142,7 +154,7 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 		
 	max(CurrencyPair,Feature,Parameters,Start,Finish)->
 		S = #state{},
-		A = #account{},
+		A = create_account(),
 		InitS = init_state(S,CurrencyPair,Feature,Start,Finish),
 		max_profit(CurrencyPair,InitS,A).
 	max_profit(CurrencyPair,S,A)->
@@ -151,9 +163,10 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 		T = fx:lookup(CurrencyPair,Index),
 		Close = T#technical.close,
 		{FlipIndex,FlipClose} = find_next_flip(CurrencyPair,Index,Close,EndIndex),
+		Threshold = config:min_profit_threshold(),
 		TradeSignal=if 
-			FlipClose > (Close+ 0.000150*Close) -> 1;
-			FlipClose < (Close- 0.000150*Close) -> -1;
+			FlipClose > (Close+ Threshold*Close) -> 1;
+			FlipClose < (Close- Threshold*Close) -> -1;
 			true -> 0
 		end,
 		case forward(CurrencyPair,S,A,TradeSignal,Index,FlipIndex) of
@@ -266,7 +279,7 @@ tt(PId,TradeSignal)->
 sim(ExoSelf)->io:format("Started~n"),
 	put(prev_PC,0),
 	S = #state{},
-	A = #account{},
+	A = create_account(),
 	sim(ExoSelf,S,A).
 
 % Recursive function that handles the simulation logic.
@@ -366,7 +379,7 @@ sim(ExoSelf,S,A)->
 					io:format("Lost all money~n"),
 					%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
 					put(prev_PC,0),
-					fx:sim(ExoSelf,#state{},#account{});
+					fx:sim(ExoSelf,#state{},create_account());
 				false ->
 					case update_state(S) of
 						sim_over ->
@@ -375,7 +388,7 @@ sim(ExoSelf,S,A)->
 							%io:format("Sim Over:~p~n",[Total_Profit]),
 							%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
 							put(prev_PC,0),
-							fx:sim(ExoSelf,#state{},#account{});
+							fx:sim(ExoSelf,#state{},create_account());
 						U_S ->
 							From ! {self(),0,0},
 							U_A2 = update_account(U_S,U_A),
@@ -384,7 +397,7 @@ sim(ExoSelf,S,A)->
 					end
 			end;
 		restart ->
-			fx:sim(ExoSelf,#state{},#account{});
+			fx:sim(ExoSelf,#state{},create_account());
 		terminate ->
 			ok
 		after 10000 ->
@@ -527,8 +540,8 @@ make_trade(S,A,Action)->
 	end.
 	
 open_order(S,A,Action)->
-	Order_Size = 0.2,% Open order size is 20% of the current account balance.
-	BuyMoney = 100,
+	Order_Size = config:order_size_percentage(),% Open order size is 20% of the current account balance.
+	BuyMoney = config:buy_money_fixed(),
 	Spread=A#account.spread,
 	Leverage = A#account.leverage,
 	Balance = A#account.balance,

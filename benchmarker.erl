@@ -22,12 +22,12 @@ start(Id)->
 	PMP = #pmp{
 		op_mode=benchmark,
 		population_id=test,
-		survival_percentage=0.5,
-		specie_size_limit=100, %qChangeFrom 10,
-		init_specie_size=100, %qChangeFrom 10,
+		survival_percentage=config:survival_percentage(),
+		specie_size_limit=config:specie_size_limit(), %qChangeFrom 10,
+		init_specie_size=config:init_specie_size(), %qChangeFrom 10,
 		polis_id = mathema,
 		generation_limit = inf,
-		evaluations_limit = 10000, %qChangeFrom 10000, optimized from 10
+		evaluations_limit = config:evaluations_limit(), %qChangeFrom 10000, optimized from 10
 		fitness_goal = inf
 	},
 	E=#experiment{
@@ -37,7 +37,7 @@ start(Id)->
 		init_constraints=?INIT_CONSTRAINTS,
 		progress_flag=in_progress,
 		run_index=1,
-		tot_runs=3, %qChangeFrom 20,
+		tot_runs=config:tot_runs(), %qChangeFrom 20,
 		started={date(),time()},
 		interruptions=[]
 	},
