@@ -3,6 +3,84 @@
 -compile(export_all).
 -include("records.hrl").
 
+%% Find the best agent and return its ID
+find_best_agent() ->
+    find_best_agent(all).
+
+%% QQ - Potential delete - this function is not used in the current codebas
+find_best_agent_1(Population_Id) ->
+    F = fun() ->
+        Agent_Keys = mnesia:dirty_all_keys(agent),
+        Best = lists:foldl(fun(Agent_Id, Acc) ->
+            case mnesia:dirty_read({agent, Agent_Id}) of
+                [] -> Acc;
+                [Agent] when Population_Id == all; Agent#agent.population_id == Population_Id ->
+                    case Acc of
+                        undefined ->
+                            {Agent#agent.id, Agent#agent.fitness, Agent#agent.generation, Agent#agent.specie_id};
+                        {_, BestFitness, _, _} when Agent#agent.fitness > BestFitness ->
+                            {Agent#agent.id, Agent#agent.fitness, Agent#agent.generation, Agent#agent.specie_id};
+                        _ ->
+                            Acc
+                    end;
+                _ -> Acc
+            end
+        end, undefined, Agent_Keys),
+        case Best of
+            undefined -> {error, no_agents};
+            {Agent_Id, _Fitness, _Generation, _Specie_Id} -> {ok, Agent_Id}
+        end
+    end,
+    mnesia:transaction(F).
+
+find_best_agent(Population_Id) ->
+    F = fun() ->
+        % Get all agent keys from the agent table, handle case when table is empty
+        Agent_Keys = try
+            mnesia:dirty_all_keys(agent)
+        catch
+            _:_ -> []
+        end,
+        
+        % Filter agents by population if specified
+        Filtered_Agents = case Population_Id of
+            all ->
+                Agent_Keys;
+            _ ->
+                [Agent_Id || Agent_Id <- Agent_Keys, 
+                 case mnesia:dirty_read({agent, Agent_Id}) of
+                     [] -> false;
+                     [Agent] -> Agent#agent.population_id == Population_Id
+                 end]
+        end,
+        
+        % Find the best agent (highest fitness)
+        case Filtered_Agents of
+            [] ->
+                {error, no_agents};
+            _ ->
+                Best_Agent = lists:foldl(fun(Agent_Id, Best_Acc) ->
+                    case mnesia:dirty_read({agent, Agent_Id}) of
+                        [] -> Best_Acc;
+                        [Agent] ->
+                            case Best_Acc of
+                                undefined -> Agent;
+                                Best when Agent#agent.fitness > Best#agent.fitness -> Agent;
+                                _ -> Best_Acc
+                            end
+                    end
+                end, undefined, Filtered_Agents),
+                
+                case Best_Agent of
+                    undefined ->
+                        {error, no_agents};
+                    Agent ->
+                        {ok, Agent#agent.id}
+                end
+        end
+    end,
+    mnesia:transaction(F).
+
 %% Find and print the best genotype from the Mnesia database
 print_best_genotype() ->
     print_best_genotype(test).

@@ -936,5 +936,227 @@ list_to_number(List)->
 %Input: TableName::ets_table_name
 %Output: TableSize::int
 table_size(TableName)->
-	[_,_,_,{size,Size},_,_,_,_,_] = ets:info(TableName),
-	Size.	
+	case ets:info(TableName, size) of
+		undefined ->
+			0;
+		Size ->
+			Size
+	end.
+
+%%=============================== Data File Loading =====================================
+%Description: Load arbitrary CSV files into temporary ETS tables for agent testing
+%Input: CSV file path with format: Timestamp,Open,High,Low,Close,Volume
+%Output: {ok, TableName} | {error, Reason}
+
+% Main function to load a data file and create a temporary ETS table
+load_data_file(FilePath) ->
+    case validate_data_format(FilePath) of
+        ok ->
+            case file:read_file(FilePath) of
+                {ok, Data} ->
+                    TableName = generate_temp_table_name(),
+                    case create_temporary_table(TableName) of
+                        {ok, TableName} ->
+                            case parse_and_load_csv_data(TableName, binary_to_list(Data)) of
+                                ok ->
+                                    {ok, TableName};
+                                {error, Reason} ->
+                                    delete_temporary_table(TableName),
+                                    {error, Reason}
+                            end;
+                        {error, Reason} ->
+                            {error, Reason}
+                    end;
+                {error, Reason} ->
+                    {error, {file_read_error, Reason}}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+% Validate that the data file exists and has the correct format
+validate_data_format(FilePath) ->
+    case filelib:is_file(FilePath) of
+        false ->
+            {error, {file_not_found, FilePath}};
+        true ->
+            case file:read_file(FilePath) of
+                {ok, Data} ->
+                    Lines = string:tokens(binary_to_list(Data), "\n\r"),
+                    case Lines of
+                        [] ->
+                            {error, {invalid_format, "Empty file"}};
+                        [FirstLine|_] ->
+                            validate_csv_line_format(FirstLine)
+                    end;
+                {error, Reason} ->
+                    {error, {file_read_error, Reason}}
+            end
+    end.
+
+% Validate a single CSV line format
+validate_csv_line_format(Line) ->
+    Fields = string:tokens(Line, ","),
+    case length(Fields) of
+        6 ->
+            try
+                [TimestampStr, OpenStr, HighStr, LowStr, CloseStr, VolumeStr] = Fields,
+                % Try to parse timestamp and numeric fields
+                case parse_timestamp(string:strip(TimestampStr)) of
+                    {ok, _} ->
+                        % Try to parse numeric fields
+                        _ = list_to_number(string:strip(OpenStr)),
+                        _ = list_to_number(string:strip(HighStr)),
+                        _ = list_to_number(string:strip(LowStr)),
+                        _ = list_to_number(string:strip(CloseStr)),
+                        _ = list_to_integer(string:strip(VolumeStr)),
+                        ok;
+                    {error, _} ->
+                        {error, {invalid_format, "Invalid timestamp format"}}
+                end
+            catch
+                _:_ ->
+                    {error, {invalid_format, "Invalid numeric values in CSV"}}
+            end;
+        _ ->
+            {error, {invalid_format, "Expected 6 fields: Timestamp,Open,High,Low,Close,Volume"}}
+    end.
+
+% Parse timestamp from various formats
+parse_timestamp(TimestampStr) ->
+    % Try different timestamp formats
+    case string:tokens(TimestampStr, " ") of
+        [DateStr, TimeStr] ->
+            case string:tokens(DateStr, "-") of
+                [YearStr, MonthStr, DayStr] ->
+                    case string:tokens(TimeStr, ":") of
+                        [HourStr, MinuteStr] ->
+                            try
+                                Year = list_to_integer(YearStr),
+                                Month = list_to_integer(MonthStr),
+                                Day = list_to_integer(DayStr),
+                                Hour = list_to_integer(HourStr),
+                                Minute = list_to_integer(MinuteStr),
+                                {ok, {Year, Month, Day, Hour, Minute, 0, 1}}
+                            catch
+                                _:_ ->
+                                    {error, invalid_timestamp}
+                            end;
+                        [HourStr, MinuteStr, SecondStr] ->
+                            try
+                                Year = list_to_integer(YearStr),
+                                Month = list_to_integer(MonthStr),
+                                Day = list_to_integer(DayStr),
+                                Hour = list_to_integer(HourStr),
+                                Minute = list_to_integer(MinuteStr),
+                                Second = list_to_integer(SecondStr),
+                                {ok, {Year, Month, Day, Hour, Minute, Second, 1}}
+                            catch
+                                _:_ ->
+                                    {error, invalid_timestamp}
+                            end;
+                        _ ->
+                            {error, invalid_timestamp}
+                    end;
+                _ ->
+                    {error, invalid_timestamp}
+            end;
+        _ ->
+            {error, invalid_timestamp}
+    end.
+
+% Create a temporary ETS table for data loading
+create_temporary_table(TableName) ->
+    try
+        Table = ets:new(TableName, [ordered_set, public, named_table, {keypos, 2}]),
+        {ok, TableName}
+    catch
+        _:Reason ->
+            {error, {table_creation_failed, Reason}}
+    end.
+
+% Delete a temporary ETS table
+delete_temporary_table(TableName) ->
+    try
+        ets:delete(TableName),
+        ok
+    catch
+        _:_ ->
+            ok  % Table might not exist, that's fine
+    end.
+
+% Generate a unique temporary table name
+generate_temp_table_name() ->
+    {MegaSecs, Secs, MicroSecs} = now(),
+    list_to_atom("temp_fx_" ++ integer_to_list(MegaSecs) ++ "_" ++ 
+                 integer_to_list(Secs) ++ "_" ++ integer_to_list(MicroSecs)).
+
+% Parse CSV data and load into ETS table
+parse_and_load_csv_data(TableName, Data) ->
+    Lines = string:tokens(Data, "\n\r"),
+    case Lines of
+        [] ->
+            {error, {invalid_format, "No data lines found"}};
+        _ ->
+            try
+                load_csv_lines(TableName, Lines, 1),
+                ok
+            catch
+                throw:{parse_error, LineNum, Reason} ->
+                    {error, {parse_error, LineNum, Reason}};
+                _:Reason ->
+                    {error, {unexpected_error, Reason}}
+            end
+    end.
+
+% Load individual CSV lines into the table
+load_csv_lines(TableName, [Line|Lines], LineNum) ->
+    case string:strip(Line) of
+        "" ->
+            % Skip empty lines
+            load_csv_lines(TableName, Lines, LineNum + 1);
+        _ ->
+            case parse_csv_line(Line, LineNum) of
+                {ok, Record} ->
+                    insert(TableName, Record),
+                    load_csv_lines(TableName, Lines, LineNum + 1);
+                {error, Reason} ->
+                    throw({parse_error, LineNum, Reason})
+            end
+    end;
+load_csv_lines(_TableName, [], _LineNum) ->
+    ok.
+
+% Parse a single CSV line into a technical record
+parse_csv_line(Line, LineNum) ->
+    try
+        Fields = string:tokens(Line, ","),
+        case length(Fields) of
+            6 ->
+                [TimestampStr, OpenStr, HighStr, LowStr, CloseStr, VolumeStr] = Fields,
+                case parse_timestamp(string:strip(TimestampStr)) of
+                    {ok, Id} ->
+                        Open = list_to_number(string:strip(OpenStr)),
+                        High = list_to_number(string:strip(HighStr)),
+                        Low = list_to_number(string:strip(LowStr)),
+                        Close = list_to_number(string:strip(CloseStr)),
+                        Volume = list_to_integer(string:strip(VolumeStr)),
+                        
+                        % Validate price data
+                        case (Open + High + Low + Close) < 1000 andalso (Open + High + Low + Close) > -1000 of
+                            true ->
+                                Record = #technical{id=Id, open=Open, high=High, low=Low, close=Close, volume=Volume},
+                                {ok, Record};
+                            false ->
+                                {error, "Price values out of reasonable range"}
+                        end;
+                    {error, _} ->
+                        {error, "Invalid timestamp format"}
+                end;
+            _ ->
+                {error, "Expected 6 fields: Timestamp,Open,High,Low,Close,Volume"}
+        end
+    catch
+        _:Reason ->
+            {error, lists:flatten(io_lib:format("Parse error: ~p", [Reason]))}
+    end.	
