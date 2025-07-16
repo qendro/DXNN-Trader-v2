@@ -12,6 +12,7 @@
 %-define(SOURCE_DIR,"/home/puter/.wine/dosdevices/c:/Program Files/MetaTrader - Alpari (US)/experts/files/").
 -define(FX_TABLES_DIR,config:fx_tables_directory()).
 -define(SOURCE_DIR,config:source_directory()).
+-define(PRICE_CACHE_TABLE, fx_price_cache).
 -record(technical,{
 	id,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate}
 	open,
@@ -88,15 +89,121 @@
 
 %% Helper function to create account with config values
 create_account() ->
-    Balance = config:account_initial_balance(),
-    #account{
-        leverage = config:account_leverage(),
-        lot = config:account_lot_size(),
-        spread = config:account_spread(),
-        margin = config:account_margin(),
-        balance = Balance,
-        net_asset_value = Balance
-    }.
+	Balance = config:account_initial_balance(),
+	#account{
+		leverage = config:account_leverage(),
+		lot = config:account_lot_size(),
+		spread = config:account_spread(),
+		margin = config:account_margin(),
+		balance = Balance,
+		net_asset_value = Balance
+	}.
+
+%% Price caching system for performance optimization
+init_price_cache(TableName) ->
+	%io:format("%%QQ - DEBUG: init_price_cache(~p)\n", [TableName]), %%QQ - delete debug
+	case ets:info(?PRICE_CACHE_TABLE, name) of
+		undefined ->
+			try
+				ets:new(?PRICE_CACHE_TABLE, [ordered_set, public, named_table, {read_concurrency, true}]),
+				load_price_data(TableName)
+			catch
+				error:badarg ->
+					%% Table already exists (race condition), just continue
+					io:format("Price cache table already exists, skipping creation~n"),
+					ok;
+				Error:Reason ->
+					io:format("Error creating price cache table: ~p:~p~n", [Error, Reason]),
+					ok
+			end;
+		_ ->
+			io:format("Price cache table already initialized~n"),
+			ok
+	end.
+
+load_price_data(TableName) ->
+	%io:format("%%QQ - DEBUG: load_price_data(~p)\n", [TableName]), %%QQ - delete debug
+	%% First check if the table is already loaded by fx:start()
+	case ets:info(TableName, name) of
+		undefined ->
+			%% Table not loaded, try to load from file
+			FilePath = config:fx_tables_directory() ++ atom_to_list(TableName),
+			io:format("Attempting to load price data from file: ~p~n", [FilePath]),
+			case ets:file2tab(FilePath) of
+				{ok, SourceTable} ->
+					Count = ets:foldl(fun(Record, Acc) ->
+						ets:insert(?PRICE_CACHE_TABLE, Record),
+						Acc + 1
+					end, 0, SourceTable),
+					ets:delete(SourceTable),
+					io:format("Loaded ~p price records into cache from file~n", [Count]);
+				{error, Reason} ->
+					io:format("Failed to load price cache from file: ~p~n", [Reason]),
+					ok
+			end;
+		_ ->
+			%% Table already loaded, copy from existing ETS table
+			io:format("Copying price data from existing ETS table: ~p~n", [TableName]),
+			Count = ets:foldl(fun(Record, Acc) ->
+				ets:insert(?PRICE_CACHE_TABLE, Record),
+				Acc + 1
+			end, 0, TableName),
+			io:format("Loaded ~p price records into cache from ETS table~n", [Count])
+	end.
+
+%% Cached lookup functions - with fallback to original ETS tables
+lookup(TableName, Key) ->
+	case ets:info(?PRICE_CACHE_TABLE, name) of
+		undefined -> 
+			init_price_cache(TableName);
+		_ -> 
+			ok
+	end,
+	case ets:lookup(?PRICE_CACHE_TABLE, Key) of
+		[Record] -> Record;
+		[] -> 
+			%% Fallback to original table if cache miss
+			case ets:info(TableName, name) of
+				undefined -> undefined;
+				_ -> 
+					case ets:lookup(TableName, Key) of
+						[Record] -> Record;
+						[] -> undefined
+					end
+			end
+	end.
+
+next(TableName, Key) ->
+	case ets:info(?PRICE_CACHE_TABLE, name) of
+		undefined -> 
+			init_price_cache(TableName);
+		_ -> 
+			ok
+	end,
+	case ets:next(?PRICE_CACHE_TABLE, Key) of
+		'$end_of_table' -> 
+			%% Fallback to original table
+			case ets:info(TableName, name) of
+				undefined -> 'end_of_table';
+				_ -> ets:next(TableName, Key)
+			end;
+		NextKey -> NextKey
+	end.
+
+prev(TableName, Key, prev, Count) when Count > 0 ->
+	%% Use original table directly for now - simpler and more reliable
+	prev_recursive_simple(TableName, Key, Count).
+
+prev_recursive_simple(_TableName, Key, 0) ->
+	Key;
+prev_recursive_simple(TableName, Key, Count) when Count > 0 ->
+	case ets:prev(TableName, Key) of
+		'$end_of_table' -> 
+			%% If we hit the beginning of table, return the current key
+			Key;
+		PrevKey -> 
+			prev_recursive_simple(TableName, PrevKey, Count - 1)
+	end.
 
 go()->
 	Signals =[-1,-1,-1,-1,0,0,0,1,1,1,-1,-1,1,1,0,0,-1,-1,-1,1,1,1,1,1,1,1,1,-1,-1,-1,1,1,
@@ -125,8 +232,8 @@ go()->
  -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,1,1,0,0,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
  1,1,-1,-1,-1,1,1,-1,-1,1,1,1,1,1,1,1,1,1,1,-1,-1,-1,-1,1,1,1,1,1,1,1,1,-1,-1,
  -1,-1,-1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],
- 	put(opmode,gt),
- 	sensors:fx_ListSensor(10,void,[10,list_sensor]),
+	put(opmode,gt),
+	sensors:fx_ListSensor(10,void,[10,list_sensor]),
 	[{actuators:fx_Trade(void,[TradeSignal],void,void),io:format("TradeSignal:~p~n",[TradeSignal])} || TradeSignal <- Signals],
 	erase().
 	
@@ -630,11 +737,13 @@ plane_encoded(HRes,VRes,S)->
 %		io:format("EndKey:~p~n",[EndKey]),
 		Acc;
 	fx_GetPriceList(_Table,'end_of_table',_Index,Acc)->
-		exit("fx_GetPriceList, reached end_of_table");
+		%% Instead of exiting, return what we have so far
+		Acc;
 	fx_GetPriceList(Table,Key,Index,Acc) ->
 		R = fx:lookup(Table,Key),
 		%io:format("R:~p~n",[R]),
-		fx_GetPriceList(Table,fx:next(Table,Key),Index-1,[{R#technical.open,R#technical.close,R#technical.high,R#technical.low}|Acc]).
+		NextKey = fx:next(Table,Key),
+		fx_GetPriceList(Table,NextKey,Index-1,[{R#technical.open,R#technical.close,R#technical.high,R#technical.low}|Acc]).
 		
 	l2fx(Index,{[{Open,Close,High,Low}|VList],MemList},VPos,VStep,Acc)->
 %		io:format("Index:~p {Open,Close,High,Low}:~p VPos:~p VStep:~p~n",[Index,{Open,Close,High,Low},VPos,VStep]),
@@ -688,23 +797,24 @@ erase_all()->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DB Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 start()->
 	register(fx,spawn(fx,loop,[])).
+
+summon_tables([TableName|TableNames],TableTupleAcc)->
+	case ets:file2tab(?FX_TABLES_DIR++atom_to_list(TableName)) of
+		{ok,TableId} ->
+			fx:summon_tables(TableNames,[{TableName,TableId}|TableTupleAcc]);
+		{error,Reason}->
+			io:format("Reason:~p~n",[Reason]),
+			exit(Reason)
+	end;
+summon_tables([],TableTupleAcc)->
+	TableTupleAcc.
+
 loop()->
 	TableNames = ?ALL_TABLES,
 	TableTuples = summon_tables(TableNames,[]),
 	io:format("******** FX Tables:~p started~n",[TableTuples]),
 	HeartBeat_PId = spawn(fx,heartbeat,[self(),TableNames,5000]),
 	loop(TableNames,HeartBeat_PId).
-
-	summon_tables([TableName|TableNames],TableTupleAcc)->
-		case ets:file2tab(?FX_TABLES_DIR++atom_to_list(TableName)) of
-			{ok,TableId} ->
-				fx:summon_tables(TableNames,[{TableName,TableId}|TableTupleAcc]);
-			{error,Reason}->
-				io:format("Reason:~p~n",[Reason]),
-				exit(Reason)
-		end;
-	summon_tables([],TableTupleAcc)->
-		TableTupleAcc.
 
 loop(TableNames,HeartBeat_PId)->
 	receive
@@ -778,10 +888,6 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Table Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-lookup(TableName,Key)->
-	[R] = ets:lookup(TableName,Key),
-	R.
-	
 insert(TableName,Record)->
 	ets:insert(TableName,Record).
 		
@@ -793,19 +899,6 @@ last(TableName)->
 
 delete_table(TableName)->
 	ets:delete(TableName).
-
-next(TableName,Key)->
-	ets:next(TableName,Key).
-	
-prev(TableName,Key)->
-	ets:prev(TableName,Key).
-
-prev(TableName,'end_of_table',prev,_Index)->
-	ets:first(TableName);
-prev(_TableName,Key,prev,0)->
-	Key;
-prev(TableName,Key,prev,Index)->
-	prev(TableName,ets:prev(TableName,Key),prev,Index-1).
 	
 member(TableName,Key)->
 	Result = ets:member(TableName,Key),
@@ -817,7 +910,7 @@ member(TableName,Key)->
 %2009.05.15,00:00,0.88880,0.89060,0.88880,0.88950,362 :: date/time/open/high/low/close/volume
 %URL= ???/????/????/File  File= FileName.FileExtension, FileName= [CPair][TimeFrame]
 insert_ForexRaw(URL,Flag)->
-	{Dir,File} = extract_dir(URL),
+	{_,File} = extract_dir(URL),
 	{FileName,_FileExtension} = extract_filename(File),
 	{CurrencyPair,TimeFrame} = extract_cpair(FileName), 
 	TableName = CurrencyPair++TimeFrame,
@@ -843,9 +936,9 @@ insert_ForexRaw(URL,Flag)->
 										done
 								end
 						end;
-					{error,Error} ->
-						%io:format("******** Error reading file:~p in insert_ForexRaw(URL,Flag):~p~n",[URL,Error]),
-						cant_read
+				   {error,_} ->
+					   %io:format("******** Error reading file:~p in insert_ForexRaw(URL,Flag):~p~n",[URL,Error]),
+					   cant_read
 			end;
 		false ->
 			io:format("******** TableName:~p is unknown, file rejected.~n",[TableName])

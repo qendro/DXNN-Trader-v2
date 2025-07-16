@@ -19,6 +19,13 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Starts and ends Neural Networks with various preset parameters and options, and polls the logger for information about each run.			
 start(Id)->
+	%% Add start timestamp
+	StartTime = {date(), time()},
+	io:format("~n=== BENCHMARK START ===~n"),
+	io:format("Benchmark ID: ~p~n", [Id]),
+	io:format("Start Time: ~p ~p~n", [element(1, StartTime), element(2, StartTime)]),
+	io:format("========================~n~n"),
+	
 	PMP = #pmp{
 		op_mode=benchmark,
 		population_id=test,
@@ -41,8 +48,8 @@ start(Id)->
 		started={date(),time()},
 		interruptions=[]
 	},
-	io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
-    io:format("Experiment record: ~p~n", [E]), %qq
+	%io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
+    %io:format("Experiment record: ~p~n", [E]), %qq
 	genotype:write(E),
 	register(benchmarker,spawn(benchmarker,prep,[E])).
 
@@ -80,10 +87,20 @@ loop(E,P_Id)->
 			U_RunIndex = E#experiment.run_index+1,
 			case U_RunIndex > E#experiment.tot_runs of
 				true ->
+					%% Add completion timestamp
+					CompletionTime = {date(), time()},
+					StartTime = E#experiment.started,
+					io:format("~n=== BENCHMARK COMPLETE ===~n"),
+					io:format("Benchmark ID: ~p~n", [E#experiment.id]),
+					io:format("Start Time: ~p ~p~n", [element(1, StartTime), element(2, StartTime)]),
+					io:format("End Time: ~p ~p~n", [element(1, CompletionTime), element(2, CompletionTime)]),
+					io:format("Total Runs: ~p~n", [E#experiment.tot_runs]),
+					io:format("==========================~n~n"),
+					
 					U_E = E#experiment{
 						trace_acc = U_TraceAcc,
 						run_index = U_RunIndex,
-						completed = {date(),time()},
+						completed = CompletionTime,
 						progress_flag = completed
 					},
 					genotype:write(U_E),

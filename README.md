@@ -156,6 +156,20 @@ c(tuning_selection).
     benchmarker:start(chart_plane_50x20).
     benchmarker:start(chart_plane_100x10).
 
+    %% 1. Compile all modules
+make:all().
+mnesia:create_schema([node()]).
+mnesia:start().
+fx:init().
+fx:start().
+
+fx:init_price_cache('EURUSD15').
+
+polis:create().
+polis:start().
+polis:sync().
+benchmarker:start(sliding_window_5).
+
 
 # Reseting Mnesia
    #bash find . -name "*.beam" -delete
