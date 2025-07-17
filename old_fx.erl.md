@@ -105,7 +105,7 @@ init_price_cache(TableName) ->
 	case ets:info(?PRICE_CACHE_TABLE, name) of
 		undefined ->
 			try
-				ets:new(?PRICE_CACHE_TABLE, [ordered_set, public, named_table, {read_concurrency, true}, {keypos,2}]),
+				ets:new(?PRICE_CACHE_TABLE, [ordered_set, public, named_table, {read_concurrency, true}]),
 				load_price_data(TableName)
 			catch
 				error:badarg ->
@@ -151,73 +151,48 @@ load_price_data(TableName) ->
 			io:format("Loaded ~p price records into cache from ETS table~n", [Count])
 	end.
 
-%% Diagnostic functions for root cause analysis
-inspect_table(TableName) ->
-    case ets:info(TableName, name) of
-        undefined -> {error, table_not_found};
-        _ -> 
-            Size = ets:info(TableName, size),
-            First = ets:first(TableName),
-            Last = ets:last(TableName),
-            Sample = case Size > 0 of
-                true -> ets:lookup(TableName, First);
-                false -> []
-            end,
-            {ok, [{size, Size}, {first, First}, {last, Last}, {sample, Sample}]}
-    end.
-
-%% Check all FX tables
-inspect_all_tables() ->
-    [{TN, inspect_table(TN)} || TN <- ?ALL_TABLES].
-
-%% Check cache contents
-inspect_cache() ->
-    inspect_table(?PRICE_CACHE_TABLE).
-
-%% Optimized cached lookup functions - performance optimization enabled
+%% Cached lookup functions - with fallback to original ETS tables
 lookup(TableName, Key) ->
-	%% Try cache first for maximum performance
+	case ets:info(?PRICE_CACHE_TABLE, name) of
+		undefined -> 
+			init_price_cache(TableName);
+		_ -> 
+			ok
+	end,
 	case ets:lookup(?PRICE_CACHE_TABLE, Key) of
 		[Record] -> Record;
 		[] -> 
-			%% Cache miss - fallback to original table
+			%% Fallback to original table if cache miss
 			case ets:info(TableName, name) of
-				undefined -> 
-					io:format("ERROR: Table ~p does not exist~n", [TableName]),
-					undefined;
+				undefined -> undefined;
 				_ -> 
 					case ets:lookup(TableName, Key) of
-						[Record] -> 
-							%% Add to cache for future use
-							ets:insert(?PRICE_CACHE_TABLE, Record),
-							Record;
-						[] -> 
-							io:format("ERROR: Key ~p not found in table ~p~n", [Key, TableName]),
-							undefined
+						[Record] -> Record;
+						[] -> undefined
 					end
 			end
 	end.
 
 next(TableName, Key) ->
-	%% Use cache for next operations - much faster
+	case ets:info(?PRICE_CACHE_TABLE, name) of
+		undefined -> 
+			init_price_cache(TableName);
+		_ -> 
+			ok
+	end,
 	case ets:next(?PRICE_CACHE_TABLE, Key) of
-		'$end_of_table' -> 'end_of_table';
+		'$end_of_table' -> 
+			%% Fallback to original table
+			case ets:info(TableName, name) of
+				undefined -> 'end_of_table';
+				_ -> ets:next(TableName, Key)
+			end;
 		NextKey -> NextKey
 	end.
 
 prev(TableName, Key, prev, Count) when Count > 0 ->
-	%% Use cache for prev operations - performance optimized
-	prev_recursive_cache(Key, Count).
-
-prev_recursive_cache(Key, 0) ->
-	Key;
-prev_recursive_cache(Key, Count) when Count > 0 ->
-	case ets:prev(?PRICE_CACHE_TABLE, Key) of
-		'$end_of_table' -> 
-			Key;
-		PrevKey -> 
-			prev_recursive_cache(PrevKey, Count - 1)
-	end.
+	%% Use original table directly for now - simpler and more reliable
+	prev_recursive_simple(TableName, Key, Count).
 
 prev_recursive_simple(_TableName, Key, 0) ->
 	Key;
@@ -598,29 +573,23 @@ update_account(S,A)->
 			TableName = S#state.table_name,
 			Index = S#state.index,
 			Row = fx:lookup(TableName,Index),
-			case Row of
-				undefined ->
-					io:format("ERROR: No data found for Index ~p in table ~p~n", [Index, TableName]),
-					A; % Return unchanged account to prevent crash
-				_ ->
-					Close = Row#technical.close,
-					Balance = A#account.balance,
-					Position = O#order.position,
-					
-					Entry = O#order.entry,
-					Units = O#order.units,
-					Change = Close - Entry,
-					Percentage_Change = (Change/Entry)*100,
-					Profit = Position*Change*Units,
-					Unrealized_PL = Profit,
-					Net_Asset_Value = Balance + Unrealized_PL,
-					U_O = O#order{current=Close,change=Change,percentage_change=Percentage_Change,profit=Profit},
-					U_A = A#account{unrealized_PL=Unrealized_PL,net_asset_value=Net_Asset_Value,order=U_O},
-%					io:format("Updated Account & Order: Close:~p Units:~p ~n",[Close,Units]),
-%					r(U_A),r(U_O),
-					put(prev_PC,O#order.percentage_change),
-					U_A
-			end
+			Close = Row#technical.close,
+			Balance = A#account.balance,
+			Position = O#order.position,
+			
+			Entry = O#order.entry,
+			Units = O#order.units,
+			Change = Close - Entry,
+			Percentage_Change = (Change/Entry)*100,
+			Profit = Position*Change*Units,
+			Unrealized_PL = Profit,
+			Net_Asset_Value = Balance + Unrealized_PL,
+			U_O = O#order{current=Close,change=Change,percentage_change=Percentage_Change,profit=Profit},
+			U_A = A#account{unrealized_PL=Unrealized_PL,net_asset_value=Net_Asset_Value,order=U_O},
+%			io:format("Updated Account & Order: Close:~p Units:~p ~n",[Close,Units]),
+%				r(U_A),r(U_O),
+			put(prev_PC,O#order.percentage_change),
+			U_A
 	end.
 
 % This function retrieves the fields of a record.
@@ -844,16 +813,6 @@ loop()->
 	TableNames = ?ALL_TABLES,
 	TableTuples = summon_tables(TableNames,[]),
 	io:format("******** FX Tables:~p started~n",[TableTuples]),
-	%% Load actual data from .txt files into tables
-	io:format("Loading forex data from .txt files...~n"),
-	[begin
-		FilePath = ?FX_TABLES_DIR++atom_to_list(TN)++".txt",
-		io:format("Loading: ~p~n", [FilePath]),
-		insert_ForexRaw(FilePath, update)
-	end || TN <- TableNames, TN =/= metadata],
-	%% Now initialize price cache with populated data
-	io:format("Initializing price cache...~n"),
-	init_price_cache(config:primary_currency_pair()),
 	HeartBeat_PId = spawn(fx,heartbeat,[self(),TableNames,5000]),
 	loop(TableNames,HeartBeat_PId).
 
