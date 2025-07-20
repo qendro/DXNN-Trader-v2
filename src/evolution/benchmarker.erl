@@ -9,7 +9,7 @@
 -compile(export_all).
 -include("records.hrl").
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Benchmark Options %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
--define(DIR,"benchmarks/").
+-define(DIR,"output/benchmarks/").
 % Standard forex trader morphology (uses EURUSD1 with existing sensor configuration)
 -define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=generational, neural_pfns=[none],agent_encoding_types=[substrate]} || Morphology<-[forex_trader],CA<-[feedforward]]).
 

@@ -33,9 +33,9 @@ pci_1m_vertical_resolutions() -> [10,15].    % morphology.erl:121
 internal_sensor_dimensions() -> 3.           % morphology.erl:108,122
 
 %% === Evolution Parameters (benchmarker.erl) ===
-specie_size_limit() -> 100.                  % benchmarker.erl:26
-init_specie_size() -> 100.                   % benchmarker.erl:27
-evaluations_limit() -> 10000.                % benchmarker.erl:30
+specie_size_limit() -> 1.                  % benchmarker.erl:26
+init_specie_size() -> 1.                   % benchmarker.erl:27
+evaluations_limit() -> 2.                % benchmarker.erl:30
 survival_percentage() -> 0.5.                % benchmarker.erl:26
 tot_runs() -> 3.                             % benchmarker.erl:40
 
@@ -48,7 +48,7 @@ neural_plasticity_functions() -> [none].    % records.hrl:26
 agent_encoding_types() -> [neural].         % records.hrl:35
 
 %% === System Constants (various files) ===
-fx_tables_directory() -> "fx_tables/".       % fx.erl:13
-source_directory() -> "fx_tables/".          % fx.erl:14
-actuator_debug_tag() -> true.               % fx.erl:81  //Set to false
-sensor_debug_tag() -> true.                 % fx.erl:82  //Set to false
+fx_tables_directory() -> "data/fx_tables/".   % fx.erl:13
+source_directory() -> "data/fx_tables/".     % fx.erl:14
+actuator_debug_tag() -> false.               % fx.erl:81  //Set to false
+sensor_debug_tag() -> false.                 % fx.erl:82  //Set to false
