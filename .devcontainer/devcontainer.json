@@ -1,0 +1,16 @@
+{
+  "name": "Erlang Development",
+  "dockerFile": "../Dockerfile",
+  "workspaceFolder": "/app",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
+  "extensions": [
+    "pgourlain.erlang",
+    "erlang-ls.erlang-ls"
+  ],
+  "settings": {
+    "erlang.includePaths": ["/app"],
+    "erlang.linting": true
+  },
+  "postCreateCommand": "echo 'Erlang development environment ready!'",
+  "remoteUser": "root"
+}

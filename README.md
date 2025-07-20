@@ -158,6 +158,8 @@ c(tuning_selection).
 
 
 # Reseting Mnesia
+   
+   git reset --hard
    #bash find . -name "*.beam" -delete
     # Stop mnesia
     mnesia:stop().

@@ -15,8 +15,18 @@
 
 FROM erlang:26
 
-# Install build tools (optional)
-RUN apt-get update && apt-get install -y git
+# Install build tools and dependencies
+RUN apt-get update && apt-get install -y git build-essential
+
+# Install rebar3 for project management
+RUN curl -L https://github.com/erlang/rebar3/releases/latest/download/rebar3 -o /usr/local/bin/rebar3 && \
+    chmod +x /usr/local/bin/rebar3
+
+# Install Erlang Language Server
+RUN git clone https://github.com/erlang-ls/erlang_ls.git /tmp/erlang_ls && \
+    cd /tmp/erlang_ls && \
+    make install && \
+    rm -rf /tmp/erlang_ls
 
 # Set work directory
 WORKDIR /app

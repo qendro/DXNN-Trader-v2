@@ -49,7 +49,7 @@ pts(ExoSelf_PId,Result,_Scape)->
 % 1 → Long (buy).
 fx_Trade(ExoSelf_PId,Output,Parameters,Scape)->
 	[TradeSignal] = Output,
-	Scape ! {self(),trade,'EURUSD15',functions:trinary(TradeSignal)},
+	Scape ! {self(),trade,config:primary_currency_pair(),functions:trinary(TradeSignal)},
 	receive 
 		{Scape,Fitness,HaltFlag}->
 			{Fitness,HaltFlag}

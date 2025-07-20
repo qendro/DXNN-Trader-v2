@@ -16,7 +16,7 @@ buy_money_fixed() -> 100.                    % fx.erl:531
 min_profit_threshold() -> 0.000150.          % fx.erl:155-156
 
 %% === Data Parameters (sensor.erl, fx.erl) ===
-primary_currency_pair() -> 'EURUSD15'.       % sensor.erl:55,72
+primary_currency_pair() -> 'EURUSD1'.       % sensor.erl:55,72
 data_start_index() -> 1000.                  % sensor.erl:55,72
 data_end_index() -> 200.                     % sensor.erl:55,72
 benchmark_end_index() -> last.               % sensor.erl:58,75
@@ -37,6 +37,7 @@ specie_size_limit() -> 100.                  % benchmarker.erl:26
 init_specie_size() -> 100.                   % benchmarker.erl:27
 evaluations_limit() -> 10000.                % benchmarker.erl:30
 survival_percentage() -> 0.5.                % benchmarker.erl:26
+tot_runs() -> 3.                             % benchmarker.erl:40
 
 %% === Neural Network Parameters (records.hrl) ===
 tuning_duration() -> {const,10}.             % records.hrl:31
@@ -49,10 +50,5 @@ agent_encoding_types() -> [neural].         % records.hrl:35
 %% === System Constants (various files) ===
 fx_tables_directory() -> "fx_tables/".       % fx.erl:13
 source_directory() -> "fx_tables/".          % fx.erl:14
-actuator_debug_tag() -> false.               % fx.erl:81
-sensor_debug_tag() -> false.                 % fx.erl:82
-
-%% === Backward Compatibility ===
-fx_table() -> 'EURUSD15'.                    % Keep for existing code
-morphology() -> forex_trader.                % Keep for existing code
-tot_runs() -> 3.                             % Keep for existing code
+actuator_debug_tag() -> true.               % fx.erl:81  //Set to false
+sensor_debug_tag() -> true.                 % fx.erl:82  //Set to false

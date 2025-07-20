@@ -18,8 +18,6 @@ prep(ExoSelf_PId) ->
 			scape:Name(ExoSelf_PId)
 	end.
 
-
-
 distance(Vector1,Vector2)->
 	distance(Vector1,Vector2,0).	
 distance([Val1|Vector1],[Val2|Vector2],Acc)->

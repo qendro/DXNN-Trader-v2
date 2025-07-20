@@ -316,7 +316,7 @@ sim(ExoSelf,S,A)->
 			%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
 			case ?SENSE_CA_TAG of
 				true ->
-					timer:sleep(10000),
+					%timer:sleep(10000),
 					IndexT = U_S#state.index,
 					NextIndexT = fx:next(TableName,IndexT),
 					RowT = fx:lookup(TableName,IndexT),
@@ -362,7 +362,7 @@ sim(ExoSelf,S,A)->
 			
 			case ?ACTUATOR_CA_TAG of
 				true ->
-					timer:sleep(10000),
+					%timer:sleep(1000),
 					IndexT = S#state.index,
 					NextIndexT = fx:next(TableName,IndexT),
 					RowT = fx:lookup(TableName,IndexT),
@@ -385,7 +385,7 @@ sim(ExoSelf,S,A)->
 						sim_over ->
 							Total_Profit = A#account.balance + A#account.unrealized_PL,
 							From ! {self(),Total_Profit,1},
-							%io:format("Sim Over:~p~n",[Total_Profit]),
+							io:format("Sim Over:~p~n",[Total_Profit]),
 							%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
 							put(prev_PC,0),
 							fx:sim(ExoSelf,#state{},create_account());
