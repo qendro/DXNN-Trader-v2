@@ -1,17 +1,11 @@
-%% This source code and work is provided and developed by DXNN Research Group WWW.DXNNResearch.COM
-%%
-%Copyright (C) 2012 by Gene Sher, DXNN Research Group, CorticalComputer@gmail.com
-%All rights reserved.
-%
-%This code is licensed under the version 3 of the GNU General Public License. Please see the LICENSE file that accompanies this project for the terms of use.
 
 -module(fx).
 -compile(export_all).
 -define(ALL_TABLES,[metadata,'EURUSD1','EURUSD15','EURUSD30','EURUSD60']).
 %-define(T2D,[{'EURUSD1',1},{'EURUSD15',15},{'EURUSD30',30},{'EURUSD60',60}]).
 %-define(SOURCE_DIR,"/home/puter/.wine/dosdevices/c:/Program Files/MetaTrader - Alpari (US)/experts/files/").
--define(FX_TABLES_DIR,config:fx_tables_directory()).
--define(SOURCE_DIR,config:source_directory()).
+-define(FX_TABLES_DIR,"fx_tables/").
+-define(SOURCE_DIR,"fx_tables/").
 -record(technical,{
 	id,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate}
 	open,
@@ -385,7 +379,7 @@ sim(ExoSelf,S,A)->
 						sim_over ->
 							Total_Profit = A#account.balance + A#account.unrealized_PL,
 							From ! {self(),Total_Profit,1},
-							io:format("Sim Over:~p~n",[Total_Profit]),
+							%io:format("Sim Over:~p~n",[Total_Profit]),
 							%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
 							put(prev_PC,0),
 							fx:sim(ExoSelf,#state{},create_account());
@@ -509,7 +503,6 @@ r(R)->
 		ok.
 		
 %-record(state,{table_name,feature,index_start,index_end,index,price_list}).
-%-record(account,{leverage=50,lot=10000,spread=0.000150,margin=0,balance=300,net_asset_value=300,realized_PL=0,unrealized_PL=0,order}).
 %-record(order,{pair,position,entry,units,change,percentage_change,profit}).
 determine_profit(A)->
 	U_Realized_PL = A#account.realized_PL + A#account.unrealized_PL.

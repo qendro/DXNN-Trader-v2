@@ -1,9 +1,3 @@
-%% This source code and work is provided and developed by DXNN Research Group WWW.DXNNResearch.COM
-%%
-%Copyright (C) 2012 by Gene Sher, DXNN Research Group, CorticalComputer@gmail.com
-%All rights reserved.
-%
-%This code is licensed under the version 3 of the GNU General Public License. Please see the LICENSE file that accompanies this project for the terms of use.
 
 -module(benchmarker).
 -compile(export_all).
@@ -11,7 +5,7 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Benchmark Options %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -define(DIR,"benchmarks/").
 % Standard forex trader morphology (uses EURUSD1 with existing sensor configuration)
--define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=generational, neural_pfns=[none],agent_encoding_types=[substrate]} || Morphology<-[forex_trader],CA<-[feedforward]]).
+-define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(), neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]]).
 
 % Alternative: Use the new 1-minute optimized morphology (uncomment to use)
 %-define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=generational, neural_pfns=[none],agent_encoding_types=[substrate]} || Morphology<-[forex_trader_1m],CA<-[feedforward]]).

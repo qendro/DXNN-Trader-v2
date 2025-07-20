@@ -1,54 +1,61 @@
 %% Configuration file for FX Trading System
-%% Replaces hardcoded parameters throughout the codebase
-%% Based on config_parameter_analysis.md List 1 - Actually Hard-Coded Parameters
+%% Centralized configuration for all system parameters
+%% Options listed in comments show available alternatives
 
 -module(config).
 -compile(export_all).
 
-%% === Trading Parameters (fx.erl) ===
-account_leverage() -> 50.                    % fx.erl:86
-account_initial_balance() -> 300.            % fx.erl:86  
-account_lot_size() -> 10000.                 % fx.erl:86
-account_spread() -> 0.000150.                % fx.erl:86
-account_margin() -> 0.                       % fx.erl:86
-order_size_percentage() -> 0.2.              % fx.erl:530
-buy_money_fixed() -> 100.                    % fx.erl:531
-min_profit_threshold() -> 0.000150.          % fx.erl:155-156
+%% === Trading Parameters ===
+account_leverage() -> 50.                    % Options: 1-500 (typical: 10, 50, 100, 200)
+account_initial_balance() -> 300.            % Options: any positive number (typical: 100-10000)
+account_lot_size() -> 10000.                 % Options: 1000, 10000, 100000 (micro, mini, standard lots)
+account_spread() -> 0.000150.                % Options: 0.00001-0.001 (1-100 pips, typical: 0.00015)
+account_margin() -> 0.                       % Options: 0-1.0 (percentage, 0=no margin requirement)
+order_size_percentage() -> 0.2.              % Options: 0.01-1.0 (1%-100% of balance per trade)
+buy_money_fixed() -> 100.                    % Options: any positive number (fixed trade size)
+min_profit_threshold() -> 0.000150.          % Options: 0.00001-0.01 (minimum profit in pips)
 
-%% === Data Parameters (sensor.erl, fx.erl) ===
-primary_currency_pair() -> 'EURUSD1'.       % sensor.erl:55,72
-data_start_index() -> 1000.                  % sensor.erl:55,72
-data_end_index() -> 200.                     % sensor.erl:55,72
-benchmark_end_index() -> last.               % sensor.erl:58,75
-market_props_start() -> 800.                 % fx.erl:123
-market_props_end() -> 200.                   % fx.erl:123
+%% === Data Parameters ===
+primary_currency_pair() -> 'EURUSD1'.        % Options: 'EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60'
+data_start_index() -> 1000.                  % Options: 1-N (starting row for training data)
+data_end_index() -> 200.                     % Options: data_start_index+1 to N (ending row for training)
+benchmark_end_index() -> last.               % Options: last, or specific number (ending row for benchmark)
+market_props_start() -> 800.                 % Options: 1-N (market analysis start point)
+market_props_end() -> 200.                   % Options: market_props_start+1 to N (market analysis end)
 
-%% === Sensor Configuration (morphology.erl) ===
-pli_resolutions() -> [10].                   % morphology.erl:105
-pci_horizontal_resolutions() -> [50].        % morphology.erl:106
-pci_vertical_resolutions() -> [20].          % morphology.erl:106
-pli_1m_resolutions() -> [5,10,20].           % morphology.erl:120
-pci_1m_horizontal_resolutions() -> [20,30].  % morphology.erl:121
-pci_1m_vertical_resolutions() -> [10,15].    % morphology.erl:121
-internal_sensor_dimensions() -> 3.           % morphology.erl:108,122
+%% === Sensor Configuration - Standard Forex Trader ===
+pli_resolutions() -> [5].                   % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc.
+pci_horizontal_resolutions() -> [50].        % Options: [10], [20], [50], [10,20], [20,50], etc.
+pci_vertical_resolutions() -> [20].          % Options: [10], [15], [20], [10,15], [15,20], etc.
 
-%% === Evolution Parameters (benchmarker.erl) ===
-specie_size_limit() -> 100.                  % benchmarker.erl:26
-init_specie_size() -> 100.                   % benchmarker.erl:27
-evaluations_limit() -> 10000.                % benchmarker.erl:30
-survival_percentage() -> 0.5.                % benchmarker.erl:26
-tot_runs() -> 3.                             % benchmarker.erl:40
+%% === Sensor Configuration - 1-Minute Optimized ===
+pli_1m_resolutions() -> [5,10,20].           % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], [3,5,10,20]
+pci_1m_horizontal_resolutions() -> [20,30].  % Options: [10], [20], [30], [10,20], [20,30], [10,20,30]
+pci_1m_vertical_resolutions() -> [10,15].    % Options: [5], [10], [15], [5,10], [10,15], [5,10,15]
+internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dimensions: position, profit, time)
 
-%% === Neural Network Parameters (records.hrl) ===
-tuning_duration() -> {const,10}.             % records.hrl:31
-annealing_parameters() -> [1].               % records.hrl:32
-perturbation_ranges() -> [1].                % records.hrl:34
-neural_activation_functions() -> [tanh,cos,gaussian,absolute]. % records.hrl:25
-neural_plasticity_functions() -> [none].    % records.hrl:26
-agent_encoding_types() -> [neural].         % records.hrl:35
+%% === Evolution Parameters ===
+specie_size_limit() -> 10.                    % Options: 1-100 (max agents per species)
+init_specie_size() -> 10.                     % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 50.                    % Options: 10-100000 (max evaluations per run)
+survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
+tot_runs() -> 10000.                             % Options: 1-100 (number of benchmark runs)
 
-%% === System Constants (various files) ===
-fx_tables_directory() -> "fx_tables/".       % fx.erl:13
-source_directory() -> "fx_tables/".          % fx.erl:14
-actuator_debug_tag() -> true.               % fx.erl:81  //Set to false
-sensor_debug_tag() -> true.                 % fx.erl:82  //Set to false
+%% === Neural Network Parameters ===
+morphology() -> forex_trader.             % Options: forex_trader, forex_trader_1m
+tuning_duration() -> {const,10}.             % Options: {const,N}, {linear,N}, {exponential,N}
+annealing_parameters() -> [1].               % Options: [0.1], [0.5], [1], [0.5,1], [0.1,0.5,1]
+perturbation_ranges() -> [1].                % Options: [0.1], [0.5], [1], [2], [0.5,1], [1,2]
+neural_activation_functions() -> [tanh,cos,gaussian,absolute]. % Options: tanh, cos, sin, gaussian, absolute, sigmoid, sqrt
+neural_plasticity_functions() -> [none].     % Options: none, hebbian, ojas, self_modulation
+agent_encoding_types() -> [substrate].          % Options: neural, substrate
+
+%% === Benchmarker Constraint Parameters ===
+population_evo_alg_f() -> generational.      % Options: generational, steady_state
+connection_architecture() -> recurrent.    % Options: feedforward, recurrent
+
+%% === System Configuration ===
+fx_tables_directory() -> "fx_tables/".  % Options: any valid directory path
+source_directory() -> "fx_tables/".     % Options: any valid directory path  
+actuator_debug_tag() -> false.               % Options: true, false (enables trade-by-trade debug output)
+sensor_debug_tag() -> false.                 % Options: true, false (enables sensor debug output)

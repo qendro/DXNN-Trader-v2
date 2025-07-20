@@ -20,7 +20,7 @@
 -record(object,{id,sector,type,color,loc,pivot,parameters=[]}).
 
 -record(constraint,{
-	morphology=forex_trader, %forex_trader 
+	morphology=config:morphology(), %forex_trader 
 	connection_architecture = recurrent, %recurrent|feedforward 
 	neural_afs=config:neural_activation_functions(), %[tanh,cos,gaussian,absolute,sin,sqrt,sigmoid],
 	neural_pfns=config:neural_plasticity_functions(), %[none,hebbian_w,hebbian,ojas_w,ojas,self_modulationV1,self_modulationV2,self_modulationV2,self_modulationV3,self_modulationV4,self_modulationV5,self_modulationV6,neuromodulation]
@@ -38,11 +38,11 @@
 		{add_bias,1},
 		{remove_bias,1},
 		{mutate_af,1},
-		{add_outlink,4},
-		{add_inlink,4},
-		{add_neuron,4},
+		{add_outlink,40},
+		{add_inlink,40},
+		{add_neuron,40},
 		{outsplice,4},
-		{add_sensor,1},
+		{add_sensor,10}, %qq was 1
 		{add_actuator,1},
 		{mutate_plasticity_parameters,1},
 		{add_cpp,1},
@@ -76,7 +76,7 @@
 	init_specie_size=10,
 	polis_id = mathema,
 	generation_limit = 100,
-	evaluations_limit = 100000,
+	evaluations_limit = config:evaluations_limit(),
 	fitness_goal = inf,
 	benchmarker_pid
 }).

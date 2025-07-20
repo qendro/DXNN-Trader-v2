@@ -1,9 +1,3 @@
-%% This source code and work is provided and developed by DXNN Research Group WWW.DXNNResearch.COM
-%%
-%Copyright (C) 2012 by Gene Sher, DXNN Research Group, CorticalComputer@gmail.com
-%All rights reserved.
-%
-%This code is licensed under the version 3 of the GNU General Public License. Please see the LICENSE file that accompanies this project for the terms of use.
 
 -module(population_monitor).
 -include("records.hrl").
@@ -14,7 +8,7 @@
 -behaviour(gen_server).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Population Monitor Options & Parameters %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
--define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=generational,neural_pfns=[hebbian],agent_encoding_types=[neural],substrate_plasticities=[iterative],substrate_linkforms = [l2l_feedforward]} || Morphology<-[discrete_tmaze],CA<-[recurrent]]).
+-define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(),neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]]).
 -record(state,{
 	op_mode = gt,
 	population_id = test,
@@ -35,12 +29,12 @@
 	fitness_postprocessor,
 	selection_algorithm,
 	best_fitness,
-	survival_percentage = 0.5,
-	specie_size_limit = 10,
-	init_specie_size = 10,
+	survival_percentage = config:survival_percentage(),
+	specie_size_limit = config:specie_size_limit(),
+	init_specie_size = config:init_specie_size(),
 	polis_id = mathema,
 	generation_limit = 100,
-	evaluations_limit = 100000,
+	evaluations_limit = config:evaluations_limit(),
 	fitness_goal = inf,
 	benchmarker_pid,
 	goal_reached=false
