@@ -350,7 +350,7 @@ sim(ExoSelf,S,A)->
 			% It returns the result of the trading operation to the From process.
 			% The result is a tuple of the form {Result,U_A}, where Result is the trade result and U_A is the updated account.
 			% If the table name is undefined, it initializes the state with the given parameters.
-			%io:format("******************************STARTING TO PROCESS TRADE SIGNAL******************************~n"),
+			%io:format("************************a******STARTING TO PROCESS TRADE SIGNAL******************************~n"),
 			U_A = make_trade(S,A,TradeSignal),
 			Total_Profit = A#account.balance + A#account.unrealized_PL,
 			
