@@ -41,8 +41,12 @@ q().
 
 4. **Print the best genotype:**
    ```erlang
+  
+   rr("records.hrl").
    % Print the best genotype from the default 'test' population
    genotype_utils:print_best_genotype().
+
+   genotype_utils:print_best_genotype(all).
    
    % Or specify a population ID
    genotype_utils:print_best_genotype(your_population_id).
@@ -55,6 +59,9 @@ q().
    
    % Get agent statistics
    genotype_utils:get_agent_stats().
+
+   BestAgentId = {5.699247180669372e-10,agent}.
+   exoself:start(Best_Agent_Id, self(),benchmark).
 
 
 

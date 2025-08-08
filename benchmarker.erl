@@ -5,7 +5,9 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Benchmark Options %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -define(DIR,"benchmarks/").
 % Standard forex trader morphology (uses EURUSD1 with existing sensor configuration)
--define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(), neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]]).
+% Fixed: Use function call instead of macro for dynamic config
+get_init_constraints() ->
+    [#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(), neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]].
 
 % Alternative: Use the new 1-minute optimized morphology (uncomment to use)
 %-define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=generational, neural_pfns=[none],agent_encoding_types=[substrate]} || Morphology<-[forex_trader_1m],CA<-[feedforward]]).
@@ -28,15 +30,15 @@ start(Id)->
 		id = Id,
 		backup_flag = true,
 		pm_parameters=PMP,
-		init_constraints=?INIT_CONSTRAINTS,
+		init_constraints=get_init_constraints(),
 		progress_flag=in_progress,
 		run_index=1,
 		tot_runs=config:tot_runs(), %qChangeFrom 20,
 		started={date(),time()},
 		interruptions=[]
 	},
-	io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
-    io:format("Experiment record: ~p~n", [E]), %qq
+	%io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
+    %io:format("Experiment record: ~p~n", [E]), %qq
 	genotype:write(E),
 	register(benchmarker,spawn(benchmarker,prep,[E])).
 

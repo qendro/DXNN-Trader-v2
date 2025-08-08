@@ -90,7 +90,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 			Substrate_CPPs = [CPP#sensor{id={{-1,generate_UniqueId()},sensor},cx_id=Cx_Id,generation=Generation}|| CPP<- morphology:get_InitSubstrateCPPs(Dimensions,SPlasticity)],
 			Substrate_CEPs = [CEP#actuator{id={{1,generate_UniqueId()},actuator},cx_id=Cx_Id,generation=Generation}||CEP<-morphology:get_InitSubstrateCEPs(Dimensions,SPlasticity)],
 			N_Ids=construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Substrate_CPPs,Substrate_CEPs,[],[]),
-			io:format("Sensors:~p~n Actuators:~p~n Substate_CPPs:~p~n Substrate_CEPs:~p~n",[Sensors,Actuators,Substrate_CPPs,Substrate_CEPs]), %qq
+			%io:format("Sensors:~p~n Actuators:~p~n Substate_CPPs:~p~n Substrate_CEPs:~p~n",[Sensors,Actuators,Substrate_CPPs,Substrate_CEPs]), %qq
 			S_Ids = [S#sensor.id || S<-Sensors],
 			A_Ids = [A#actuator.id || A<-Actuators],
 			CPP_Ids = [CPP#sensor.id || CPP<-Substrate_CPPs],

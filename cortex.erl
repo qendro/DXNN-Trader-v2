@@ -38,7 +38,7 @@ loop(Id,ExoSelf_PId,SPIds,{[APId|APIds],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,
 			%io:format("Cortex:~p is terminating.~n",[Id]),
 			[PId ! {self(),terminate} || PId <- SPIds],
 			[PId ! {self(),terminate} || PId <- MAPIds],
-			[PId ! {self(),termiante} || PId <- NPIds]
+			[PId ! {self(),terminate} || PId <- NPIds]
 	end;
 loop(Id,ExoSelf_PId,SPIds,{[],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,active)->
 	case EFAcc > 0 of

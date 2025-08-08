@@ -72,8 +72,7 @@
 	trix9
 }).
 
--define(ACTUATOR_CA_TAG,config:actuator_debug_tag()).
--define(SENSE_CA_TAG,config:sensor_debug_tag()).
+% Debug tags now use direct config function calls (no macros needed)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FX SIMULATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 -record(state,{table_name,feature,index_start,index_end,index,price_list=[]}).
@@ -308,7 +307,7 @@ sim(ExoSelf,S,A)->
 			From ! {self(),Result},
 			%io:format("State:~p~n",[U_S]),
 			%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
-			case ?SENSE_CA_TAG of
+			case config:sensor_debug_tag() of
 				true ->
 					%timer:sleep(10000),
 					IndexT = U_S#state.index,
@@ -354,7 +353,7 @@ sim(ExoSelf,S,A)->
 			U_A = make_trade(S,A,TradeSignal),
 			Total_Profit = A#account.balance + A#account.unrealized_PL,
 			
-			case ?ACTUATOR_CA_TAG of
+			case config:actuator_debug_tag() of
 				true ->
 					%timer:sleep(1000),
 					IndexT = S#state.index,

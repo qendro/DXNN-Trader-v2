@@ -8,7 +8,9 @@
 -behaviour(gen_server).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Population Monitor Options & Parameters %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
--define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(),neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]]).
+% Fixed: Use function call instead of macro for dynamic config
+get_init_constraints() ->
+    [#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(),neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]].
 -record(state,{
 	op_mode = gt,
 	population_id = test,
@@ -54,7 +56,7 @@ start_link() ->
 	gen_server:start_link(?MODULE, [], []).
     
 start() -> 
-	init_population(#state{},?INIT_CONSTRAINTS).
+	init_population(#state{},get_init_constraints()).
 
 stop() ->
 	gen_server:cast(monitor,{stop,normal}).
@@ -402,7 +404,7 @@ summon_agents(_OpMode,[],Acc)->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 test()->
-	init_population(#state{},?INIT_CONSTRAINTS).
+	init_population(#state{},get_init_constraints()).
 %The test/0 function starts the population monitor through init_population/1 with a set of default parameters specified by the macros of this module.
 
 prep_PopState(PMP,Specie_Constraints)->
