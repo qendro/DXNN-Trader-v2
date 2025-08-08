@@ -119,7 +119,7 @@ go()->
  1,1,-1,-1,-1,1,1,-1,-1,1,1,1,1,1,1,1,1,1,1,-1,-1,-1,-1,1,1,1,1,1,1,1,1,-1,-1,
  -1,-1,-1,0,0,1,1,1,1,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1],
  	put(opmode,gt),
- 	sensors:fx_ListSensor(10,void,[10,list_sensor]),
+ 	%sensors:fx_ListSensor(10,void,[10,list_sensor]),
 	[{actuators:fx_Trade(void,[TradeSignal],void,void),io:format("TradeSignal:~p~n",[TradeSignal])} || TradeSignal <- Signals],
 	erase().
 	
