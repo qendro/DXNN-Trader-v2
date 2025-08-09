@@ -6,6 +6,9 @@
 -compile(export_all).
 -include("records.hrl").
 
+%% API for supervisor integration
+-export([start_link/0]).
+
 %% State record for live trader
 -record(live_trader_state, {
     agent_id,
@@ -26,8 +29,55 @@
 %% Public API
 %% ============================================================================
 
+%% Start link function for supervisor integration
+start_link() ->
+    Pid = spawn_link(?MODULE, init_trader, []),
+    register(live_trader, Pid),
+    {ok, Pid}.
+
+%% Initialize trader process
+init_trader() ->
+    %% Initialize performance tracking tables
+    init_performance_tables(),
+    
+    %% Wait for deployment commands
+    trader_idle_loop().
+
+%% Idle loop waiting for deployment
+trader_idle_loop() ->
+    receive
+        {deploy_model, AgentId, From} ->
+            Result = deploy_model_internal(AgentId),
+            From ! {deploy_result, Result},
+            case Result of
+                {ok, State} ->
+                    trading_loop(State);
+                {error, _} ->
+                    trader_idle_loop()
+            end;
+        stop ->
+            ok;
+        _ ->
+            trader_idle_loop()
+    end.
+
 %% Deploy a model from Mnesia database and initialize neural network
 deploy_model(Agent_Id) ->
+    case whereis(live_trader) of
+        undefined ->
+            {error, trader_not_started};
+        Pid ->
+            Pid ! {deploy_model, Agent_Id, self()},
+            receive
+                {deploy_result, Result} ->
+                    Result
+            after 10000 ->
+                {error, deployment_timeout}
+            end
+    end.
+
+%% Internal deployment function
+deploy_model_internal(Agent_Id) ->
     io:format("Deploying model with Agent_Id: ~p~n", [Agent_Id]),
     
     %% Verify agent exists in Mnesia
@@ -161,6 +211,40 @@ get_performance_basic() ->
                 {error, timeout}
             end
     end.
+
+%% Get current positions for shutdown
+get_current_positions() ->
+    case whereis(live_trader) of
+        undefined ->
+            {error, trader_not_running};
+        Pid ->
+            Pid ! {get_current_positions, self()},
+            receive
+                {current_positions, Positions} ->
+                    {ok, Positions}
+            after 1000 ->
+                {error, timeout}
+            end
+    end.
+
+%% Initialize performance tables
+init_performance_tables() ->
+    %% Create ETS tables for performance tracking
+    case ets:info(live_trade_history) of
+        undefined ->
+            ets:new(live_trade_history, [named_table, public, ordered_set]);
+        _ ->
+            ok
+    end,
+    
+    case ets:info(live_performance_snapshots) of
+        undefined ->
+            ets:new(live_performance_snapshots, [named_table, public, ordered_set]);
+        _ ->
+            ok
+    end,
+    
+    ok.
 
 %% Get comprehensive performance report
 get_performance_report() ->
@@ -349,7 +433,25 @@ trading_loop(State) ->
                         {trade_executed, Timestamp, Symbol, Action, Quantity, Price} ->
                             %% Handle trade execution confirmation with risk tracking
                             UpdatedState = record_trade_execution_with_risk(State, Timestamp, Symbol, Action, Quantity, Price),
-                            trading_loop(UpdatedState)
+                            trading_loop(UpdatedState);
+                        {emergency_stop, ErrorCode, ErrorMsg, Timestamp} ->
+                            %% Handle emergency stop from IB connector
+                            io:format("EMERGENCY STOP received: ~p - ~s~n", [ErrorCode, ErrorMsg]),
+                            EmergencyState = handle_emergency_stop(State, ErrorCode, ErrorMsg, Timestamp),
+                            cleanup_and_stop(EmergencyState);
+                        {ib_connection_recovered, Timestamp} ->
+                            %% Handle connection recovery notification
+                            io:format("IB connection recovered at ~p~n", [Timestamp]),
+                            RecoveredState = handle_connection_recovery(State, Timestamp),
+                            trading_loop(RecoveredState);
+                        {system_error, ErrorType, ErrorDetails} ->
+                            %% Handle system-level errors
+                            io:format("System error: ~p - ~p~n", [ErrorType, ErrorDetails]),
+                            ErrorState = handle_system_error(State, ErrorType, ErrorDetails),
+                            case should_continue_after_error(ErrorType) of
+                                true -> trading_loop(ErrorState);
+                                false -> cleanup_and_stop(ErrorState)
+                            end
                     after 1000 ->
                         %% Periodic check - continue loop with updated state
                         trading_loop(UpdatedState)
@@ -367,6 +469,332 @@ trading_loop(State) ->
                 trading_loop(State)
             end
     end.
+
+%% ============================================================================
+%% Emergency Stop and Critical Error Handling
+%% ============================================================================
+
+%% Handle emergency stop triggered by critical errors
+handle_emergency_stop(State, ErrorCode, ErrorMsg, Timestamp) ->
+    io:format("HANDLING EMERGENCY STOP: ~p - ~s at ~p~n", [ErrorCode, ErrorMsg, Timestamp]),
+    
+    %% Log emergency stop
+    EmergencyRecord = {emergency_stop, ErrorCode, ErrorMsg, Timestamp, State#live_trader_state.agent_id},
+    log_emergency_event(EmergencyRecord),
+    
+    %% Immediately halt trading
+    UpdatedState = State#live_trader_state{trading_active = false},
+    
+    %% Attempt to close any open positions
+    ClosedState = emergency_close_positions(UpdatedState),
+    
+    %% Update performance metrics with emergency stop
+    Performance = ClosedState#live_trader_state.performance_data,
+    UpdatedPerformance = Performance#performance_metrics{
+        last_update = Timestamp
+    },
+    
+    %% Record emergency stop in risk state
+    RiskState = ClosedState#live_trader_state.risk_state,
+    EmergencyViolation = {emergency_stop, ErrorCode, Timestamp, ErrorMsg},
+    UpdatedRiskState = RiskState#risk_state{
+        risk_violations = [EmergencyViolation | RiskState#risk_state.risk_violations]
+    },
+    
+    FinalState = ClosedState#live_trader_state{
+        performance_data = UpdatedPerformance,
+        risk_state = UpdatedRiskState
+    },
+    
+    %% Notify external systems of emergency stop
+    notify_emergency_stop(ErrorCode, ErrorMsg, Timestamp),
+    
+    FinalState.
+
+%% Handle connection recovery
+handle_connection_recovery(State, Timestamp) ->
+    io:format("Handling connection recovery at ~p~n", [Timestamp]),
+    
+    %% Log recovery event
+    RecoveryRecord = {connection_recovery, Timestamp, State#live_trader_state.agent_id},
+    log_recovery_event(RecoveryRecord),
+    
+    %% Check if we should resume trading
+    case should_resume_trading_after_recovery(State) of
+        true ->
+            io:format("Resuming trading after connection recovery~n"),
+            %% Resubscribe to market data
+            case resubscribe_after_recovery(State) of
+                ok ->
+                    State#live_trader_state{trading_active = true};
+                {error, Reason} ->
+                    io:format("Failed to resubscribe after recovery: ~p~n", [Reason]),
+                    State
+            end;
+        false ->
+            io:format("Not resuming trading after recovery due to risk constraints~n"),
+            State
+    end.
+
+%% Handle system-level errors
+handle_system_error(State, ErrorType, ErrorDetails) ->
+    io:format("Handling system error: ~p - ~p~n", [ErrorType, ErrorDetails]),
+    
+    %% Log system error
+    SystemErrorRecord = {system_error, ErrorType, ErrorDetails, erlang:timestamp(), State#live_trader_state.agent_id},
+    log_system_error(SystemErrorRecord),
+    
+    %% Update risk state with system error
+    RiskState = State#live_trader_state.risk_state,
+    SystemViolation = {system_error, ErrorType, erlang:timestamp(), ErrorDetails},
+    UpdatedRiskState = RiskState#risk_state{
+        risk_violations = [SystemViolation | RiskState#risk_state.risk_violations]
+    },
+    
+    %% Implement error-specific handling
+    case ErrorType of
+        neural_network_failure ->
+            handle_neural_network_failure(State, ErrorDetails);
+        market_data_corruption ->
+            handle_market_data_corruption(State, ErrorDetails);
+        memory_exhaustion ->
+            handle_memory_exhaustion(State, ErrorDetails);
+        process_crash ->
+            handle_process_crash(State, ErrorDetails);
+        _ ->
+            %% Generic system error handling
+            State#live_trader_state{risk_state = UpdatedRiskState}
+    end.
+
+%% Emergency close all positions
+emergency_close_positions(State) ->
+    io:format("EMERGENCY: Closing all positions~n"),
+    
+    CurrentPositions = State#live_trader_state.current_positions,
+    
+    %% Attempt to close each position
+    lists:foreach(fun(Position) ->
+        Symbol = Position#position_info.symbol,
+        Quantity = Position#position_info.quantity,
+        Side = Position#position_info.side,
+        
+        %% Determine close action
+        CloseAction = case Side of
+            long -> "SELL";
+            short -> "BUY"
+        end,
+        
+        io:format("Emergency closing ~s position: ~s ~p ~s~n", [Side, CloseAction, Quantity, Symbol]),
+        
+        %% Attempt to place close order (may fail if connection is down)
+        case ib_connector:place_order(Symbol, CloseAction, Quantity, "MKT") of
+            ok ->
+                io:format("Emergency close order placed for ~s~n", [Symbol]);
+            {error, Reason} ->
+                io:format("Failed to place emergency close order for ~s: ~p~n", [Symbol, Reason]),
+                %% Log for manual intervention
+                log_failed_emergency_close(Symbol, Side, Quantity, Reason)
+        end
+    end, CurrentPositions),
+    
+    %% Clear positions (they may not actually be closed if orders failed)
+    State#live_trader_state{current_positions = []}.
+
+%% Determine if trading should continue after error
+should_continue_after_error(ErrorType) ->
+    case ErrorType of
+        neural_network_failure -> false;  % Cannot trade without neural network
+        market_data_corruption -> false;  % Cannot trade with bad data
+        memory_exhaustion -> false;       % System stability compromised
+        process_crash -> false;           % System integrity compromised
+        connection_timeout -> true;       % May recover
+        minor_data_issue -> true;         % Can continue with caution
+        _ -> false  % Conservative default
+    end.
+
+%% Check if trading should resume after connection recovery
+should_resume_trading_after_recovery(State) ->
+    RiskState = State#live_trader_state.risk_state,
+    
+    %% Check if we're within risk limits
+    DailyLossLimit = config:live_max_daily_loss(),
+    MaxDrawdownLimit = config:live_max_drawdown_limit(),
+    
+    %% Check recent violations
+    RecentViolations = count_recent_violations(RiskState#risk_state.risk_violations),
+    
+    %% Resume only if risk conditions are acceptable
+    (RiskState#risk_state.daily_pnl > -DailyLossLimit) andalso
+    (RiskState#risk_state.max_drawdown > -MaxDrawdownLimit) andalso
+    (RecentViolations < 3).  % No more than 3 recent violations
+
+%% Resubscribe to market data after recovery
+resubscribe_after_recovery(State) ->
+    %% Get configured currency pairs
+    CurrencyPairs = config:live_currency_pairs(),
+    
+    %% Attempt to resubscribe
+    case subscribe_to_pairs(CurrencyPairs, 1, State) of
+        ok ->
+            io:format("Successfully resubscribed to market data~n"),
+            ok;
+        {error, Reason} ->
+            io:format("Failed to resubscribe to market data: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+%% Handle specific error types
+handle_neural_network_failure(State, ErrorDetails) ->
+    io:format("Handling neural network failure: ~p~n", [ErrorDetails]),
+    
+    %% Attempt to restart neural network
+    case attempt_neural_network_restart(State) of
+        {ok, NewState} ->
+            io:format("Neural network restarted successfully~n"),
+            NewState;
+        {error, Reason} ->
+            io:format("Failed to restart neural network: ~p~n", [Reason]),
+            %% Mark trading as inactive
+            State#live_trader_state{trading_active = false}
+    end.
+
+handle_market_data_corruption(State, ErrorDetails) ->
+    io:format("Handling market data corruption: ~p~n", [ErrorDetails]),
+    
+    %% Clear corrupted data and request fresh data
+    clear_market_data_cache(),
+    
+    %% Pause trading briefly to allow data refresh
+    erlang:send_after(5000, self(), resume_after_data_refresh),
+    
+    State#live_trader_state{trading_active = false}.
+
+handle_memory_exhaustion(State, ErrorDetails) ->
+    io:format("Handling memory exhaustion: ~p~n", [ErrorDetails]),
+    
+    %% Force garbage collection
+    erlang:garbage_collect(),
+    
+    %% Clear non-essential caches
+    clear_performance_caches(),
+    
+    %% Reduce trading frequency temporarily
+    State.
+
+handle_process_crash(State, ErrorDetails) ->
+    io:format("Handling process crash: ~p~n", [ErrorDetails]),
+    
+    %% Attempt to restart crashed processes
+    restart_crashed_processes(ErrorDetails),
+    
+    State.
+
+%% ============================================================================
+%% Error Recovery and Restart Functions
+%% ============================================================================
+
+%% Attempt to restart neural network
+attempt_neural_network_restart(State) ->
+    AgentId = State#live_trader_state.agent_id,
+    
+    %% Stop existing exoself if running
+    case State#live_trader_state.exoself_pid of
+        undefined -> ok;
+        Pid when is_pid(Pid) ->
+            exit(Pid, restart_required)
+    end,
+    
+    %% Wait a moment for cleanup
+    timer:sleep(1000),
+    
+    %% Attempt to restart
+    case deploy_neural_network(AgentId, State#live_trader_state.live_scape_pid) of
+        {ok, NewExoselfPid} ->
+            NewState = State#live_trader_state{exoself_pid = NewExoselfPid},
+            {ok, NewState};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Clear market data cache
+clear_market_data_cache() ->
+    io:format("Clearing market data cache~n"),
+    %% Clear ETS tables
+    case ets:info(live_market_ticks) of
+        undefined -> ok;
+        _ -> ets:delete_all_objects(live_market_ticks)
+    end,
+    case ets:info(live_ohlc_data) of
+        undefined -> ok;
+        _ -> ets:delete_all_objects(live_ohlc_data)
+    end.
+
+%% Clear performance caches to free memory
+clear_performance_caches() ->
+    io:format("Clearing performance caches~n"),
+    case ets:info(live_performance_snapshots) of
+        undefined -> ok;
+        _ -> 
+            %% Keep only recent snapshots
+            AllSnapshots = ets:tab2list(live_performance_snapshots),
+            RecentSnapshots = lists:sublist(lists:reverse(AllSnapshots), 100),
+            ets:delete_all_objects(live_performance_snapshots),
+            lists:foreach(fun(Snapshot) -> ets:insert(live_performance_snapshots, Snapshot) end, RecentSnapshots)
+    end.
+
+%% Restart crashed processes
+restart_crashed_processes(ErrorDetails) ->
+    io:format("Attempting to restart crashed processes: ~p~n", [ErrorDetails]),
+    %% Implementation would depend on specific process architecture
+    %% For now, just log the attempt
+    ok.
+
+%% Count recent violations (within last hour)
+count_recent_violations(Violations) ->
+    OneHourAgo = erlang:timestamp(),
+    RecentViolations = lists:filter(fun({_, _, Timestamp, _}) ->
+        TimeDiff = timer:now_diff(erlang:timestamp(), Timestamp),
+        TimeDiff < 3600000000  % 1 hour in microseconds
+    end, Violations),
+    length(RecentViolations).
+
+%% ============================================================================
+%% Error Logging Functions
+%% ============================================================================
+
+%% Log emergency events
+log_emergency_event(EmergencyRecord) ->
+    io:format("EMERGENCY EVENT LOGGED: ~p~n", [EmergencyRecord]),
+    %% In production, would write to persistent emergency log
+    ok.
+
+%% Log recovery events
+log_recovery_event(RecoveryRecord) ->
+    io:format("RECOVERY EVENT LOGGED: ~p~n", [RecoveryRecord]),
+    ok.
+
+%% Log system errors
+log_system_error(SystemErrorRecord) ->
+    io:format("SYSTEM ERROR LOGGED: ~p~n", [SystemErrorRecord]),
+    ok.
+
+%% Log failed emergency closes
+log_failed_emergency_close(Symbol, Side, Quantity, Reason) ->
+    FailedCloseRecord = {failed_emergency_close, Symbol, Side, Quantity, Reason, erlang:timestamp()},
+    io:format("FAILED EMERGENCY CLOSE LOGGED: ~p~n", [FailedCloseRecord]),
+    %% This is critical - in production would trigger alerts
+    ok.
+
+%% Notify external systems of emergency stop
+notify_emergency_stop(ErrorCode, ErrorMsg, Timestamp) ->
+    io:format("Notifying external systems of emergency stop~n"),
+    %% In production, would send alerts, emails, etc.
+    %% For now, just ensure it's logged prominently
+    io:format("*** EMERGENCY STOP NOTIFICATION ***~n"),
+    io:format("Error Code: ~p~n", [ErrorCode]),
+    io:format("Error Message: ~s~n", [ErrorMsg]),
+    io:format("Timestamp: ~p~n", [Timestamp]),
+    io:format("*** END EMERGENCY NOTIFICATION ***~n").
 
 %% ============================================================================
 %% Risk Management
@@ -626,34 +1054,6 @@ merge_risk_parameters(DefaultParams, UserParams) ->
 %% ============================================================================
 %% Performance Tracking
 %% ============================================================================
-
-%% Initialize performance tracking ETS tables
-init_performance_tables() ->
-    %% Create ETS table for trade history
-    case ets:info(live_trade_history) of
-        undefined ->
-            ets:new(live_trade_history, [named_table, public, ordered_set]);
-        _ ->
-            ets:delete_all_objects(live_trade_history)
-    end,
-    
-    %% Create ETS table for performance snapshots
-    case ets:info(live_performance_snapshots) of
-        undefined ->
-            ets:new(live_performance_snapshots, [named_table, public, ordered_set]);
-        _ ->
-            ets:delete_all_objects(live_performance_snapshots)
-    end,
-    
-    %% Create ETS table for backtesting comparison data
-    case ets:info(backtesting_comparison) of
-        undefined ->
-            ets:new(backtesting_comparison, [named_table, public, set]);
-        _ ->
-            ets:delete_all_objects(backtesting_comparison)
-    end,
-    
-    ok.
 
 %% Get comprehensive performance metrics
 get_performance() ->

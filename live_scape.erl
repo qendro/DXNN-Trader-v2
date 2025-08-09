@@ -6,6 +6,9 @@
 -compile(export_all).
 -include("records.hrl").
 
+%% API for supervisor integration
+-export([start_link/0]).
+
 
 
 %% ETS table for live price data buffer
@@ -15,6 +18,23 @@
 %% ============================================================================
 %% Public API - Scape Interface
 %% ============================================================================
+
+%% Start link function for supervisor integration
+start_link() ->
+    Pid = spawn_link(?MODULE, init_scape, []),
+    register(live_scape, Pid),
+    {ok, Pid}.
+
+%% Initialize scape process
+init_scape() ->
+    %% Initialize ETS table for price buffer
+    init_price_buffer(),
+    
+    %% Wait for exoself to connect
+    receive
+        {ExoSelf_PId, live_sim} ->
+            live_sim(ExoSelf_PId)
+    end.
 
 %% Entry point matching existing scape pattern
 gen(ExoSelf_PId, Node) ->
@@ -47,13 +67,24 @@ live_sim(ExoSelf_PId) ->
 live_sim(ExoSelf_PId, State) ->
     receive
         {From, sense, TableName, Feature, Parameters, Start, Finish} ->
-            %% Handle sensor requests for market data
+            %% Handle sensor requests for market data with error handling
             io:format("Live scape received sense request: ~p ~p ~p~n", 
                      [TableName, Feature, Parameters]),
             
-            {Result, UpdatedState} = handle_sense_request(TableName, Feature, Parameters, State),
-            From ! {self(), Result},
-            live_sim(ExoSelf_PId, UpdatedState);
+            try
+                {Result, UpdatedState} = handle_sense_request_with_error_handling(TableName, Feature, Parameters, State),
+                From ! {self(), Result},
+                live_sim(ExoSelf_PId, UpdatedState)
+            catch
+                Error:Reason ->
+                    io:format("Error in sense request: ~p:~p~n", [Error, Reason]),
+                    %% Return safe default data
+                    SafeResult = generate_safe_sensor_data(Parameters),
+                    From ! {self(), SafeResult},
+                    %% Log error and continue
+                    ErrorState = log_sensor_error(Error, Reason, State),
+                    live_sim(ExoSelf_PId, ErrorState)
+            end;
             
         {From, sense, internals, Parameters} ->
             %% Handle internal state sensor requests
@@ -62,12 +93,23 @@ live_sim(ExoSelf_PId, State) ->
             live_sim(ExoSelf_PId, State);
             
         {From, trade, TableName, TradeSignal} ->
-            %% Handle trade execution requests
+            %% Handle trade execution requests with comprehensive error handling
             io:format("Live scape received trade signal: ~p~n", [TradeSignal]),
             
-            {Fitness, HaltFlag, UpdatedState} = handle_trade_request(TradeSignal, State),
-            From ! {self(), Fitness, HaltFlag},
-            live_sim(ExoSelf_PId, UpdatedState);
+            try
+                {Fitness, HaltFlag, UpdatedState} = handle_trade_request_with_error_handling(TradeSignal, State),
+                From ! {self(), Fitness, HaltFlag},
+                live_sim(ExoSelf_PId, UpdatedState)
+            catch
+                Error:Reason ->
+                    io:format("Error in trade execution: ~p:~p~n", [Error, Reason]),
+                    %% Return safe response and halt trading
+                    From ! {self(), 0, 1},  % No fitness, halt flag set
+                    %% Log error and notify emergency
+                    ErrorState = log_trade_error(Error, Reason, State),
+                    notify_trade_execution_failure(Error, Reason),
+                    live_sim(ExoSelf_PId, ErrorState)
+            end;
             
         restart ->
             %% Restart with fresh state
@@ -78,6 +120,24 @@ live_sim(ExoSelf_PId, State) ->
             },
             live_sim(ExoSelf_PId, NewState);
             
+        {emergency_stop, ErrorCode, ErrorMsg} ->
+            %% Handle emergency stop from IB connector
+            io:format("Live scape received emergency stop: ~p - ~s~n", [ErrorCode, ErrorMsg]),
+            EmergencyState = handle_emergency_stop_in_scape(State, ErrorCode, ErrorMsg),
+            live_sim(ExoSelf_PId, EmergencyState);
+            
+        {ib_connection_recovered, Timestamp} ->
+            %% Handle connection recovery
+            io:format("Live scape notified of connection recovery at ~p~n", [Timestamp]),
+            RecoveredState = handle_connection_recovery_in_scape(State, Timestamp),
+            live_sim(ExoSelf_PId, RecoveredState);
+            
+        {market_data_interruption, Reason} ->
+            %% Handle market data interruption
+            io:format("Market data interruption detected: ~p~n", [Reason]),
+            InterruptedState = handle_market_data_interruption(State, Reason),
+            live_sim(ExoSelf_PId, InterruptedState);
+            
         terminate ->
             %% Clean up and terminate
             cleanup_price_buffer(),
@@ -87,6 +147,331 @@ live_sim(ExoSelf_PId, State) ->
     after 10000 ->
         %% Timeout - continue loop
         live_sim(ExoSelf_PId, State)
+    end.
+
+%% ============================================================================
+%% Enhanced Error Handling for Live Scape
+%% ============================================================================
+
+%% Handle sensor requests with comprehensive error handling
+handle_sense_request_with_error_handling(TableName, Feature, Parameters, State) ->
+    %% Check for market data interruption before processing
+    case detect_market_data_interruption_in_scape() of
+        {ok, data_available} ->
+            %% Normal processing
+            handle_sense_request(TableName, Feature, Parameters, State);
+        {interrupted, Reason} ->
+            io:format("Market data interruption detected during sense: ~p~n", [Reason]),
+            %% Attempt recovery
+            case attempt_market_data_recovery(Reason) of
+                {ok, recovered} ->
+                    %% Retry with recovered data
+                    handle_sense_request(TableName, Feature, Parameters, State);
+                {error, recovery_failed} ->
+                    %% Use fallback data
+                    {generate_fallback_sensor_data(Parameters), State}
+            end
+    end.
+
+%% Handle trade requests with comprehensive error handling
+handle_trade_request_with_error_handling(TradeSignal, State) ->
+    %% Pre-trade validation
+    case validate_trade_conditions(TradeSignal, State) of
+        {ok, validated} ->
+            %% Proceed with trade execution
+            execute_trade_with_retry(TradeSignal, State);
+        {error, validation_failed, Reason} ->
+            io:format("Trade validation failed: ~p~n", [Reason]),
+            %% Return safe response
+            {0, 0, State}
+    end.
+
+%% Handle emergency stop in scape
+handle_emergency_stop_in_scape(State, ErrorCode, ErrorMsg) ->
+    io:format("Handling emergency stop in scape: ~p - ~s~n", [ErrorCode, ErrorMsg]),
+    
+    %% Immediately close any open positions
+    EmergencyCloseState = emergency_close_positions_in_scape(State),
+    
+    %% Clear market data to prevent stale data usage
+    clear_scape_market_data(),
+    
+    %% Update state to reflect emergency
+    EmergencyCloseState#live_state{
+        current_position = 0,
+        entry_price = 0,
+        unrealized_pnl = 0
+    }.
+
+%% Handle connection recovery in scape
+handle_connection_recovery_in_scape(State, Timestamp) ->
+    io:format("Handling connection recovery in scape at ~p~n", [Timestamp]),
+    
+    %% Clear any stale market data
+    clear_scape_market_data(),
+    
+    %% Reset price buffer
+    init_price_buffer(),
+    
+    %% State remains unchanged - let normal operations resume
+    State.
+
+%% Handle market data interruption
+handle_market_data_interruption(State, Reason) ->
+    io:format("Handling market data interruption: ~p~n", [Reason]),
+    
+    %% Log the interruption
+    log_market_data_interruption(Reason),
+    
+    %% Attempt to recover
+    case attempt_market_data_recovery(Reason) of
+        {ok, recovered} ->
+            io:format("Market data recovery successful~n"),
+            State;
+        {error, recovery_failed} ->
+            io:format("Market data recovery failed~n"),
+            %% Notify live_trader of data issues
+            notify_market_data_failure(Reason),
+            State
+    end.
+
+%% Detect market data interruption in scape
+detect_market_data_interruption_in_scape() ->
+    %% Check if IB connector is providing recent data
+    case ib_connector:get_connection_status() of
+        {ok, true} ->
+            %% Connection is up, check data freshness
+            case check_data_freshness() of
+                {ok, fresh} -> {ok, data_available};
+                {stale, Age} when Age > 60 -> {interrupted, stale_data};
+                _ -> {ok, data_available}
+            end;
+        {ok, false} ->
+            {interrupted, connection_down};
+        {error, Reason} ->
+            {interrupted, {connector_error, Reason}}
+    end.
+
+%% Check data freshness
+check_data_freshness() ->
+    %% Check timestamp of most recent market data
+    case ets:info(live_market_ticks) of
+        undefined -> {stale, infinity};
+        _ ->
+            case ets:first(live_market_ticks) of
+                '$end_of_table' -> {stale, infinity};
+                FirstKey ->
+                    case ets:lookup(live_market_ticks, FirstKey) of
+                        [{_, Tick}] ->
+                            Age = timer:now_diff(erlang:timestamp(), Tick#market_tick.timestamp) / 1000000,
+                            if
+                                Age < 30 -> {ok, fresh};
+                                true -> {stale, Age}
+                            end;
+                        [] -> {stale, infinity}
+                    end
+            end
+    end.
+
+%% Attempt market data recovery
+attempt_market_data_recovery(Reason) ->
+    io:format("Attempting market data recovery for reason: ~p~n", [Reason]),
+    
+    case Reason of
+        stale_data ->
+            %% Request fresh data subscription
+            case request_fresh_market_data() of
+                ok -> {ok, recovered};
+                {error, _} -> {error, recovery_failed}
+            end;
+        connection_down ->
+            %% Wait for connection recovery
+            timer:sleep(2000),
+            case ib_connector:get_connection_status() of
+                {ok, true} -> {ok, recovered};
+                _ -> {error, recovery_failed}
+            end;
+        _ ->
+            %% Generic recovery attempt
+            timer:sleep(1000),
+            {ok, recovered}  % Optimistic recovery
+    end.
+
+%% Request fresh market data
+request_fresh_market_data() ->
+    %% Get configured currency pairs and resubscribe
+    CurrencyPairs = config:live_currency_pairs(),
+    case CurrencyPairs of
+        [] -> {error, no_pairs_configured};
+        [FirstPair | _] ->
+            Symbol = atom_to_list(FirstPair),
+            case ib_connector:subscribe_market_data(Symbol, 1) of
+                ok -> ok;
+                {error, Reason} -> {error, Reason}
+            end
+    end.
+
+%% Validate trade conditions before execution
+validate_trade_conditions(TradeSignal, State) ->
+    %% Check if we have valid market data
+    case get_current_market_price(atom_to_list(State#live_state.table_name)) of
+        {ok, _Price} ->
+            %% Check if signal is valid
+            case is_valid_trade_signal(TradeSignal) of
+                true -> {ok, validated};
+                false -> {error, validation_failed, invalid_signal}
+            end;
+        {error, Reason} ->
+            {error, validation_failed, {no_market_data, Reason}}
+    end.
+
+%% Check if trade signal is valid
+is_valid_trade_signal(TradeSignal) ->
+    lists:member(TradeSignal, [-1, 0, 1]).
+
+%% Execute trade with retry mechanism
+execute_trade_with_retry(TradeSignal, State) ->
+    execute_trade_with_retry(TradeSignal, State, 3).  % 3 retry attempts
+
+execute_trade_with_retry(TradeSignal, State, 0) ->
+    %% No more retries
+    io:format("Trade execution failed after all retries~n"),
+    {0, 1, State};  % No fitness, halt flag set
+
+execute_trade_with_retry(TradeSignal, State, RetriesLeft) ->
+    try
+        %% Attempt normal trade execution
+        handle_trade_request(TradeSignal, State)
+    catch
+        Error:Reason ->
+            io:format("Trade execution attempt failed: ~p:~p, retries left: ~p~n", 
+                     [Error, Reason, RetriesLeft]),
+            
+            %% Wait before retry
+            timer:sleep(1000),
+            
+            %% Check if error is retryable
+            case is_retryable_trade_error(Error, Reason) of
+                true ->
+                    execute_trade_with_retry(TradeSignal, State, RetriesLeft - 1);
+                false ->
+                    io:format("Trade error is not retryable: ~p:~p~n", [Error, Reason]),
+                    {0, 1, State}  % No fitness, halt flag set
+            end
+    end.
+
+%% Determine if trade error is retryable
+is_retryable_trade_error(Error, Reason) ->
+    case {Error, Reason} of
+        {error, timeout} -> true;
+        {error, connection_lost} -> true;
+        {error, temporary_failure} -> true;
+        {throw, insufficient_margin} -> false;  % Not retryable
+        {error, invalid_symbol} -> false;       % Not retryable
+        _ -> true  % Default to retryable for unknown errors
+    end.
+
+%% Emergency close positions in scape
+emergency_close_positions_in_scape(State) ->
+    CurrentPosition = State#live_state.current_position,
+    
+    case CurrentPosition of
+        0 ->
+            %% No position to close
+            io:format("No position to close in emergency~n"),
+            State;
+        Position when Position =/= 0 ->
+            io:format("Emergency closing position: ~p~n", [Position]),
+            %% Attempt to close position
+            try
+                {_Fitness, _HaltFlag, ClosedState} = close_position(State),
+                ClosedState
+            catch
+                Error:Reason ->
+                    io:format("Failed to close position in emergency: ~p:~p~n", [Error, Reason]),
+                    %% Force close in state even if order failed
+                    State#live_state{
+                        current_position = 0,
+                        entry_price = 0,
+                        unrealized_pnl = 0
+                    }
+            end
+    end.
+
+%% Clear scape market data
+clear_scape_market_data() ->
+    io:format("Clearing scape market data~n"),
+    %% Clear price buffer
+    case ets:info(?LIVE_PRICE_BUFFER) of
+        undefined -> ok;
+        _ -> ets:delete_all_objects(?LIVE_PRICE_BUFFER)
+    end.
+
+%% Generate safe sensor data for error conditions
+generate_safe_sensor_data(Parameters) ->
+    case Parameters of
+        [HRes, VRes, graph_sensor] ->
+            %% Return neutral plane data
+            lists:duplicate(HRes * VRes, 0);
+        [HRes, list_sensor] ->
+            %% Return neutral price list
+            lists:duplicate(HRes, 0.0);
+        _ ->
+            %% Default safe data
+            [0.0]
+    end.
+
+%% Generate fallback sensor data
+generate_fallback_sensor_data(Parameters) ->
+    %% Use last known good data or safe defaults
+    case get_last_known_good_data(Parameters) of
+        {ok, Data} -> Data;
+        error -> generate_safe_sensor_data(Parameters)
+    end.
+
+%% Get last known good data
+get_last_known_good_data(_Parameters) ->
+    %% For now, return error to use safe defaults
+    %% In production, would cache last good data
+    error.
+
+%% ============================================================================
+%% Error Logging and Notification Functions
+%% ============================================================================
+
+%% Log sensor errors
+log_sensor_error(Error, Reason, State) ->
+    ErrorRecord = {sensor_error, Error, Reason, erlang:timestamp(), State#live_state.table_name},
+    io:format("SENSOR ERROR LOGGED: ~p~n", [ErrorRecord]),
+    State.
+
+%% Log trade errors
+log_trade_error(Error, Reason, State) ->
+    ErrorRecord = {trade_error, Error, Reason, erlang:timestamp(), State#live_state.current_position},
+    io:format("TRADE ERROR LOGGED: ~p~n", [ErrorRecord]),
+    State.
+
+%% Log market data interruption
+log_market_data_interruption(Reason) ->
+    InterruptionRecord = {market_data_interruption, Reason, erlang:timestamp()},
+    io:format("MARKET DATA INTERRUPTION LOGGED: ~p~n", [InterruptionRecord]).
+
+%% Notify trade execution failure
+notify_trade_execution_failure(Error, Reason) ->
+    io:format("TRADE EXECUTION FAILURE: ~p:~p~n", [Error, Reason]),
+    %% Notify live_trader
+    case whereis(live_trader) of
+        undefined -> ok;
+        Pid -> Pid ! {system_error, trade_execution_failure, {Error, Reason}}
+    end.
+
+%% Notify market data failure
+notify_market_data_failure(Reason) ->
+    io:format("MARKET DATA FAILURE: ~p~n", [Reason]),
+    %% Notify live_trader
+    case whereis(live_trader) of
+        undefined -> ok;
+        Pid -> Pid ! {system_error, market_data_failure, Reason}
     end.
 
 %% ============================================================================

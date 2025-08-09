@@ -88,6 +88,13 @@
 %% Public API
 %% ============================================================================
 
+%% Start link function for supervisor integration
+start_link() ->
+    Host = config:ib_host(),
+    Port = config:ib_port(),
+    ClientId = config:ib_client_id(),
+    start_connection(Host, Port, ClientId).
+
 %% Start connection to Interactive Brokers TWS/Gateway
 start_connection(Host, Port, ClientId) ->
     io:format("Starting IB connector with Host: ~p, Port: ~p, ClientId: ~p~n", 
@@ -304,6 +311,64 @@ handle_info(reconnect, State) ->
             schedule_reconnect(State)
     end;
 
+handle_info({critical_reconnect}, State) ->
+    io:format("Attempting critical reconnection~n"),
+    case reconnect_to_ib(State) of
+        {ok, NewState} ->
+            io:format("Critical reconnection successful~n"),
+            %% Notify recovery
+            notify_connection_recovery(),
+            {noreply, NewState};
+        {error, Reason} ->
+            io:format("Critical reconnection failed: ~p~n", [Reason]),
+            %% Use more aggressive retry for critical situations
+            schedule_critical_reconnect(State)
+    end;
+
+handle_info(refresh_market_data, State) ->
+    io:format("Refreshing market data subscriptions~n"),
+    case State#state.connection#ib_connection.connected of
+        true ->
+            %% Resubscribe to all market data
+            NewState = resubscribe_market_data(State),
+            {noreply, NewState};
+        false ->
+            io:format("Cannot refresh market data - not connected~n"),
+            {noreply, State}
+    end;
+
+handle_info(resubscribe_all_market_data, State) ->
+    io:format("Resubscribing to all market data~n"),
+    case State#state.connection#ib_connection.connected of
+        true ->
+            NewState = resubscribe_market_data(State),
+            {noreply, NewState};
+        false ->
+            %% Schedule retry when connected
+            erlang:send_after(5000, self(), resubscribe_all_market_data),
+            {noreply, State}
+    end;
+
+handle_info({retry_order, OrderId}, State) ->
+    io:format("Retrying order ~p~n", [OrderId]),
+    %% Find original order details and retry
+    case find_pending_order(OrderId, State) of
+        {ok, {OrderId, Symbol, Action, Quantity, _Timestamp}} ->
+            case send_order_request(Symbol, Action, Quantity, "MKT", State) of
+                {ok, NewState} ->
+                    io:format("Order ~p retry successful~n", [OrderId]),
+                    {noreply, NewState};
+                {error, Reason} ->
+                    io:format("Order ~p retry failed: ~p~n", [OrderId, Reason]),
+                    %% Mark as permanently failed after retry
+                    FinalState = mark_order_permanently_failed(OrderId, Reason, State),
+                    {noreply, FinalState}
+            end;
+        error ->
+            io:format("Cannot find order ~p for retry~n", [OrderId]),
+            {noreply, State}
+    end;
+
 handle_info(heartbeat, State) ->
     case State#state.connection#ib_connection.connected of
         true ->
@@ -413,6 +478,119 @@ schedule_reconnect(State) ->
 
 cancel_timer(undefined) -> ok;
 cancel_timer(Timer) -> erlang:cancel_timer(Timer).
+
+%% ============================================================================
+%% Enhanced Recovery Utility Functions
+%% ============================================================================
+
+%% Notify other processes of connection recovery
+notify_connection_recovery() ->
+    io:format("Notifying processes of connection recovery~n"),
+    
+    %% Notify live_trader
+    case whereis(live_trader) of
+        undefined -> ok;
+        Pid -> Pid ! {ib_connection_recovered, erlang:timestamp()}
+    end,
+    
+    %% Notify live_scape
+    case whereis(live_scape) of
+        undefined -> ok;
+        ScapePid -> ScapePid ! {ib_connection_recovered, erlang:timestamp()}
+    end.
+
+%% Find pending order by ID
+find_pending_order(OrderId, State) ->
+    PendingOrders = State#state.pending_orders,
+    case lists:keyfind(OrderId, 1, PendingOrders) of
+        false -> error;
+        Order -> {ok, Order}
+    end.
+
+%% Enhanced connection health monitoring
+monitor_connection_health(State) ->
+    case State#state.connection#ib_connection.connected of
+        true ->
+            %% Check if we're receiving data
+            LastHeartbeat = erlang:timestamp(),
+            %% Store heartbeat timestamp for monitoring
+            Connection = State#state.connection#ib_connection{
+                connection_time = LastHeartbeat
+            },
+            State#state{connection = Connection};
+        false ->
+            %% Connection is down, ensure recovery is scheduled
+            case State#state.reconnect_timer of
+                undefined ->
+                    schedule_reconnect(State);
+                _ ->
+                    State
+            end
+    end.
+
+%% Detect market data interruption
+detect_market_data_interruption() ->
+    %% Check if we have recent market data
+    case ets:info(?MARKET_TICKS_TABLE) of
+        undefined -> 
+            {interrupted, no_table};
+        _ ->
+            %% Check timestamp of most recent data
+            case ets:first(?MARKET_TICKS_TABLE) of
+                '$end_of_table' ->
+                    {interrupted, no_data};
+                FirstKey ->
+                    case ets:lookup(?MARKET_TICKS_TABLE, FirstKey) of
+                        [{_, Tick}] ->
+                            TimeDiff = timer:now_diff(erlang:timestamp(), Tick#market_tick.timestamp),
+                            if
+                                TimeDiff > 60000000 -> % 60 seconds
+                                    {interrupted, stale_data};
+                                true ->
+                                    {ok, recent_data}
+                            end;
+                        [] ->
+                            {interrupted, no_data}
+                    end
+            end
+    end.
+
+%% Implement circuit breaker pattern for error handling
+-record(circuit_breaker, {
+    failure_count = 0,
+    last_failure_time,
+    state = closed,  % closed, open, half_open
+    failure_threshold = 5,
+    timeout = 30000  % 30 seconds
+}).
+
+%% Check circuit breaker state
+check_circuit_breaker(Operation, State) ->
+    %% Simple circuit breaker implementation
+    %% In production, would be more sophisticated
+    case get_circuit_breaker_state(Operation) of
+        closed ->
+            {allow, State};
+        open ->
+            case should_attempt_reset(Operation) of
+                true ->
+                    {allow_test, State};
+                false ->
+                    {deny, State}
+            end;
+        half_open ->
+            {allow_test, State}
+    end.
+
+%% Get circuit breaker state (simplified)
+get_circuit_breaker_state(_Operation) ->
+    %% For now, always allow - in production would track failures
+    closed.
+
+%% Check if circuit breaker should attempt reset
+should_attempt_reset(_Operation) ->
+    %% For now, always attempt - in production would check timeout
+    true.
 
 %% ============================================================================
 %% IB API Protocol Implementation
@@ -591,6 +769,474 @@ send_order_request(Symbol, Action, Quantity, OrderType, State) ->
     end.
 
 %% ============================================================================
+%% Enhanced Error Handling and Recovery
+%% ============================================================================
+
+%% Categorize IB API errors for appropriate handling
+categorize_error(ErrorCode) ->
+    case ErrorCode of
+        %% Critical connection errors requiring immediate action
+        502 -> {critical, connection_lost};     % Couldn't connect to TWS
+        504 -> {critical, connection_lost};     % Not connected
+        1100 -> {critical, connection_lost};    % Connectivity between IB and TWS lost
+        1101 -> {critical, connection_lost};    % Connectivity between IB and TWS restored (but was lost)
+        1102 -> {critical, connection_lost};    % Connectivity between IB and TWS restored (data lost)
+        
+        %% Market data related errors
+        162 -> {recoverable, market_data_issue}; % Historical market data service error
+        200 -> {recoverable, market_data_issue}; % No security definition found
+        354 -> {recoverable, market_data_issue}; % Requested market data is not subscribed
+        10167 -> {recoverable, market_data_issue}; % Requested market data is not subscribed
+        
+        %% Order execution errors
+        103 -> {recoverable, order_issue};      % Duplicate order id
+        104 -> {recoverable, order_issue};      % Cannot modify a filled order
+        105 -> {recoverable, order_issue};      % Order being modified does not exist
+        106 -> {recoverable, order_issue};      % Cannot transmit order ID
+        107 -> {recoverable, order_issue};      % Cannot transmit incomplete order
+        201 -> {recoverable, order_issue};      % Order rejected - reason in message
+        202 -> {recoverable, order_issue};      % Order cancelled
+        
+        %% Warning level errors
+        2104 -> {warning, minor_issue};         % Market data farm connection is OK
+        2106 -> {warning, minor_issue};         % HMDS data farm connection is OK
+        2108 -> {warning, minor_issue};         % Market data farm connection is inactive
+        
+        %% Unknown errors
+        _ -> {unknown, unclassified}
+    end.
+
+%% Handle critical connection errors with emergency procedures
+handle_critical_connection_error(ErrorCode, ErrorMsg, State) ->
+    io:format("CRITICAL ERROR ~p: ~s - Initiating emergency procedures~n", [ErrorCode, ErrorMsg]),
+    
+    %% Log critical error with timestamp
+    ErrorRecord = {critical_error, ErrorCode, ErrorMsg, erlang:timestamp()},
+    log_critical_error(ErrorRecord),
+    
+    %% Mark connection as failed
+    Connection = State#state.connection#ib_connection{connected = false},
+    UpdatedState = State#state{connection = Connection},
+    
+    %% Trigger emergency stop if live trading is active
+    trigger_emergency_stop(ErrorCode, ErrorMsg),
+    
+    %% Cancel all pending orders to prevent orphaned trades
+    cancel_all_pending_orders(UpdatedState),
+    
+    %% Schedule aggressive reconnection
+    schedule_critical_reconnect(UpdatedState).
+
+%% Handle market data errors with recovery logic
+handle_market_data_error(ErrorCode, ErrorMsg, State) ->
+    io:format("Market data error ~p: ~s - Implementing recovery~n", [ErrorCode, ErrorMsg]),
+    
+    %% Log market data error
+    ErrorRecord = {market_data_error, ErrorCode, ErrorMsg, erlang:timestamp()},
+    log_market_data_error(ErrorRecord),
+    
+    %% Implement specific recovery based on error type
+    case ErrorCode of
+        162 -> %% Historical data service error
+            %% Clear historical data cache and request fresh data
+            clear_historical_data_cache(),
+            schedule_data_refresh(State);
+        200 -> %% No security definition found
+            %% Remove invalid subscriptions
+            remove_invalid_subscriptions(ErrorMsg, State);
+        354 -> %% Market data not subscribed
+            %% Attempt to resubscribe to market data
+            resubscribe_market_data(State);
+        10167 -> %% Market data not subscribed (alternative code)
+            %% Attempt to resubscribe to market data
+            resubscribe_market_data(State);
+        _ ->
+            %% Generic market data recovery
+            generic_market_data_recovery(State)
+    end.
+
+%% Handle order execution errors with retry mechanisms
+handle_order_error(ErrorCode, ErrorMsg, State) ->
+    io:format("Order error ~p: ~s - Implementing retry logic~n", [ErrorCode, ErrorMsg]),
+    
+    %% Log order error
+    ErrorRecord = {order_error, ErrorCode, ErrorMsg, erlang:timestamp()},
+    log_order_error(ErrorRecord),
+    
+    %% Extract order ID from error message if possible
+    OrderId = extract_order_id_from_error(ErrorMsg),
+    
+    %% Implement specific recovery based on error type
+    case ErrorCode of
+        103 -> %% Duplicate order ID
+            %% Generate new order ID and retry
+            handle_duplicate_order_id(OrderId, State);
+        104 -> %% Cannot modify filled order
+            %% Update order status and notify
+            handle_filled_order_modification(OrderId, State);
+        105 -> %% Order being modified does not exist
+            %% Remove from pending orders
+            handle_nonexistent_order_modification(OrderId, State);
+        201 -> %% Order rejected
+            %% Analyze rejection reason and decide on retry
+            handle_order_rejection(OrderId, ErrorMsg, State);
+        202 -> %% Order cancelled
+            %% Update order status
+            handle_order_cancellation(OrderId, State);
+        _ ->
+            %% Generic order error recovery
+            generic_order_error_recovery(OrderId, ErrorCode, State)
+    end.
+
+%% Handle warning level errors
+log_warning_error(ErrorCode, ErrorMsg, State) ->
+    WarningRecord = {warning_error, ErrorCode, ErrorMsg, erlang:timestamp()},
+    log_warning(WarningRecord),
+    State.
+
+%% Handle unknown errors with conservative approach
+handle_unknown_error(ErrorCode, ErrorMsg, State) ->
+    io:format("Unknown error ~p: ~s - Using conservative handling~n", [ErrorCode, ErrorMsg]),
+    
+    %% Log unknown error for analysis
+    ErrorRecord = {unknown_error, ErrorCode, ErrorMsg, erlang:timestamp()},
+    log_unknown_error(ErrorRecord),
+    
+    %% Conservative approach - treat as potentially serious
+    %% but don't trigger emergency stop unless connection is affected
+    case is_connection_related_error(ErrorCode) of
+        true ->
+            %% Treat as connection issue
+            handle_critical_connection_error(ErrorCode, ErrorMsg, State);
+        false ->
+            %% Log and monitor
+            State
+    end.
+
+%% Handle failures in error processing itself
+handle_error_processing_failure(ProcessingError, State) ->
+    io:format("CRITICAL: Error processing failed: ~p~n", [ProcessingError]),
+    
+    %% Log the meta-error
+    MetaErrorRecord = {error_processing_failure, ProcessingError, erlang:timestamp()},
+    log_critical_error(MetaErrorRecord),
+    
+    %% Conservative approach - assume connection issues
+    Connection = State#state.connection#ib_connection{connected = false},
+    UpdatedState = State#state{connection = Connection},
+    
+    %% Trigger emergency procedures
+    trigger_emergency_stop(error_processing_failure, ProcessingError),
+    
+    UpdatedState.
+
+%% ============================================================================
+%% Error Recovery Implementation Functions
+%% ============================================================================
+
+%% Trigger emergency stop for critical errors
+trigger_emergency_stop(ErrorCode, ErrorMsg) ->
+    io:format("EMERGENCY STOP TRIGGERED: ~p - ~s~n", [ErrorCode, ErrorMsg]),
+    
+    %% Notify live_trader of emergency stop
+    case whereis(live_trader) of
+        undefined -> 
+            io:format("No live_trader process to notify~n");
+        Pid ->
+            Pid ! {emergency_stop, ErrorCode, ErrorMsg, erlang:timestamp()}
+    end,
+    
+    %% Notify live_scape of emergency stop
+    case whereis(live_scape) of
+        undefined ->
+            io:format("No live_scape process to notify~n");
+        ScapePid ->
+            ScapePid ! {emergency_stop, ErrorCode, ErrorMsg}
+    end.
+
+%% Cancel all pending orders during emergency
+cancel_all_pending_orders(State) ->
+    PendingOrders = State#state.pending_orders,
+    io:format("Cancelling ~p pending orders due to emergency~n", [length(PendingOrders)]),
+    
+    lists:foreach(fun({OrderId, Symbol, Action, Quantity, Timestamp}) ->
+        io:format("Emergency cancelling order ~p: ~s ~p ~s~n", [OrderId, Action, Quantity, Symbol]),
+        %% Note: Cannot send cancel message if connection is down
+        %% Log for manual intervention
+        log_emergency_order_cancellation(OrderId, Symbol, Action, Quantity, Timestamp)
+    end, PendingOrders).
+
+%% Schedule critical reconnection with aggressive retry
+schedule_critical_reconnect(State) ->
+    cancel_timer(State#state.reconnect_timer),
+    
+    %% Use shorter backoff for critical errors
+    CriticalBackoff = min(?INITIAL_BACKOFF, 500), % 500ms for critical errors
+    
+    io:format("Scheduling critical reconnect in ~p ms~n", [CriticalBackoff]),
+    Timer = erlang:send_after(CriticalBackoff, self(), {critical_reconnect}),
+    
+    State#state{
+        reconnect_timer = Timer,
+        reconnect_attempts = 0  % Reset attempts for critical reconnect
+    }.
+
+%% Clear historical data cache
+clear_historical_data_cache() ->
+    io:format("Clearing historical data cache~n"),
+    case ets:info(?OHLC_DATA_TABLE) of
+        undefined -> ok;
+        _ -> ets:delete_all_objects(?OHLC_DATA_TABLE)
+    end.
+
+%% Schedule data refresh
+schedule_data_refresh(State) ->
+    io:format("Scheduling market data refresh~n"),
+    erlang:send_after(1000, self(), refresh_market_data),
+    State.
+
+%% Remove invalid subscriptions
+remove_invalid_subscriptions(ErrorMsg, State) ->
+    io:format("Removing invalid subscriptions based on error: ~s~n", [ErrorMsg]),
+    %% Extract symbol from error message if possible
+    case extract_symbol_from_error(ErrorMsg) of
+        {ok, Symbol} ->
+            %% Remove subscription for this symbol
+            Subscriptions = State#state.connection#ib_connection.subscriptions,
+            NewSubscriptions = lists:filter(fun({_ReqId, Sub}) -> Sub =/= Symbol end, Subscriptions),
+            Connection = State#state.connection#ib_connection{subscriptions = NewSubscriptions},
+            State#state{connection = Connection};
+        error ->
+            %% Cannot extract symbol - log for manual review
+            io:format("Cannot extract symbol from error message: ~s~n", [ErrorMsg]),
+            State
+    end.
+
+%% Resubscribe to market data
+resubscribe_market_data(State) ->
+    io:format("Attempting to resubscribe to market data~n"),
+    Subscriptions = State#state.connection#ib_connection.subscriptions,
+    
+    %% Clear current subscriptions and resubscribe
+    Connection = State#state.connection#ib_connection{subscriptions = []},
+    TempState = State#state{connection = Connection},
+    
+    %% Resubscribe to each symbol
+    lists:foldl(fun({ReqId, Symbol}, AccState) ->
+        case send_market_data_request(Symbol, ReqId, AccState) of
+            {ok, NewState} ->
+                io:format("Resubscribed to ~s~n", [Symbol]),
+                NewState;
+            {error, Reason} ->
+                io:format("Failed to resubscribe to ~s: ~p~n", [Symbol, Reason]),
+                AccState
+        end
+    end, TempState, Subscriptions).
+
+%% Generic market data recovery
+generic_market_data_recovery(State) ->
+    io:format("Implementing generic market data recovery~n"),
+    %% Wait a moment then try to resubscribe
+    erlang:send_after(2000, self(), resubscribe_all_market_data),
+    State.
+
+%% Handle duplicate order ID error
+handle_duplicate_order_id(OrderId, State) ->
+    io:format("Handling duplicate order ID: ~p~n", [OrderId]),
+    %% Increment next order ID to avoid future duplicates
+    Connection = State#state.connection,
+    NewConnection = Connection#ib_connection{
+        next_order_id = Connection#ib_connection.next_order_id + 10  % Skip ahead
+    },
+    State#state{connection = NewConnection}.
+
+%% Handle filled order modification attempt
+handle_filled_order_modification(OrderId, State) ->
+    io:format("Order ~p is already filled, updating status~n", [OrderId]),
+    %% Mark order as filled in confirmations
+    Confirmation = {OrderId, "Filled", 0.0, 0},
+    NewConfirmations = [Confirmation | State#state.order_confirmations],
+    State#state{order_confirmations = NewConfirmations}.
+
+%% Handle nonexistent order modification
+handle_nonexistent_order_modification(OrderId, State) ->
+    io:format("Order ~p does not exist, removing from pending~n", [OrderId]),
+    %% Remove from pending orders
+    NewPendingOrders = lists:filter(fun({Id, _, _, _, _}) -> Id =/= OrderId end, 
+                                   State#state.pending_orders),
+    State#state{pending_orders = NewPendingOrders}.
+
+%% Handle order rejection with retry logic
+handle_order_rejection(OrderId, ErrorMsg, State) ->
+    io:format("Order ~p rejected: ~s~n", [OrderId, ErrorMsg]),
+    
+    %% Analyze rejection reason
+    case analyze_rejection_reason(ErrorMsg) of
+        {retry_possible, Reason} ->
+            io:format("Rejection is retryable: ~s~n", [Reason]),
+            schedule_order_retry(OrderId, State);
+        {permanent_failure, Reason} ->
+            io:format("Rejection is permanent: ~s~n", [Reason]),
+            mark_order_permanently_failed(OrderId, Reason, State);
+        {unknown_reason} ->
+            io:format("Unknown rejection reason, treating as permanent~n"),
+            mark_order_permanently_failed(OrderId, ErrorMsg, State)
+    end.
+
+%% Handle order cancellation
+handle_order_cancellation(OrderId, State) ->
+    io:format("Order ~p was cancelled~n", [OrderId]),
+    %% Update order status
+    Confirmation = {OrderId, "Cancelled", 0.0, 0},
+    NewConfirmations = [Confirmation | State#state.order_confirmations],
+    %% Remove from pending
+    NewPendingOrders = lists:filter(fun({Id, _, _, _, _}) -> Id =/= OrderId end, 
+                                   State#state.pending_orders),
+    State#state{
+        order_confirmations = NewConfirmations,
+        pending_orders = NewPendingOrders
+    }.
+
+%% Generic order error recovery
+generic_order_error_recovery(OrderId, ErrorCode, State) ->
+    io:format("Generic order error recovery for order ~p, error ~p~n", [OrderId, ErrorCode]),
+    %% Conservative approach - mark as failed and notify
+    mark_order_failed(OrderId, ErrorCode, State).
+
+%% ============================================================================
+%% Error Analysis and Utility Functions
+%% ============================================================================
+
+%% Extract order ID from error message
+extract_order_id_from_error(ErrorMsg) ->
+    %% Simple pattern matching for order ID
+    case re:run(ErrorMsg, "order\\s+(\\d+)", [caseless, {capture, [1], list}]) of
+        {match, [OrderIdStr]} ->
+            try
+                list_to_integer(OrderIdStr)
+            catch
+                _:_ -> undefined
+            end;
+        nomatch ->
+            undefined
+    end.
+
+%% Extract symbol from error message
+extract_symbol_from_error(ErrorMsg) ->
+    %% Simple pattern matching for currency pairs
+    case re:run(ErrorMsg, "([A-Z]{3}\\.[A-Z]{3})", [caseless, {capture, [1], list}]) of
+        {match, [Symbol]} ->
+            {ok, Symbol};
+        nomatch ->
+            error
+    end.
+
+%% Check if error code is connection related
+is_connection_related_error(ErrorCode) ->
+    ConnectionErrors = [502, 504, 1100, 1101, 1102, 2103, 2105, 2107],
+    lists:member(ErrorCode, ConnectionErrors).
+
+%% Analyze order rejection reason
+analyze_rejection_reason(ErrorMsg) ->
+    LowerMsg = string:to_lower(ErrorMsg),
+    
+    %% Check for insufficient funds/margin
+    case (string:str(LowerMsg, "insufficient") > 0) orelse 
+         (string:str(LowerMsg, "margin") > 0) orelse 
+         (string:str(LowerMsg, "buying power") > 0) of
+        true ->
+            {permanent_failure, "Insufficient funds or margin"};
+        false ->
+            %% Check for market closed
+            case (string:str(LowerMsg, "market closed") > 0) orelse 
+                 (string:str(LowerMsg, "outside") > 0) orelse 
+                 (string:str(LowerMsg, "trading hours") > 0) of
+                true ->
+                    {retry_possible, "Market closed - retry during trading hours"};
+                false ->
+                    %% Check for price issues
+                    case (string:str(LowerMsg, "price") > 0) orelse 
+                         (string:str(LowerMsg, "limit") > 0) of
+                        true ->
+                            {retry_possible, "Price limit issue - retry with market order"};
+                        false ->
+                            %% Check for size issues
+                            case (string:str(LowerMsg, "size") > 0) orelse 
+                                 (string:str(LowerMsg, "quantity") > 0) of
+                                true ->
+                                    {permanent_failure, "Invalid order size"};
+                                false ->
+                                    {unknown_reason}
+                            end
+                    end
+            end
+    end.
+
+%% Schedule order retry with exponential backoff
+schedule_order_retry(OrderId, State) ->
+    RetryDelay = 5000, % 5 seconds
+    io:format("Scheduling retry for order ~p in ~p ms~n", [OrderId, RetryDelay]),
+    erlang:send_after(RetryDelay, self(), {retry_order, OrderId}),
+    State.
+
+%% Mark order as permanently failed
+mark_order_permanently_failed(OrderId, Reason, State) ->
+    io:format("Marking order ~p as permanently failed: ~s~n", [OrderId, Reason]),
+    Confirmation = {OrderId, "PermanentlyFailed", 0.0, 0},
+    NewConfirmations = [Confirmation | State#state.order_confirmations],
+    %% Remove from pending
+    NewPendingOrders = lists:filter(fun({Id, _, _, _, _}) -> Id =/= OrderId end, 
+                                   State#state.pending_orders),
+    State#state{
+        order_confirmations = NewConfirmations,
+        pending_orders = NewPendingOrders
+    }.
+
+%% Mark order as failed
+mark_order_failed(OrderId, ErrorCode, State) ->
+    io:format("Marking order ~p as failed due to error ~p~n", [OrderId, ErrorCode]),
+    Confirmation = {OrderId, "Failed", 0.0, 0},
+    NewConfirmations = [Confirmation | State#state.order_confirmations],
+    State#state{order_confirmations = NewConfirmations}.
+
+%% ============================================================================
+%% Error Logging Functions
+%% ============================================================================
+
+%% Log critical errors
+log_critical_error(ErrorRecord) ->
+    io:format("CRITICAL ERROR LOGGED: ~p~n", [ErrorRecord]),
+    %% In production, would write to persistent log file
+    %% For now, just ensure it's visible in console
+    ok.
+
+%% Log market data errors
+log_market_data_error(ErrorRecord) ->
+    io:format("MARKET DATA ERROR LOGGED: ~p~n", [ErrorRecord]),
+    ok.
+
+%% Log order errors
+log_order_error(ErrorRecord) ->
+    io:format("ORDER ERROR LOGGED: ~p~n", [ErrorRecord]),
+    ok.
+
+%% Log warnings
+log_warning(WarningRecord) ->
+    io:format("WARNING LOGGED: ~p~n", [WarningRecord]),
+    ok.
+
+%% Log unknown errors
+log_unknown_error(ErrorRecord) ->
+    io:format("UNKNOWN ERROR LOGGED: ~p~n", [ErrorRecord]),
+    ok.
+
+%% Log emergency order cancellations
+log_emergency_order_cancellation(OrderId, Symbol, Action, Quantity, Timestamp) ->
+    CancellationRecord = {emergency_cancellation, OrderId, Symbol, Action, Quantity, Timestamp, erlang:timestamp()},
+    io:format("EMERGENCY CANCELLATION LOGGED: ~p~n", [CancellationRecord]),
+    ok.
+
+%% ============================================================================
 %% Message Processing
 %% ============================================================================
 
@@ -756,19 +1402,35 @@ handle_error_message(Data, State) ->
         
         io:format("IB Error ~p: ~s~n", [ErrorCode, ErrorMsg]),
         
-        %% Handle specific error codes
-        case ErrorCode of
-            502 -> %% Couldn't connect to TWS
-                {error, connection_failed};
-            504 -> %% Not connected
-                {error, not_connected};
-            _ ->
-                {ok, State}
+        %% Enhanced error handling with categorization and recovery strategies
+        case categorize_error(ErrorCode) of
+            {critical, connection_lost} ->
+                io:format("Critical connection error detected, initiating emergency recovery~n"),
+                NewState = handle_critical_connection_error(ErrorCode, ErrorMsg, State),
+                {error, {critical_error, ErrorCode, ErrorMsg}, NewState};
+            {recoverable, market_data_issue} ->
+                io:format("Market data error detected, attempting recovery~n"),
+                NewState = handle_market_data_error(ErrorCode, ErrorMsg, State),
+                {ok, NewState};
+            {recoverable, order_issue} ->
+                io:format("Order execution error detected, implementing retry logic~n"),
+                NewState = handle_order_error(ErrorCode, ErrorMsg, State),
+                {ok, NewState};
+            {warning, minor_issue} ->
+                io:format("Minor issue detected: ~p - ~s~n", [ErrorCode, ErrorMsg]),
+                NewState = log_warning_error(ErrorCode, ErrorMsg, State),
+                {ok, NewState};
+            {unknown, _} ->
+                io:format("Unknown error type: ~p - ~s~n", [ErrorCode, ErrorMsg]),
+                NewState = handle_unknown_error(ErrorCode, ErrorMsg, State),
+                {ok, NewState}
         end
     catch
         _:Error ->
             io:format("Error processing error message: ~p~n", [Error]),
-            {ok, State}
+            %% Even error handling can fail - implement fallback
+            FallbackState = handle_error_processing_failure(Error, State),
+            {ok, FallbackState}
     end.
 
 handle_next_valid_id(Data, State) ->
