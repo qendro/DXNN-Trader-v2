@@ -1,9 +1,3 @@
-%% This source code and work is provided and developed by DXNN Research Group WWW.DXNNResearch.COM
-%%
-%Copyright (C) 2012 by Gene Sher, DXNN Research Group, CorticalComputer@gmail.com
-%All rights reserved.
-%
-%This code is licensed under the version 3 of the GNU General Public License. Please see the LICENSE file that accompanies this project for the terms of use.
 
 -record(sensor,{id,name,type,cx_id,scape,vl,fanout_ids=[],generation,format,parameters,gt_parameters,phys_rep,vis_rep,pre_f,post_f}). 
 -record(actuator,{id,name,type,cx_id,scape,vl,fanin_ids=[],generation,format,parameters,gt_parameters,phys_rep,vis_rep,pre_f,post_f}).
@@ -210,3 +204,90 @@
 
 %%%scape
 %id= atom()|float()|{float()::Unique_Id,scape}|{atom()::ScapeName,scape}
+
+%% Live Trading Records
+-record(ib_connection, {
+    socket,
+    client_id,
+    next_order_id = 1,
+    subscriptions = [],
+    account_info,
+    connected = false,
+    server_version,
+    connection_time
+}).
+
+-record(market_tick, {
+    symbol,
+    timestamp,
+    bid,
+    ask,
+    last,
+    volume
+}).
+
+%% Live market data OHLC record
+-record(live_ohlc, {
+    symbol,
+    timestamp,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    tick_count = 0
+}).
+
+%% Performance tracking record
+-record(performance_metrics, {
+    start_time,
+    total_trades = 0,
+    winning_trades = 0,
+    total_pnl = 0.0,
+    current_position = 0,
+    daily_pnl = 0.0,
+    max_drawdown = 0.0,
+    last_update
+}).
+
+%% Live scape state record
+-record(live_state, {
+    table_name,
+    feature,
+    index_start,
+    index_end,
+    index,
+    price_list = [],
+    current_position = 0,  % -1=short, 0=none, 1=long
+    entry_price = 0,
+    previous_pc = 0,       % Previous percentage change
+    account_balance = 10000, % Starting balance
+    unrealized_pnl = 0,
+    realized_pnl = 0
+}).
+
+%% Risk management state record
+-record(risk_state, {
+    daily_start_balance,
+    daily_pnl = 0.0,
+    daily_trades = 0,
+    max_drawdown = 0.0,
+    position_exposures = [],  % [{Symbol, Exposure, Timestamp}]
+    total_exposure = 0.0,
+    last_reset_date,
+    risk_violations = []      % [{Type, Timestamp, Details}]
+}).
+
+%% Position tracking record
+-record(position_info, {
+    symbol,
+    side,           % long | short
+    quantity,
+    entry_price,
+    entry_time,
+    current_price,
+    unrealized_pnl = 0.0,
+    exposure_amount
+}).
+
+
