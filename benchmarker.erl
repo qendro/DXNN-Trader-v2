@@ -247,3 +247,54 @@ trace2graph(TraceFileName)->
 	io:format("Traces:~p~n",[Traces]),
 	Graphs = prepare_Graphs(Traces),
 	write_Graphs(Graphs,TraceFileName++"_Graph").
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% AWS Spot Instance Support %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Checkpoint with fsync before shutdown
+checkpoint_and_exit() ->
+    %% Stop new work (best-effort, fast)
+    catch gen_server:call(population_monitor, pause, 5000),
+    
+    %% Sync Mnesia and create backup with timestamp
+    ok = mnesia:sync_log(),
+    {ok, _} = filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
+    
+    Timestamp = integer_to_list(erlang:system_time(second)),
+    Backup = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".dmp",
+    
+    case mnesia:backup(Backup) of
+        ok -> 
+            %% Create metadata
+            MetadataFile = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".metadata.json",
+            {ok, Fd} = file:open(MetadataFile, [write]),
+            io:format(Fd, "{\"timestamp\": ~p, \"backup_file\": ~p}~n", 
+                     [Timestamp, Backup]),
+            file:close(Fd),
+            %% Ensure file is written to disk
+            file:sync(Fd),
+            ok;
+        {error, Reason} ->
+            error_logger:error_msg("Backup failed: ~p~n", [Reason])
+    end,
+    
+    %% Graceful shutdown
+    init:stop().
+
+% Restore from latest checkpoint (no-op if absent)
+maybe_restore() ->
+    case filelib:wildcard("/var/lib/dxnn/checkpoints/checkpoint-*.dmp") of
+        [] -> 
+            error_logger:info_msg("No checkpoint files found~n"),
+            ok;
+        Files ->
+            Latest = lists:last(lists:sort(Files)),
+            error_logger:info_msg("Restoring from: ~p~n", [Latest]),
+            case mnesia:restore(Latest, [{default_op, recreate_tables}]) of
+                {atomic, _} -> 
+                    error_logger:info_msg("Restore successful~n"),
+                    ok;
+                {aborted, Reason} ->
+                    error_logger:error_msg("Restore failed: ~p~n", [Reason]),
+                    {error, Reason}
+            end
+    end.

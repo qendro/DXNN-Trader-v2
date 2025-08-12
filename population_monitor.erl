@@ -98,6 +98,7 @@ init(S) ->
 		step_size = T#trace.step_size,
 		tot_evaluations = TotEvaluations
 	},
+	progress_logger:set_iteration(0),
 	{ok, State}.
 %In init/1 the population_monitor proces registers itself with the node under the name monitor, and sets all the needed parameters within its #state record. The function first extracts all the Agent_Ids that belong to the population using the extract_AgentIds/2 function. Each agent is then spawned/activated, converted from genotype to phenotype in the summon_agents/2 function. The summon_agents/2 function summons the agents and returns to the caller a list of tuples with the following format: [{Agent_Id,Agent_PId}...]. Once the state record's parameters have been set, the function drops into the main gen_server loop.
 
@@ -129,10 +130,11 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 	OpTag = S#state.op_tag,
 	OpMode = S#state.op_mode,
 	AgentsLeft = S#state.agents_left,
-	case (AgentsLeft-1) =< 0 of
+			case (AgentsLeft-1) =< 0 of
 		true ->
 			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm),
 			U_PopGen = S#state.pop_gen+1,
+			progress_logger:set_iteration(U_PopGen),
 %			io:format("Population Generation:~p Ended.~n~n~n",[U_PopGen]),
 			case OpTag of
 				continue ->
@@ -150,6 +152,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 							{stop,normal,U_S};
 						false ->%IN_PROGRESS
 							Agent_Ids = extract_AgentIds(Population_Id,all),
+							progress_logger:set_total_evals(length(Agent_Ids)),
 							U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
 							TotAgents=length(Agent_Ids),
 							U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
@@ -337,6 +340,7 @@ terminate(Reason, S) ->
 			U_T = T#trace{tot_evaluations=TotEvaluations},
 			U_P = P#population{trace=U_T},
 			genotype:write(U_P),
+			progress_logger:inc_done_eval(),
 			io:format("******** TRACE START ********~n"),
 			io:format("~p~n",[U_T]),
 			io:format("******** ^^^^ TRACE END ^^^^ ********~n"),

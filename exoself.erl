@@ -153,6 +153,7 @@ loop(S,gt)->
 				true ->	%End training
 					A=genotype:dirty_read({agent,S#state.agent_id}),
 					genotype:write(A#agent{fitness=U_HighestFitness}),
+					progress_logger:inc_done_eval(),
 					backup_genotype(S#state.idsNpids,S#state.npids),
 					terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
 					io:format("Agent:~p terminating. Genotype has been backed up.~n Fitness:~p~n TotEvaluations:~p~n TotCycles:~p~n TimeAcc:~p~n",[self(),U_HighestFitness,U_EvalAcc,U_CycleAcc,U_TimeAcc]),

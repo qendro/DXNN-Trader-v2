@@ -108,36 +108,42 @@ status() ->
 
 %% Find the best available agent for trading
 find_best_agent() ->
-    case genotype_utils:list_all_agents() of
-        [] ->
+    case genotype_utils:list_all_agents(all) of
+        {atomic, []} ->
             {error, no_agents_available};
-        Agents ->
-            %% Sort by fitness and get the best one
-            SortedAgents = lists:sort(fun(A, B) -> 
-                A#agent.fitness > B#agent.fitness 
-            end, Agents),
+        {atomic, AgentTuples} ->
+            %% AgentTuples are in format {AgentId, Fitness, Generation, SpecieId}
+            %% Sort by fitness (already sorted by genotype_utils, but ensure descending order)
+            SortedAgents = lists:sort(fun({_, F1, _, _}, {_, F2, _, _}) -> 
+                F1 > F2 
+            end, AgentTuples),
             
             case SortedAgents of
-                [BestAgent | _] ->
-                    {ok, BestAgent#agent.id};
+                [{BestAgentId, _, _, _} | _] ->
+                    {ok, BestAgentId};
                 [] ->
                     {error, no_valid_agents}
-            end
+            end;
+        {aborted, Reason} ->
+            {error, {database_error, Reason}}
     end.
 
 %% List available agents
 list_agents() ->
-    case genotype_utils:list_all_agents() of
-        [] ->
+    case genotype_utils:list_all_agents(all) of
+        {atomic, []} ->
             io:format("No agents available~n"),
             {ok, []};
-        Agents ->
+        {atomic, AgentTuples} ->
             io:format("Available agents:~n"),
-            lists:foreach(fun(Agent) ->
-                io:format("  Agent ~p: Fitness ~p, Generation ~p~n", 
-                         [Agent#agent.id, Agent#agent.fitness, Agent#agent.generation])
-            end, Agents),
-            {ok, Agents}
+            lists:foreach(fun({AgentId, Fitness, Generation, SpecieId}) ->
+                io:format("  Agent ~p: Fitness ~p, Generation ~p, Specie ~p~n", 
+                         [AgentId, Fitness, Generation, SpecieId])
+            end, AgentTuples),
+            {ok, AgentTuples};
+        {aborted, Reason} ->
+            io:format("Database error: ~p~n", [Reason]),
+            {error, {database_error, Reason}}
     end.
 
 %% Get agent details

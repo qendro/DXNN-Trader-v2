@@ -679,6 +679,8 @@ erase_all()->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DB Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 start()->
+	progress_logger:start(),
+	progress_logger:mark_launch(),
 	register(fx,spawn(fx,loop,[])).
 loop()->
 	TableNames = ?ALL_TABLES,

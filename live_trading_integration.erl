@@ -248,29 +248,54 @@ execute_startup_steps([{StepId, Description, StepFun} | Rest], ComponentPids) ->
 
 %% Startup Step 1: Initialize IB connection
 startup_step_ib_connection() ->
-    Host = config:ib_host(),
-    Port = config:ib_port(),
-    ClientId = config:ib_client_id(),
-    
-    io:format("Connecting to IB at ~s:~p with client ID ~p~n", [Host, Port, ClientId]),
-    
-    case ib_connector:start_connection(Host, Port, ClientId) of
-        {ok, Pid} ->
-            %% Wait for connection to be established
-            case wait_for_ib_connection(10000) of
-                ok ->
-                    %% Initialize market data tables
-                    case ib_connector:init_market_data_tables() of
+    %% Check if IB connector is already running (it should be from live_trader initialization)
+    case whereis(ib_connector) of
+        undefined ->
+            %% IB connector not running, start it
+            Host = config:ib_host(),
+            Port = config:ib_port(),
+            ClientId = config:ib_client_id(),
+            
+            io:format("Starting IB connector at ~s:~p with client ID ~p~n", [Host, Port, ClientId]),
+            
+            case ib_connector:start_connection(Host, Port, ClientId) of
+                {ok, Pid} ->
+                    %% Wait for connection to be established
+                    case wait_for_ib_connection(10000) of
+                        ok ->
+                            %% Initialize market data tables
+                            case ib_connector:init_market_data_tables() of
+                                ok ->
+                                    {ok, {ib_connector, Pid}};
+                                {error, Reason} ->
+                                    {error, {market_data_init_failed, Reason}}
+                            end;
+                        {error, Reason} ->
+                            {error, {connection_timeout, Reason}}
+                    end;
+                {error, Reason} ->
+                    {error, {connection_failed, Reason}}
+            end;
+        Pid ->
+            %% IB connector already running, verify it's working
+            io:format("IB connector already running with PID ~p, verifying connection~n", [Pid]),
+            
+            case catch ib_connector:get_connection_status() of
+                {ok, true} ->
+                    io:format("IB connector is connected and ready~n"),
+                    {ok, {ib_connector, Pid}};
+                {ok, false} ->
+                    io:format("IB connector is running but not connected, waiting for connection~n"),
+                    case wait_for_ib_connection(10000) of
                         ok ->
                             {ok, {ib_connector, Pid}};
                         {error, Reason} ->
-                            {error, {market_data_init_failed, Reason}}
+                            {error, {connection_timeout, Reason}}
                     end;
-                {error, Reason} ->
-                    {error, {connection_timeout, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {connection_failed, Reason}}
+                {'EXIT', Reason} ->
+                    io:format("Error checking IB connector status: ~p~n", [Reason]),
+                    {error, {status_check_failed, Reason}}
+            end
     end.
 
 %% Startup Step 2: Start live scape
