@@ -256,8 +256,8 @@ checkpoint_and_exit() ->
     catch gen_server:call(population_monitor, pause, 5000),
     
     %% Sync Mnesia and create backup with timestamp
-    ok = mnesia:sync_log(),
-    {ok, _} = filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
+    catch mnesia:sync_log(),
+    catch filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
     
     Timestamp = integer_to_list(erlang:system_time(second)),
     Backup = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".dmp",
@@ -269,9 +269,8 @@ checkpoint_and_exit() ->
             {ok, Fd} = file:open(MetadataFile, [write]),
             io:format(Fd, "{\"timestamp\": ~p, \"backup_file\": ~p}~n", 
                      [Timestamp, Backup]),
-            file:close(Fd),
-            %% Ensure file is written to disk
             file:sync(Fd),
+            file:close(Fd),
             ok;
         {error, Reason} ->
             error_logger:error_msg("Backup failed: ~p~n", [Reason])

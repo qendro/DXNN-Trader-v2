@@ -123,3 +123,4 @@ echo "✅ Checkpoint function works"
 echo "✅ Restore function works"
 echo "✅ Error handling works"
 echo "✅ State round-trip works"
+
