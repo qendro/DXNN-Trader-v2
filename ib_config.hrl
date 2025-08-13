@@ -9,16 +9,18 @@
 
 %% Client protocol version (integer), NOT marketing "9.76.1"
 %% Keep configurable; do not hardcode stale values
--define(IB_CLIENT_VERSION, 151).           % Modern version - make runtime configurable
--define(IB_CLIENT_DATE, <<"20250101">>).   % YYYYMMDD format - runtime configurable
+-define(IB_CLIENT_VERSION, 38).            % Conservative version
+-define(IB_CLIENT_DATE, <<"">>).           % Empty string, NOT date
 
 %% TCP Options
 -define(IB_TCP_OPTS, [
     binary, 
     {active, false}, 
-    {packet, raw}, 
-    {nodelay, true}, 
-    {keepalive, true}
+    {packet, 0}, 
+    {nodelay, true},
+    {keepalive, true}, 
+    {send_timeout, 5000},
+    {send_timeout_close, true}
 ]).
 
 %% Options

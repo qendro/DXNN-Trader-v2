@@ -60,22 +60,21 @@ source_directory() -> "fx_tables/".     % Options: any valid directory path
 actuator_debug_tag() -> false.               % Options: true, false (enables trade-by-trade debug output)
 sensor_debug_tag() -> false.                 % Options: true, false (enables sensor debug output)
 %% === Live Trading Parameters ===
-%ib_host() -> "127.0.0.1".                    % Options: IP address of TWS/Gateway
-ib_host() -> "host.docker.internal".          % Docker-compatible host address
-ib_port() -> 7497.                           % Options: 7497 (paper), 7496 (live) - PAPER TRADING ONLY
-ib_client_id() -> 1.                         % Options: 1-32 (unique client identifier)
+ib_host() -> 
+    os:getenv("IB_HOST", "host.docker.internal").
 
-%% Docker networking helper
-get_docker_host() ->
-    %% Detect Docker environment and return appropriate host
-    case os:getenv("DOCKER_ENV") of
-        false ->
-            %% Not in Docker, use localhost
-            "127.0.0.1";
-        _ ->
-            %% In Docker, use host.docker.internal
-            "host.docker.internal"
-    end.
+ib_port() -> 
+    list_to_integer(os:getenv("IB_PORT", "7497")).
+
+ib_client_id() -> 
+    list_to_integer(os:getenv("IB_CLIENT_ID", "101")).
+
+%% Add logging at startup
+log_ib_config() ->
+    Host = ib_host(),
+    Port = ib_port(),
+    ClientId = ib_client_id(),
+    io:format("IB Config: host=~s port=~p client_id=~p~n", [Host, Port, ClientId]).
 live_position_size() -> 0.1.                 % Options: 0.01-1.0 (10% of account per trade)
 live_max_daily_loss() -> 0.05.               % Options: 0.01-0.5 (5% max daily loss)
 live_currency_pairs() -> ['EUR.USD'].        % Options: IB format currency pairs
