@@ -5,6 +5,7 @@
 -module(ib_connector).
 -compile(export_all).
 -include("records.hrl").
+-include("ib_config.hrl").
 -behaviour(gen_server).
 
 %% Records are defined in records.hrl
@@ -45,9 +46,10 @@
 -define(OHLC_WINDOW_SIZE, 60). % 60 seconds for 1-minute OHLC
 -define(MAX_PRICE_BUFFER_SIZE, 1000). % Maximum number of price points to buffer
 
-%% IB API Message Types
--define(CLIENT_VERSION, 76).
--define(MIN_SERVER_VER, 38).
+%% IB API Message Types (now using ib_config.hrl)
+%% Legacy defines for backward compatibility
+-define(CLIENT_VERSION, ?IB_CLIENT_VERSION).
+-define(MIN_SERVER_VER, ?IB_MIN_SERVER_VER).
 
 %% IB API Handshake Constants
 -define(IB_API_VERSION, "9.76.1").
@@ -111,52 +113,24 @@ test_connectivity() ->
             {error, Reason}
     end.
 
-%% Test IB handshake with detailed logging
+%% Test IB handshake with detailed logging using real handshake protocol
 test_handshake_detailed() ->
+    test_handshake_detailed(15000). % Default 15 second timeout
+
+test_handshake_detailed(TimeoutMs) ->
     Host = config:ib_host(),
     Port = config:ib_port(),
     ClientId = config:ib_client_id(),
     
-    io:format("Testing detailed handshake with ~s:~p~n", [Host, Port]),
+    io:format("Testing detailed handshake with ~s:~p (Client ID: ~p)~n", [Host, Port, ClientId]),
     
-    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, true}]) of
-        {ok, Socket} ->
-            io:format("✓ TCP connection established~n"),
-            
-            %% Try to send a simple message and see what we get back
-            TestMsg = "TEST" ++ [0],
-            io:format("Sending test message: ~p~n", [TestMsg]),
-            
-            case gen_tcp:send(Socket, list_to_binary(TestMsg)) of
-                ok ->
-                    %% Wait for any response
-                    receive
-                        {tcp, Socket, Data} ->
-                            io:format("Received response: ~p~n", [Data]),
-                            io:format("Response as string: ~s~n", [binary_to_list(Data)]),
-                            gen_tcp:close(Socket),
-                            {ok, Data};
-                        {tcp_closed, Socket} ->
-                            io:format("Connection closed by server~n"),
-                            {error, connection_closed};
-                        {tcp_error, Socket, Reason} ->
-                            io:format("TCP error: ~p~n", [Reason]),
-                            gen_tcp:close(Socket),
-                            {error, Reason}
-                    after 5000 ->
-                        io:format("No response received within 5 seconds~n"),
-                        gen_tcp:close(Socket),
-                        {error, no_response}
-                    end;
-                {error, Reason} ->
-                    io:format("Failed to send test message: ~p~n", [Reason]),
-                    gen_tcp:close(Socket),
-                    {error, Reason}
-            end;
-        {error, Reason} ->
-            io:format("✗ Failed to connect: ~p~n", [Reason]),
-            {error, Reason}
-    end.
+    %% Use the diagnostic version for detailed hex logging
+    ib_diag:test_handshake([
+        {host, Host},
+        {port, Port}, 
+        {client_id, ClientId},
+        {timeout, TimeoutMs}
+    ]).
 
 %% Start link function for supervisor integration
 start_link() ->
@@ -172,10 +146,13 @@ start_connection(Host, Port, ClientId) ->
     case gen_server:start_link({local, ?SERVER}, ?MODULE, 
                               {Host, Port, ClientId}, []) of
         {ok, Pid} ->
-            io:format("IB connector started successfully~n"),
+            io:format("✓ IB connector started successfully~n"),
             {ok, Pid};
+        {error, {connection_failed, Reason}} ->
+            io:format("✗ IB connector failed to start due to connection failure: ~p~n", [Reason]),
+            {error, {connection_failed, Reason}};
         {error, Reason} ->
-            io:format("Failed to start IB connector: ~p~n", [Reason]),
+            io:format("✗ Failed to start IB connector: ~p~n", [Reason]),
             {error, Reason}
     end.
 
@@ -249,9 +226,10 @@ init({Host, Port, ClientId}) ->
             {ok, NewState};
         {error, Reason} ->
             io:format("Initial connection failed: ~p~n", [Reason]),
-            %% Start with disconnected state and attempt reconnection
-            Timer = erlang:send_after(?INITIAL_BACKOFF, self(), reconnect),
-            {ok, State#state{reconnect_timer = Timer}}
+            %% Cleanup ETS tables since we're failing to start
+            cleanup_ets_tables(),
+            %% Return stop to fail fast instead of silent failure
+            {stop, {connection_failed, Reason}}
     end.
 
 handle_call({subscribe_market_data, Symbol, ReqId}, _From, State) ->
@@ -480,7 +458,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 connect_to_ib(Host, Port, State) ->
     io:format("Attempting to connect to IB at ~s:~p~n", [Host, Port]),
-    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, true}]) of
+    ConnectTimeout = application:get_env(dxnn, ib_connect_timeout, ?IB_CONNECT_TIMEOUT),
+    case gen_tcp:connect(Host, Port, ?IB_TCP_OPTS, ConnectTimeout) of
         {ok, Socket} ->
             io:format("TCP connection established~n"),
             Connection = State#state.connection#ib_connection{
@@ -670,187 +649,130 @@ perform_handshake(State) ->
     Socket = State#state.connection#ib_connection.socket,
     ClientId = State#state.connection#ib_connection.client_id,
     
-    %% Try multiple handshake approaches
-    case try_handshake_approach_1(Socket, ClientId) of
-        {ok, ServerVersion} ->
+    case perform_ib_handshake(Socket, ClientId) of
+        {ok, ServerVersion, ConnTime, Remainder} ->
+            %% Create capability map based on server version
+            Capabilities = create_capability_map(ServerVersion),
+            
             Connection = State#state.connection#ib_connection{
                 server_version = ServerVersion
             },
-            io:format("Handshake completed successfully (approach 1) with server version ~p~n", [ServerVersion]),
-            {ok, State#state{connection = Connection}};
-        {error, _} ->
-            %% Try second handshake approach
-            case try_handshake_approach_2(Socket, ClientId) of
-                {ok, ServerVersion} ->
-                    Connection = State#state.connection#ib_connection{
-                        server_version = ServerVersion
-                    },
-                    io:format("Handshake completed successfully (approach 2) with server version ~p~n", [ServerVersion]),
-                    {ok, State#state{connection = Connection}};
-                {error, _} ->
-                    %% Try third handshake approach
-                    case try_handshake_approach_3(Socket, ClientId) of
-                        {ok, ServerVersion} ->
-                            Connection = State#state.connection#ib_connection{
-                                server_version = ServerVersion
-                            },
-                            io:format("Handshake completed successfully (approach 3) with server version ~p~n", [ServerVersion]),
-                            {ok, State#state{connection = Connection}};
-                        {error, Reason} ->
-                            {error, Reason}
-                    end
-            end
-    end.
-
-%% First handshake approach: Send client version as string
-try_handshake_approach_1(Socket, ClientId) ->
-    %% Send client version (null-terminated string)
-    ClientVersionStr = integer_to_list(?CLIENT_VERSION) ++ [0],
-    io:format("Trying handshake approach 1 - sending client version: ~s~n", [ClientVersionStr]),
-    case gen_tcp:send(Socket, list_to_binary(ClientVersionStr)) of
-        ok ->
-            %% Wait for server version response
-            receive
-                {tcp, Socket, Data} ->
-                    io:format("Received server response: ~p~n", [Data]),
-                    case decode_server_version(Data) of
-                        {ok, ServerVersion} when ServerVersion >= ?MIN_SERVER_VER ->
-                            %% Send client ID (null-terminated string)
-                            ClientIdStr = integer_to_list(ClientId) ++ [0],
-                            io:format("Sending client ID: ~s~n", [ClientIdStr]),
-                            case gen_tcp:send(Socket, list_to_binary(ClientIdStr)) of
-                                ok ->
-                                    {ok, ServerVersion};
-                                {error, Reason} ->
-                                    {error, {send_client_id_failed, Reason}}
-                            end;
-                        {ok, ServerVersion} ->
-                            {error, {unsupported_server_version, ServerVersion}};
-                        {error, Reason} ->
-                            {error, {handshake_failed, Reason}}
-                    end
-            after ?TIMEOUT ->
-                {error, handshake_timeout}
-            end;
+            NewState = State#state{
+                connection = Connection,
+                message_buffer = Remainder
+            },
+            io:format("✓ IB handshake completed successfully~n"),
+            io:format("  Server version: ~p~n", [ServerVersion]),
+            io:format("  Connection time: ~s~n", [ConnTime]),
+            io:format("  Capabilities: ~p~n", [maps:keys(Capabilities)]),
+            {ok, NewState};
         {error, Reason} ->
-            {error, {send_version_failed, Reason}}
+            io:format("✗ IB handshake failed: ~p~n", [Reason]),
+            {error, Reason}
     end.
 
-%% Second handshake approach: Send client version as integer
-try_handshake_approach_2(Socket, ClientId) ->
-    %% Send client version as 32-bit integer
-    ClientVersionMsg = <<?CLIENT_VERSION:32>>,
-    io:format("Trying handshake approach 2 - sending client version as integer: ~p~n", [?CLIENT_VERSION]),
-    case gen_tcp:send(Socket, ClientVersionMsg) of
-        ok ->
-            %% Wait for server version response
-            receive
-                {tcp, Socket, Data} ->
-                    io:format("Received server response (approach 2): ~p~n", [Data]),
-                    case decode_server_version(Data) of
-                        {ok, ServerVersion} when ServerVersion >= ?MIN_SERVER_VER ->
-                            %% Send client ID as integer
-                            ClientIdMsg = <<ClientId:32>>,
-                            io:format("Sending client ID as integer: ~p~n", [ClientId]),
-                            case gen_tcp:send(Socket, ClientIdMsg) of
-                                ok ->
-                                    {ok, ServerVersion};
-                                {error, Reason} ->
-                                    {error, {send_client_id_failed, Reason}}
-                            end;
-                        {ok, ServerVersion} ->
-                            {error, {unsupported_server_version, ServerVersion}};
-                        {error, Reason} ->
-                            {error, {handshake_failed, Reason}}
-                    end
-            after ?TIMEOUT ->
-                {error, handshake_timeout}
-            end;
-        {error, Reason} ->
-            {error, {send_version_failed, Reason}}
-    end.
+%% Create capability map based on server version for feature gating
+create_capability_map(ServerVersion) ->
+    #{
+        pnl => ServerVersion >= ?IB_SERVER_VER_PNL,
+        tick_by_tick => ServerVersion >= ?IB_SERVER_VER_TICK_BY_TICK,
+        market_depth => ServerVersion >= ?IB_SERVER_VER_MARKET_DEPTH
+    }.
 
-%% Third handshake approach: Full IB API protocol
-try_handshake_approach_3(Socket, ClientId) ->
-    io:format("Trying handshake approach 3 - full IB API protocol~n"),
-    
-    %% Step 1: Send API version string
-    ApiVersionMsg = ?IB_API_VERSION ++ [0],
-    io:format("Sending API version: ~s~n", [?IB_API_VERSION]),
-    case gen_tcp:send(Socket, list_to_binary(ApiVersionMsg)) of
+%% Correct IB API handshake implementation following TWS protocol
+perform_ib_handshake(Socket, ClientId) ->
+    ClientVersion = get_client_version(),
+    ClientDate = get_client_date(),
+    perform_ib_handshake(Socket, ClientId, ClientVersion, ClientDate, ?IB_HANDSHAKE_TIMEOUT).
+
+perform_ib_handshake(Socket, ClientId, ClientVersion, ClientDate, TimeoutMs) ->
+    %% Step 1: Send "API\0" prefix
+    io:format("→ Sending API prefix~n"),
+    case gen_tcp:send(Socket, <<"API", 0>>) of
         ok ->
-            %% Step 2: Wait for server version response
-            receive
-                {tcp, Socket, Data1} ->
-                    io:format("Received server version response: ~p~n", [Data1]),
-                    
-                    %% Step 3: Send API date
-                    ApiDateMsg = ?IB_API_DATE ++ [0],
-                    io:format("Sending API date: ~s~n", [?IB_API_DATE]),
-                    case gen_tcp:send(Socket, list_to_binary(ApiDateMsg)) of
-                        ok ->
-                            %% Step 4: Wait for connection confirmation
-                            receive
-                                {tcp, Socket, Data2} ->
-                                    io:format("Received connection confirmation: ~p~n", [Data2]),
+            %% Step 2: Send "v<clientVersion>..<date>\0"
+            VMsg = <<"v", (ib_proto:i2b(ClientVersion))/binary, "..", ClientDate/binary, 0>>,
+            io:format("→ Sending version message: v~p..~s~n", [ClientVersion, ClientDate]),
+            
+            case gen_tcp:send(Socket, VMsg) of
+                ok ->
+                    %% Step 3: Read server greeting (serverVersion\0connectionTime\0)
+                    inet:setopts(Socket, [{active, once}]),
+                    receive
+                        {tcp, Socket, Data} ->
+                            io:format("← Received server greeting: ~p~n", [Data]),
+                            case parse_server_greeting(Data) of
+                                {ok, ServerVersion, ConnTime, Remainder} ->
+                                    io:format("✓ Server version: ~p, Connection time: ~s~n", 
+                                             [ServerVersion, ConnTime]),
                                     
-                                    %% Step 5: Send client ID
-                                    ClientIdMsg = integer_to_list(ClientId) ++ [0],
-                                    io:format("Sending client ID: ~s~n", [ClientIdMsg]),
-                                    case gen_tcp:send(Socket, list_to_binary(ClientIdMsg)) of
-                                        ok ->
-                                            %% Assume success if we get this far
-                                            {ok, 76};  % Default to version 76
-                                        {error, Reason} ->
-                                            {error, {send_client_id_failed, Reason}}
-                                    end
-                            after ?TIMEOUT ->
-                                {error, handshake_timeout}
+                                    %% Validate server version
+                                    if ServerVersion >= ?MIN_SERVER_VER ->
+                                        %% Step 4: Send ClientId as C-string
+                                        ClientIdMsg = ib_proto:z(ib_proto:i2b(ClientId)),
+                                        io:format("→ Sending client ID: ~p~n", [ClientId]),
+                                        
+                                        case gen_tcp:send(Socket, ClientIdMsg) of
+                                            ok ->
+                                                io:format("✓ Handshake completed successfully~n"),
+                                                {ok, ServerVersion, ConnTime, Remainder};
+                                            {error, Reason} ->
+                                                {error, {send_client_id_failed, Reason}}
+                                        end;
+                                    true ->
+                                        {error, {unsupported_server_version, ServerVersion, ?MIN_SERVER_VER}}
+                                    end;
+                                {error, Reason} ->
+                                    {error, {parse_server_greeting_failed, Reason}}
                             end;
-                        {error, Reason} ->
-                            {error, {send_date_failed, Reason}}
-                    end
-            after ?TIMEOUT ->
-                {error, handshake_timeout}
+                        {tcp_closed, Socket} ->
+                            {error, connection_closed_during_handshake};
+                        {tcp_error, Socket, Reason} ->
+                            {error, {tcp_error_during_handshake, Reason}}
+                    after TimeoutMs ->
+                        {error, handshake_timeout}
+                    end;
+                {error, Reason} ->
+                    {error, {send_version_message_failed, Reason}}
             end;
         {error, Reason} ->
-            {error, {send_version_failed, Reason}}
+            {error, {send_api_prefix_failed, Reason}}
     end.
 
-decode_server_version(Data) ->
-    try
-        %% IB API sends server version as null-terminated string
-        case binary_to_list(Data) of
-            [H|T] when H >= $0, H =< $9 ->
-                %% Extract version number from string
-                VersionStr = extract_version_string([H|T]),
-                case string:to_integer(VersionStr) of
-                    {ServerVersion, _} when is_integer(ServerVersion) ->
-                        {ok, ServerVersion};
-                    _ ->
-                        {error, invalid_version_format}
-                end;
-            _ ->
-                %% Try legacy integer format as fallback
-                {ServerVersion, _Rest} = decode_int(Data),
-                {ok, ServerVersion}
-        end
-    catch
-        _:_ -> {error, invalid_server_version}
+%% Parse server greeting: "<serverVersion>\0<connectionTime>\0"
+parse_server_greeting(Bin) ->
+    case ib_proto:read_cstring(Bin) of
+        {ok, ServerVerBin, Rest1} ->
+            case ib_proto:read_cstring(Rest1) of
+                {ok, ConnTimeBin, Rest2} ->
+                    try
+                        ServerVersion = binary_to_integer(ServerVerBin),
+                        {ok, ServerVersion, ConnTimeBin, Rest2}
+                    catch
+                        _:_ -> {error, {invalid_server_version, ServerVerBin}}
+                    end;
+                {error, Reason} -> 
+                    {error, {bad_connection_time, Reason}}
+            end;
+        {error, Reason} -> 
+            {error, {bad_server_version, Reason}}
     end.
 
-%% Helper function to extract version string from null-terminated data
-extract_version_string([]) -> [];
-extract_version_string([0|_]) -> [];  % Stop at null terminator
-extract_version_string([H|T]) when H >= $0, H =< $9 ->
-    [H|extract_version_string(T)];
-extract_version_string([_|T]) ->
-    extract_version_string(T).
+%% Get runtime configurable client version
+get_client_version() ->
+    application:get_env(dxnn, ib_client_version, ?IB_CLIENT_VERSION).
 
-encode_connect_message(ClientId) ->
-    %% Simple connection message with client ID
-    ClientIdStr = integer_to_list(ClientId),
-    encode_string(ClientIdStr).
+%% Get runtime configurable client date
+get_client_date() ->
+    application:get_env(dxnn, ib_client_date, ?IB_CLIENT_DATE).
+
+%% Test version of handshake for diagnostics
+perform_handshake_test(Socket, ClientId, TimeoutMs) ->
+    ClientVersion = get_client_version(),
+    ClientDate = get_client_date(),
+    perform_ib_handshake(Socket, ClientId, ClientVersion, ClientDate, TimeoutMs).
+
+%% Legacy functions removed - now using ib_proto module for protocol handling
 
 %% ============================================================================
 %% Market Data Functions
