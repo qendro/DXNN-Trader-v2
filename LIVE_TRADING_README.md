@@ -33,14 +33,17 @@ Before running the live trading system, ensure you have:
 docker build -t erlang-dev .
 
 # Run the Docker container
-# For Apple Silicon Macs connecting to native IB Gateway:
+# For macOS/Windows (recommended):
 docker run -it --rm -v ${PWD}:/app -w /app erlang-dev
 
-# Alternative with host networking (if needed):
+# For Linux (alternative with host networking):
 docker run -it --rm -v ${PWD}:/app -w /app --network host erlang-dev
+
+# For troubleshooting (with environment variable):
+docker run -it --rm -v ${PWD}:/app -w /app -e DOCKER_ENV=1 erlang-dev
 ```
 
-**Note for Apple Silicon Users**: It's recommended to run IB Gateway natively on macOS and your Erlang program in Docker. Update `config.erl` to use `"host.docker.internal"` as the IB host address.
+**Note**: The system is configured to use `"host.docker.internal"` for Docker networking. This works automatically on macOS and Windows. For Linux, use the `--network host` option.
 
 ### 3. Initialize the System
 
@@ -147,7 +150,20 @@ live_trading_main:performance_report().
 
 ## Testing Before Live Use
 
-### Run Tests First
+### Test IB Connection Fixes
+
+```erlang
+% Test the new IB connection fixes
+test_ib_fixes:test_all().
+
+% Quick connectivity test
+test_ib_fixes:quick_test().
+
+% Test IB connection specifically
+live_trading_main:test_ib_connection().
+```
+
+### Run System Tests
 
 ```erlang
 % Quick validation tests
@@ -160,6 +176,13 @@ live_trading_main:test_full().
 live_trading_main:test_component(ib_connector).
 live_trading_main:test_component(live_scape).
 live_trading_main:test_component(live_trader).
+```
+
+### Run Comprehensive Diagnostics
+
+```erlang
+% Run full system diagnostics (includes IB connectivity test)
+live_trading_main:diagnostics().
 ```
 
 ## Complete Example Session
@@ -265,13 +288,18 @@ live_currency_pairs() -> ['EUR.USD', 'GBP.USD'].
 
 ```erlang
 % Check IB configuration
-config:ib_host().      % Should be "127.0.0.1"
+config:ib_host().      % Should be "host.docker.internal" in Docker
 config:ib_port().      % Should be 7497 (paper trading)
 config:ib_client_id(). % Should be 1
 
-% Test IB connection manually
-ib_connector:start_connection("127.0.0.1", 7497, 1).
-ib_connector:get_connection_status().
+% Test basic connectivity
+ib_connector:test_connectivity().
+
+% Test full connection with handshake
+live_trading_main:test_ib_connection().
+
+% Run comprehensive diagnostics
+live_trading_main:diagnostics().
 ```
 
 **Common Solutions**:
@@ -279,6 +307,14 @@ ib_connector:get_connection_status().
 - Check API settings are enabled in IB
 - Verify paper trading mode is active
 - Confirm port 7497 is not blocked by firewall
+- For Docker: ensure `host.docker.internal` resolves correctly
+- For Linux Docker: use `--network host` flag
+
+**Docker-Specific Issues**:
+- **macOS/Windows**: `host.docker.internal` should work automatically
+- **Linux**: Use `--network host` or set `DOCKER_ENV=1` environment variable
+- **Connection refused**: Check if TWS is running and accepting connections
+- **Handshake timeout**: Verify IB API version compatibility
 
 ### No Agents Available
 

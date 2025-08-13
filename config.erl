@@ -59,11 +59,23 @@ fx_tables_directory() -> "fx_tables/".  % Options: any valid directory path
 source_directory() -> "fx_tables/".     % Options: any valid directory path  
 actuator_debug_tag() -> false.               % Options: true, false (enables trade-by-trade debug output)
 sensor_debug_tag() -> false.                 % Options: true, false (enables sensor debug output)
-
 %% === Live Trading Parameters ===
-ib_host() -> "127.0.0.1".                    % Options: IP address of TWS/Gateway
+%ib_host() -> "127.0.0.1".                    % Options: IP address of TWS/Gateway
+ib_host() -> "host.docker.internal".          % Docker-compatible host address
 ib_port() -> 7497.                           % Options: 7497 (paper), 7496 (live) - PAPER TRADING ONLY
 ib_client_id() -> 1.                         % Options: 1-32 (unique client identifier)
+
+%% Docker networking helper
+get_docker_host() ->
+    %% Detect Docker environment and return appropriate host
+    case os:getenv("DOCKER_ENV") of
+        false ->
+            %% Not in Docker, use localhost
+            "127.0.0.1";
+        _ ->
+            %% In Docker, use host.docker.internal
+            "host.docker.internal"
+    end.
 live_position_size() -> 0.1.                 % Options: 0.01-1.0 (10% of account per trade)
 live_max_daily_loss() -> 0.05.               % Options: 0.01-0.5 (5% max daily loss)
 live_currency_pairs() -> ['EUR.USD'].        % Options: IB format currency pairs
@@ -106,10 +118,22 @@ validate_ib_connection_config() ->
     Port = ib_port(),
     ClientId = ib_client_id(),
     
-    % Validate host format
+    % Validate host format (allow both IP addresses and hostnames)
     case inet:parse_address(Host) of
-        {ok, _} -> ok;
-        {error, _} -> throw({invalid_ib_host, Host})
+        {ok, _} -> ok;  % Valid IP address
+        {error, _} ->
+            % Check if it's a valid hostname (like host.docker.internal)
+            case Host of
+                "host.docker.internal" -> ok;  % Docker hostname
+                "localhost" -> ok;             % Localhost
+                "127.0.0.1" -> ok;             % Localhost IP
+                _ ->
+                    % Try to resolve the hostname
+                    case inet:gethostbyname(Host) of
+                        {ok, _} -> ok;  % Valid hostname
+                        {error, _} -> throw({invalid_ib_host, Host})
+                    end
+            end
     end,
     
     % Validate port range

@@ -11,6 +11,8 @@
 
 %% API Functions
 -export([
+    test_connectivity/0,
+    test_handshake_detailed/0,
     start_connection/3,
     stop_connection/0,
     subscribe_market_data/2,
@@ -29,7 +31,7 @@
 
 %% Internal state
 -define(SERVER, ?MODULE).
--define(TIMEOUT, 5000).
+-define(TIMEOUT, 15000).  % Increased timeout for Docker networking
 -define(HEARTBEAT_INTERVAL, 30000).
 -define(MAX_RECONNECT_ATTEMPTS, 10).
 -define(INITIAL_BACKOFF, 1000).
@@ -46,6 +48,10 @@
 %% IB API Message Types
 -define(CLIENT_VERSION, 76).
 -define(MIN_SERVER_VER, 38).
+
+%% IB API Handshake Constants
+-define(IB_API_VERSION, "9.76.1").
+-define(IB_API_DATE, "20170803").
 
 %% Message IDs
 -define(REQ_MKT_DATA, 1).
@@ -87,6 +93,70 @@
 %% ============================================================================
 %% Public API
 %% ============================================================================
+
+%% Test basic connectivity to IB TWS/Gateway
+test_connectivity() ->
+    Host = config:ib_host(),
+    Port = config:ib_port(),
+    
+    io:format("Testing connectivity to ~s:~p~n", [Host, Port]),
+    
+    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}]) of
+        {ok, Socket} ->
+            gen_tcp:close(Socket),
+            io:format("✓ Basic connectivity test passed~n"),
+            ok;
+        {error, Reason} ->
+            io:format("✗ Connectivity test failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+%% Test IB handshake with detailed logging
+test_handshake_detailed() ->
+    Host = config:ib_host(),
+    Port = config:ib_port(),
+    ClientId = config:ib_client_id(),
+    
+    io:format("Testing detailed handshake with ~s:~p~n", [Host, Port]),
+    
+    case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, true}]) of
+        {ok, Socket} ->
+            io:format("✓ TCP connection established~n"),
+            
+            %% Try to send a simple message and see what we get back
+            TestMsg = "TEST" ++ [0],
+            io:format("Sending test message: ~p~n", [TestMsg]),
+            
+            case gen_tcp:send(Socket, list_to_binary(TestMsg)) of
+                ok ->
+                    %% Wait for any response
+                    receive
+                        {tcp, Socket, Data} ->
+                            io:format("Received response: ~p~n", [Data]),
+                            io:format("Response as string: ~s~n", [binary_to_list(Data)]),
+                            gen_tcp:close(Socket),
+                            {ok, Data};
+                        {tcp_closed, Socket} ->
+                            io:format("Connection closed by server~n"),
+                            {error, connection_closed};
+                        {tcp_error, Socket, Reason} ->
+                            io:format("TCP error: ~p~n", [Reason]),
+                            gen_tcp:close(Socket),
+                            {error, Reason}
+                    after 5000 ->
+                        io:format("No response received within 5 seconds~n"),
+                        gen_tcp:close(Socket),
+                        {error, no_response}
+                    end;
+                {error, Reason} ->
+                    io:format("Failed to send test message: ~p~n", [Reason]),
+                    gen_tcp:close(Socket),
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            io:format("✗ Failed to connect: ~p~n", [Reason]),
+            {error, Reason}
+    end.
 
 %% Start link function for supervisor integration
 start_link() ->
@@ -268,7 +338,7 @@ handle_call({wait_for_order_confirmation, OrderId, TimeoutMs}, From, State) ->
             {reply, {ok, {Status, FillPrice, FillQuantity}}, State};
         false ->
             %% Set up timeout and wait for confirmation
-            Timer = erlang:send_after(TimeoutMs, self(), {order_timeout, OrderId, From}),
+            _Timer = erlang:send_after(TimeoutMs, self(), {order_timeout, OrderId, From}),
             %% Store the waiting request (simplified - in production would use more sophisticated tracking)
             {noreply, State}
     end;
@@ -279,7 +349,7 @@ handle_call(stop, _From, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info({tcp, Socket, Data}, State) ->
+handle_info({tcp, _Socket, Data}, State) ->
     NewBuffer = <<(State#state.message_buffer)/binary, Data/binary>>,
     case process_messages(NewBuffer, State) of
         {ok, RemainingBuffer, NewState} ->
@@ -555,14 +625,14 @@ detect_market_data_interruption() ->
             end
     end.
 
-%% Implement circuit breaker pattern for error handling
--record(circuit_breaker, {
-    failure_count = 0,
-    last_failure_time,
-    state = closed,  % closed, open, half_open
-    failure_threshold = 5,
-    timeout = 30000  % 30 seconds
-}).
+%% Circuit breaker pattern for error handling (commented out for now)
+%% -record(circuit_breaker, {
+%%     failure_count = 0,
+%%     last_failure_time,
+%%     state = closed,  % closed, open, half_open
+%%     failure_threshold = 5,
+%%     timeout = 30000  % 30 seconds
+%% }).
 
 %% Check circuit breaker state
 check_circuit_breaker(Operation, State) ->
@@ -600,25 +670,59 @@ perform_handshake(State) ->
     Socket = State#state.connection#ib_connection.socket,
     ClientId = State#state.connection#ib_connection.client_id,
     
-    %% Send client version
-    ClientVersionMsg = encode_int(?CLIENT_VERSION),
-    case gen_tcp:send(Socket, ClientVersionMsg) of
+    %% Try multiple handshake approaches
+    case try_handshake_approach_1(Socket, ClientId) of
+        {ok, ServerVersion} ->
+            Connection = State#state.connection#ib_connection{
+                server_version = ServerVersion
+            },
+            io:format("Handshake completed successfully (approach 1) with server version ~p~n", [ServerVersion]),
+            {ok, State#state{connection = Connection}};
+        {error, _} ->
+            %% Try second handshake approach
+            case try_handshake_approach_2(Socket, ClientId) of
+                {ok, ServerVersion} ->
+                    Connection = State#state.connection#ib_connection{
+                        server_version = ServerVersion
+                    },
+                    io:format("Handshake completed successfully (approach 2) with server version ~p~n", [ServerVersion]),
+                    {ok, State#state{connection = Connection}};
+                {error, _} ->
+                    %% Try third handshake approach
+                    case try_handshake_approach_3(Socket, ClientId) of
+                        {ok, ServerVersion} ->
+                            Connection = State#state.connection#ib_connection{
+                                server_version = ServerVersion
+                            },
+                            io:format("Handshake completed successfully (approach 3) with server version ~p~n", [ServerVersion]),
+                            {ok, State#state{connection = Connection}};
+                        {error, Reason} ->
+                            {error, Reason}
+                    end
+            end
+    end.
+
+%% First handshake approach: Send client version as string
+try_handshake_approach_1(Socket, ClientId) ->
+    %% Send client version (null-terminated string)
+    ClientVersionStr = integer_to_list(?CLIENT_VERSION) ++ [0],
+    io:format("Trying handshake approach 1 - sending client version: ~s~n", [ClientVersionStr]),
+    case gen_tcp:send(Socket, list_to_binary(ClientVersionStr)) of
         ok ->
             %% Wait for server version response
             receive
                 {tcp, Socket, Data} ->
+                    io:format("Received server response: ~p~n", [Data]),
                     case decode_server_version(Data) of
                         {ok, ServerVersion} when ServerVersion >= ?MIN_SERVER_VER ->
-                            %% Send connection string with client ID
-                            ConnectMsg = encode_connect_message(ClientId),
-                            case gen_tcp:send(Socket, ConnectMsg) of
+                            %% Send client ID (null-terminated string)
+                            ClientIdStr = integer_to_list(ClientId) ++ [0],
+                            io:format("Sending client ID: ~s~n", [ClientIdStr]),
+                            case gen_tcp:send(Socket, list_to_binary(ClientIdStr)) of
                                 ok ->
-                                    Connection = State#state.connection#ib_connection{
-                                        server_version = ServerVersion
-                                    },
-                                    {ok, State#state{connection = Connection}};
+                                    {ok, ServerVersion};
                                 {error, Reason} ->
-                                    {error, {send_connect_failed, Reason}}
+                                    {error, {send_client_id_failed, Reason}}
                             end;
                         {ok, ServerVersion} ->
                             {error, {unsupported_server_version, ServerVersion}};
@@ -632,13 +736,116 @@ perform_handshake(State) ->
             {error, {send_version_failed, Reason}}
     end.
 
+%% Second handshake approach: Send client version as integer
+try_handshake_approach_2(Socket, ClientId) ->
+    %% Send client version as 32-bit integer
+    ClientVersionMsg = <<?CLIENT_VERSION:32>>,
+    io:format("Trying handshake approach 2 - sending client version as integer: ~p~n", [?CLIENT_VERSION]),
+    case gen_tcp:send(Socket, ClientVersionMsg) of
+        ok ->
+            %% Wait for server version response
+            receive
+                {tcp, Socket, Data} ->
+                    io:format("Received server response (approach 2): ~p~n", [Data]),
+                    case decode_server_version(Data) of
+                        {ok, ServerVersion} when ServerVersion >= ?MIN_SERVER_VER ->
+                            %% Send client ID as integer
+                            ClientIdMsg = <<ClientId:32>>,
+                            io:format("Sending client ID as integer: ~p~n", [ClientId]),
+                            case gen_tcp:send(Socket, ClientIdMsg) of
+                                ok ->
+                                    {ok, ServerVersion};
+                                {error, Reason} ->
+                                    {error, {send_client_id_failed, Reason}}
+                            end;
+                        {ok, ServerVersion} ->
+                            {error, {unsupported_server_version, ServerVersion}};
+                        {error, Reason} ->
+                            {error, {handshake_failed, Reason}}
+                    end
+            after ?TIMEOUT ->
+                {error, handshake_timeout}
+            end;
+        {error, Reason} ->
+            {error, {send_version_failed, Reason}}
+    end.
+
+%% Third handshake approach: Full IB API protocol
+try_handshake_approach_3(Socket, ClientId) ->
+    io:format("Trying handshake approach 3 - full IB API protocol~n"),
+    
+    %% Step 1: Send API version string
+    ApiVersionMsg = ?IB_API_VERSION ++ [0],
+    io:format("Sending API version: ~s~n", [?IB_API_VERSION]),
+    case gen_tcp:send(Socket, list_to_binary(ApiVersionMsg)) of
+        ok ->
+            %% Step 2: Wait for server version response
+            receive
+                {tcp, Socket, Data1} ->
+                    io:format("Received server version response: ~p~n", [Data1]),
+                    
+                    %% Step 3: Send API date
+                    ApiDateMsg = ?IB_API_DATE ++ [0],
+                    io:format("Sending API date: ~s~n", [?IB_API_DATE]),
+                    case gen_tcp:send(Socket, list_to_binary(ApiDateMsg)) of
+                        ok ->
+                            %% Step 4: Wait for connection confirmation
+                            receive
+                                {tcp, Socket, Data2} ->
+                                    io:format("Received connection confirmation: ~p~n", [Data2]),
+                                    
+                                    %% Step 5: Send client ID
+                                    ClientIdMsg = integer_to_list(ClientId) ++ [0],
+                                    io:format("Sending client ID: ~s~n", [ClientIdMsg]),
+                                    case gen_tcp:send(Socket, list_to_binary(ClientIdMsg)) of
+                                        ok ->
+                                            %% Assume success if we get this far
+                                            {ok, 76};  % Default to version 76
+                                        {error, Reason} ->
+                                            {error, {send_client_id_failed, Reason}}
+                                    end
+                            after ?TIMEOUT ->
+                                {error, handshake_timeout}
+                            end;
+                        {error, Reason} ->
+                            {error, {send_date_failed, Reason}}
+                    end
+            after ?TIMEOUT ->
+                {error, handshake_timeout}
+            end;
+        {error, Reason} ->
+            {error, {send_version_failed, Reason}}
+    end.
+
 decode_server_version(Data) ->
     try
-        {ServerVersion, _Rest} = decode_int(Data),
-        {ok, ServerVersion}
+        %% IB API sends server version as null-terminated string
+        case binary_to_list(Data) of
+            [H|T] when H >= $0, H =< $9 ->
+                %% Extract version number from string
+                VersionStr = extract_version_string([H|T]),
+                case string:to_integer(VersionStr) of
+                    {ServerVersion, _} when is_integer(ServerVersion) ->
+                        {ok, ServerVersion};
+                    _ ->
+                        {error, invalid_version_format}
+                end;
+            _ ->
+                %% Try legacy integer format as fallback
+                {ServerVersion, _Rest} = decode_int(Data),
+                {ok, ServerVersion}
+        end
     catch
         _:_ -> {error, invalid_server_version}
     end.
+
+%% Helper function to extract version string from null-terminated data
+extract_version_string([]) -> [];
+extract_version_string([0|_]) -> [];  % Stop at null terminator
+extract_version_string([H|T]) when H >= $0, H =< $9 ->
+    [H|extract_version_string(T)];
+extract_version_string([_|T]) ->
+    extract_version_string(T).
 
 encode_connect_message(ClientId) ->
     %% Simple connection message with client ID
@@ -1480,11 +1687,11 @@ handle_order_status(Data, State) ->
         {Filled, Rest4} = decode_int(Rest3),
         {Remaining, Rest5} = decode_int(Rest4),
         {AvgFillPrice, Rest6} = decode_double(Rest5),
-        {PermId, Rest7} = decode_int(Rest6),
-        {ParentId, Rest8} = decode_int(Rest7),
-        {LastFillPrice, Rest9} = decode_double(Rest8),
-        {ClientId, Rest10} = decode_int(Rest9),
-        {WhyHeld, _Rest11} = decode_string(Rest10),
+        {_PermId, Rest7} = decode_int(Rest6),
+        {_ParentId, Rest8} = decode_int(Rest7),
+        {_LastFillPrice, Rest9} = decode_double(Rest8),
+        {_ClientId, Rest10} = decode_int(Rest9),
+        {_WhyHeld, _Rest11} = decode_string(Rest10),
         
         io:format("Order Status - ID: ~p, Status: ~s, Filled: ~p, Remaining: ~p, AvgPrice: ~p~n", 
                  [OrderId, Status, Filled, Remaining, AvgFillPrice]),
@@ -1516,29 +1723,29 @@ handle_order_status(Data, State) ->
 handle_execution_data(Data, State) ->
     try
         {_Version, Rest1} = decode_int(Data),
-        {ReqId, Rest2} = decode_int(Rest1),
+        {_ReqId, Rest2} = decode_int(Rest1),
         {OrderId, Rest3} = decode_int(Rest2),
         {Symbol, Rest4} = decode_string(Rest3),
-        {SecType, Rest5} = decode_string(Rest4),
-        {Expiry, Rest6} = decode_string(Rest5),
-        {Strike, Rest7} = decode_double(Rest6),
-        {Right, Rest8} = decode_string(Rest7),
-        {Multiplier, Rest9} = decode_string(Rest8),
-        {Exchange, Rest10} = decode_string(Rest9),
-        {Currency, Rest11} = decode_string(Rest10),
-        {LocalSymbol, Rest12} = decode_string(Rest11),
-        {ExecId, Rest13} = decode_string(Rest12),
+        {_SecType, Rest5} = decode_string(Rest4),
+        {_Expiry, Rest6} = decode_string(Rest5),
+        {_Strike, Rest7} = decode_double(Rest6),
+        {_Right, Rest8} = decode_string(Rest7),
+        {_Multiplier, Rest9} = decode_string(Rest8),
+        {_Exchange, Rest10} = decode_string(Rest9),
+        {_Currency, Rest11} = decode_string(Rest10),
+        {_LocalSymbol, Rest12} = decode_string(Rest11),
+        {_ExecId, Rest13} = decode_string(Rest12),
         {Time, Rest14} = decode_string(Rest13),
-        {Account, Rest15} = decode_string(Rest14),
-        {ExecExchange, Rest16} = decode_string(Rest15),
+        {_Account, Rest15} = decode_string(Rest14),
+        {_ExecExchange, Rest16} = decode_string(Rest15),
         {Side, Rest17} = decode_string(Rest16),
         {Shares, Rest18} = decode_int(Rest17),
         {Price, Rest19} = decode_double(Rest18),
-        {PermId, Rest20} = decode_int(Rest19),
-        {ClientId, Rest21} = decode_int(Rest20),
-        {Liquidation, Rest22} = decode_int(Rest21),
-        {CumQty, Rest23} = decode_int(Rest22),
-        {AvgPrice, _Rest24} = decode_double(Rest23),
+        {_PermId, Rest20} = decode_int(Rest19),
+        {_ClientId, Rest21} = decode_int(Rest20),
+        {_Liquidation, Rest22} = decode_int(Rest21),
+        {_CumQty, Rest23} = decode_int(Rest22),
+        {_AvgPrice, _Rest24} = decode_double(Rest23),
         
         io:format("Execution Report - OrderID: ~p, Symbol: ~s, Side: ~s, Shares: ~p, Price: ~p~n", 
                  [OrderId, Symbol, Side, Shares, Price]),

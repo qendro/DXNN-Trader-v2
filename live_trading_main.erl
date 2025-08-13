@@ -223,6 +223,38 @@ test_full() ->
 test_component(Component) ->
     test_live_trading_integration:test_component(Component).
 
+%% Test IB connection specifically
+test_ib_connection() ->
+    io:format("Testing IB connection...~n"),
+    
+    %% Test basic connectivity
+    case ib_connector:test_connectivity() of
+        ok ->
+            io:format("✓ Basic connectivity test passed~n"),
+            
+            %% Test full connection
+            Host = config:ib_host(),
+            Port = config:ib_port(),
+            ClientId = config:ib_client_id(),
+            
+            io:format("Attempting full connection to ~s:~p with client ID ~p~n", [Host, Port, ClientId]),
+            
+            case ib_connector:start_connection(Host, Port, ClientId) of
+                {ok, _Pid} ->
+                    io:format("✓ Full connection test passed~n"),
+                    
+                    %% Clean up
+                    ib_connector:stop_connection(),
+                    {ok, connection_successful};
+                {error, Reason} ->
+                    io:format("✗ Full connection test failed: ~p~n", [Reason]),
+                    {error, Reason}
+            end;
+        {error, Reason} ->
+            io:format("✗ Basic connectivity test failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
 %% Run diagnostics
 diagnostics() ->
     io:format("Running system diagnostics~n"),
@@ -233,6 +265,9 @@ diagnostics() ->
     %% Check database connectivity
     DatabaseResult = check_database_connectivity(),
     
+    %% Check IB connectivity
+    IBConnectivityResult = check_ib_connectivity(),
+    
     %% Check system status
     StatusResult = status(),
     
@@ -240,6 +275,7 @@ diagnostics() ->
     Results = #{
         configuration => ConfigResult,
         database => DatabaseResult,
+        ib_connectivity => IBConnectivityResult,
         system_status => StatusResult
     },
     
@@ -269,6 +305,24 @@ check_database_connectivity() ->
         _:Reason ->
             io:format("Database connectivity: ERROR - ~p~n", [Reason]),
             {error, Reason}
+    end.
+
+%% Check IB connectivity
+check_ib_connectivity() ->
+    try
+        io:format("Testing IB connectivity...~n"),
+        case ib_connector:test_connectivity() of
+            ok ->
+                io:format("IB connectivity: OK~n"),
+                {ok, connected};
+            {error, Reason} ->
+                io:format("IB connectivity: ERROR - ~p~n", [Reason]),
+                {error, Reason}
+        end
+    catch
+        _:Error ->
+            io:format("IB connectivity: ERROR - ~p~n", [Error]),
+            {error, Error}
     end.
 
 %% Print startup success message
@@ -318,10 +372,15 @@ print_system_status(Status) ->
     
     Components = maps:get(components, Status, #{}),
     io:format("Components:~n"),
-    maps:fold(fun(Name, ComponentStatus, _) ->
-        ComponentState = maps:get(status, ComponentStatus, unknown),
-        io:format("  ~p: ~p~n", [Name, ComponentState])
-    end, ok, Components),
+    case Components of
+        #{} when map_size(Components) > 0 ->
+            maps:fold(fun(Name, ComponentStatus, _) ->
+                ComponentState = maps:get(status, ComponentStatus, unknown),
+                io:format("  ~p: ~p~n", [Name, ComponentState])
+            end, ok, Components);
+        _ ->
+            io:format("  No components running~n")
+    end,
     
     io:format("====================~n").
 
@@ -408,6 +467,7 @@ help() ->
     io:format("validate_config() - Validate configuration~n"),
     io:format("test() - Run quick tests~n"),
     io:format("test_full() - Run full test suite~n"),
+    io:format("test_ib_connection() - Test IB connection specifically~n"),
     io:format("diagnostics() - Run system diagnostics~n"),
     io:format("help() - Show this help~n"),
     io:format("~nQuick commands:~n"),
