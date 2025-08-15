@@ -16,7 +16,7 @@
 FROM erlang:26
 
 # Install build tools and dependencies
-RUN apt-get update && apt-get install -y git build-essential
+RUN apt-get update && apt-get install -y git build-essential python3 python3-pip
 
 # Install rebar3 for project management
 RUN curl -L https://github.com/erlang/rebar3/releases/latest/download/rebar3 -o /usr/local/bin/rebar3 && \
@@ -27,6 +27,9 @@ RUN git clone https://github.com/erlang-ls/erlang_ls.git /tmp/erlang_ls && \
     cd /tmp/erlang_ls && \
     make install && \
     rm -rf /tmp/erlang_ls
+
+# Install Python dependencies for IB bridge
+RUN pip3 install --break-system-packages ib_insync>=0.9.86
 
 # Set work directory
 WORKDIR /app
