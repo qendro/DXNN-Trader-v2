@@ -23,12 +23,13 @@
 %% Internal state tracking
 -record(integration_state, {
     agent_id,
-    ib_connector_pid,
+    ib_bridge_connector_pid,
     live_scape_pid,
     live_trader_pid,
     supervisor_pid,
     startup_time,
-    status = stopped  % stopped, starting, running, stopping, error
+    status = stopped,  % stopped, starting, running, stopping, error
+    error_count = 0   % track number of errors for recovery logic
 }).
 
 %% Supervisor child specifications
@@ -39,17 +40,17 @@
 %% ============================================================================
 
 %% Start complete live trading system with agent
-start_live_trading(AgentId) ->
-    io:format("Starting live trading system for Agent ~p~n", [AgentId]),
+start_live_trading(Agent_Id) ->
+    io:format("Starting live trading system for Agent ~p~n", [Agent_Id]),
     
     %% Verify agent exists before starting
-    case verify_agent_exists(AgentId) of
+    case verify_agent_exists(Agent_Id) of
         ok ->
             %% Start supervisor
             case start_supervisor() of
                 {ok, SupervisorPid} ->
                     %% Execute startup sequence
-                    case execute_startup_sequence(AgentId, SupervisorPid) of
+                    case execute_startup_sequence(Agent_Id, SupervisorPid) of
                         {ok, State} ->
                             %% Register integration process
                             register(live_trading_integration, self()),
@@ -96,14 +97,14 @@ stop_live_trading() ->
     end.
 
 %% Restart live trading system with same agent
-restart_live_trading(AgentId) ->
+restart_live_trading(Agent_Id) ->
     io:format("Restarting live trading system~n"),
     
     case stop_live_trading() of
         {ok, _} ->
             %% Wait a moment for cleanup
             timer:sleep(2000),
-            start_live_trading(AgentId);
+            start_live_trading(Agent_Id);
         {error, Reason} ->
             {error, {stop_failed, Reason}}
     end.
@@ -130,7 +131,7 @@ emergency_shutdown() ->
     %% Stop all known processes immediately
     emergency_stop_process(live_trader),
     emergency_stop_process(live_scape),
-    emergency_stop_process(ib_connector),
+    emergency_stop_process(ib_bridge_connector),
     emergency_stop_process(live_trading_integration),
     
     %% Stop supervisor
@@ -168,20 +169,29 @@ start_supervisor() ->
 init([]) ->
     %% Define child specifications for live trading components
     Children = [
-        %% IB Connector - handles Interactive Brokers API communication
-        {ib_connector, 
-         {ib_connector, start_link, []}, 
-         permanent, 5000, worker, [ib_connector]},
+        %% IB Bridge Connector - handles Interactive Brokers API communication
+        #{id => ib_bridge_connector,
+          start => {ib_bridge_connector, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [ib_bridge_connector]},
         
         %% Live Scape - provides sensor/actuator interface
-        {live_scape, 
-         {live_scape, start_link, []}, 
-         permanent, 5000, worker, [live_scape]},
+        #{id => live_scape,
+          start => {live_scape, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [live_scape]},
         
         %% Live Trader - orchestrates trading operations
-        {live_trader, 
-         {live_trader, start_link, []}, 
-         permanent, 5000, worker, [live_trader]}
+        #{id => live_trader,
+          start => {live_trader, start_link, []},
+          restart => permanent,
+          shutdown => 5000,
+          type => worker,
+          modules => [live_trader]}
     ],
     
     %% Supervisor strategy: one_for_all with restart limits
@@ -198,23 +208,26 @@ init([]) ->
 %% ============================================================================
 
 %% Execute the complete startup sequence
-execute_startup_sequence(AgentId, SupervisorPid) ->
-    io:format("Executing startup sequence for Agent ~p~n", [AgentId]),
+execute_startup_sequence(Agent_Id, SupervisorPid) ->
+    io:format("Executing startup sequence for Agent ~p~n", [Agent_Id]),
     
-    StartupSteps = [
+    %% Basic system validation
+    case validate_basic_requirements() of
+        ok ->
+            StartupSteps = [
         {step1, "Initialize IB connection", fun() -> startup_step_ib_connection() end},
         {step2, "Start live scape", fun() -> startup_step_live_scape() end},
-        {step3, "Deploy neural network model", fun() -> startup_step_model_deployment(AgentId) end},
+        {step3, "Deploy neural network model", fun() -> startup_step_model_deployment(Agent_Id) end},
         {step4, "Initialize trading components", fun() -> startup_step_trading_initialization() end},
-        {step5, "Start trading operations", fun() -> startup_step_start_trading(AgentId) end}
+        {step5, "Start trading operations", fun() -> startup_step_start_trading(Agent_Id) end}
     ],
     
     case execute_startup_steps(StartupSteps, #{}) of
         {ok, ComponentPids} ->
             %% Create integration state
             State = #integration_state{
-                agent_id = AgentId,
-                ib_connector_pid = maps:get(ib_connector, ComponentPids, undefined),
+                agent_id = Agent_Id,
+                ib_bridge_connector_pid = maps:get(ib_bridge_connector, ComponentPids, undefined),
                 live_scape_pid = maps:get(live_scape, ComponentPids, undefined),
                 live_trader_pid = maps:get(live_trader, ComponentPids, undefined),
                 supervisor_pid = SupervisorPid,
@@ -225,17 +238,27 @@ execute_startup_sequence(AgentId, SupervisorPid) ->
         {error, {Step, Reason}} ->
             io:format("Startup failed at ~p: ~p~n", [Step, Reason]),
             {error, {startup_failed, Step, Reason}}
+    end;
+        {error, Reason} ->
+            io:format("System requirements validation failed: ~p~n", [Reason]),
+            {error, {system_requirements_failed, Reason}}
     end.
 
 %% Execute startup steps sequentially
 execute_startup_steps([], ComponentPids) ->
+    io:format("All startup steps completed successfully~n"),
     {ok, ComponentPids};
 execute_startup_steps([{StepId, Description, StepFun} | Rest], ComponentPids) ->
-    io:format("Executing ~s: ~s~n", [StepId, Description]),
+    io:format("=== Executing ~s: ~s ===~n", [StepId, Description]),
+    StartTime = erlang:timestamp(),
     
     case StepFun() of
         {ok, Result} ->
             %% Step succeeded, continue with next step
+            EndTime = erlang:timestamp(),
+            Duration = timer:now_diff(EndTime, StartTime) / 1000,
+            io:format("✓ ~s completed successfully (~.1fms)~n", [StepId, Duration]),
+            
             UpdatedPids = case Result of
                 {ComponentName, Pid} -> maps:put(ComponentName, Pid, ComponentPids);
                 _ -> ComponentPids
@@ -243,30 +266,33 @@ execute_startup_steps([{StepId, Description, StepFun} | Rest], ComponentPids) ->
             execute_startup_steps(Rest, UpdatedPids);
         {error, Reason} ->
             %% Step failed, abort startup
+            EndTime = erlang:timestamp(),
+            Duration = timer:now_diff(EndTime, StartTime) / 1000,
+            io:format("✗ ~s failed after ~.1fms: ~p~n", [StepId, Duration, Reason]),
             {error, {StepId, Reason}}
     end.
 
 %% Startup Step 1: Initialize IB connection
 startup_step_ib_connection() ->
-    %% Check if IB connector is already running (it should be from live_trader initialization)
-    case whereis(ib_connector) of
+    %% Check if IB bridge connector is already running (it should be from live_trader initialization)
+    case whereis(ib_bridge_connector) of
         undefined ->
-            %% IB connector not running, start it
+            %% IB bridge connector not running, start it
             Host = config:ib_host(),
             Port = config:ib_port(),
             ClientId = config:ib_client_id(),
             
-            io:format("Starting IB connector at ~s:~p with client ID ~p~n", [Host, Port, ClientId]),
+            io:format("Starting IB bridge connector at ~s:~p with client ID ~p~n", [Host, Port, ClientId]),
             
-            case ib_connector:start_connection(Host, Port, ClientId) of
+            case ib_bridge_connector:start_connection(Host, Port, ClientId) of
                 {ok, Pid} ->
                     %% Wait for connection to be established
                     case wait_for_ib_connection(10000) of
                         ok ->
                             %% Initialize market data tables
-                            case ib_connector:init_market_data_tables() of
+                            case ib_bridge_connector:init_market_data_tables() of
                                 ok ->
-                                    {ok, {ib_connector, Pid}};
+                                    {ok, {ib_bridge_connector, Pid}};
                                 {error, Reason} ->
                                     {error, {market_data_init_failed, Reason}}
                             end;
@@ -277,23 +303,23 @@ startup_step_ib_connection() ->
                     {error, {connection_failed, Reason}}
             end;
         Pid ->
-            %% IB connector already running, verify it's working
-            io:format("IB connector already running with PID ~p, verifying connection~n", [Pid]),
+            %% IB bridge connector already running, verify it's working
+            io:format("IB bridge connector already running with PID ~p, verifying connection~n", [Pid]),
             
-            case catch ib_connector:get_connection_status() of
+            case catch ib_bridge_connector:get_connection_status() of
                 {ok, true} ->
-                    io:format("IB connector is connected and ready~n"),
-                    {ok, {ib_connector, Pid}};
+                    io:format("IB bridge connector is connected and ready~n"),
+                    {ok, {ib_bridge_connector, Pid}};
                 {ok, false} ->
-                    io:format("IB connector is running but not connected, waiting for connection~n"),
+                    io:format("IB bridge connector is running but not connected, waiting for connection~n"),
                     case wait_for_ib_connection(10000) of
                         ok ->
-                            {ok, {ib_connector, Pid}};
+                            {ok, {ib_bridge_connector, Pid}};
                         {error, Reason} ->
                             {error, {connection_timeout, Reason}}
                     end;
                 {'EXIT', Reason} ->
-                    io:format("Error checking IB connector status: ~p~n", [Reason]),
+                    io:format("Error checking IB bridge connector status: ~p~n", [Reason]),
                     {error, {status_check_failed, Reason}}
             end
     end.
@@ -316,10 +342,10 @@ startup_step_live_scape() ->
     end.
 
 %% Startup Step 3: Deploy neural network model
-startup_step_model_deployment(AgentId) ->
-    io:format("Deploying neural network model for Agent ~p~n", [AgentId]),
+startup_step_model_deployment(Agent_Id) ->
+    io:format("Deploying neural network model for Agent ~p~n", [Agent_Id]),
     
-    case live_trader:deploy_model(AgentId) of
+    case live_trader:deploy_model(Agent_Id) of
         {ok, State} ->
             {ok, {model_deployed, State}};
         {error, Reason} ->
@@ -347,13 +373,13 @@ startup_step_trading_initialization() ->
     end.
 
 %% Startup Step 5: Start trading operations
-startup_step_start_trading(AgentId) ->
+startup_step_start_trading(Agent_Id) ->
     io:format("Starting trading operations~n"),
     
     %% Get default risk parameters
     RiskParams = get_default_risk_parameters(),
     
-    case live_trader:start_trading(AgentId, RiskParams) of
+    case live_trader:start_trading(Agent_Id, RiskParams) of
         {ok, trading_started} ->
             {ok, trading_started};
         {error, Reason} ->
@@ -437,7 +463,7 @@ shutdown_step_stop_trading() ->
 
 %% Shutdown Step 4: Disconnect from IB
 shutdown_step_disconnect_ib() ->
-    case ib_connector:stop_connection() of
+    case ib_bridge_connector:stop_connection() of
         ok -> ok;
         {error, Reason} ->
             io:format("Error disconnecting from IB: ~p~n", [Reason]),
@@ -497,10 +523,10 @@ integration_monitor_loop(State) ->
             
         restart_system ->
             %% Restart the entire system
-            AgentId = State#integration_state.agent_id,
+            Agent_Id = State#integration_state.agent_id,
             execute_graceful_shutdown(State),
             timer:sleep(2000),
-            start_live_trading(AgentId);
+            start_live_trading(Agent_Id);
             
         _Other ->
             %% Unknown message
@@ -516,9 +542,64 @@ integration_monitor_loop(State) ->
 %% Helper Functions
 %% ============================================================================
 
+%% Validate basic system requirements before startup
+validate_basic_requirements() ->
+    %% Check if required modules are available
+    RequiredModules = [genotype, config, live_trader, live_scape, ib_bridge_connector],
+    
+    case check_modules_available(RequiredModules) of
+        ok ->
+            %% Validate configuration
+            case validate_configuration() of
+                ok -> ok;
+                {error, Reason} -> {error, {config_validation_failed, Reason}}
+            end;
+        {error, MissingModules} ->
+            {error, {missing_modules, MissingModules}}
+    end.
+
+%% Check if required modules are available
+check_modules_available([]) -> ok;
+check_modules_available([Module | Rest]) ->
+    case code:is_loaded(Module) of
+        false ->
+            case check_modules_available(Rest) of
+                ok -> {error, [Module]};
+                {error, Missing} -> {error, [Module | Missing]}
+            end;
+        _ ->
+            check_modules_available(Rest)
+    end.
+
+%% Validate basic configuration
+validate_configuration() ->
+    try
+        %% Check IB configuration
+        config:validate_ib_connection_config(),
+        
+        %% Check if currency pairs are configured
+        CurrencyPairs = config:live_currency_pairs(),
+        case is_list(CurrencyPairs) andalso length(CurrencyPairs) > 0 of
+            true -> ok;
+            false -> throw({invalid_currency_pairs, CurrencyPairs})
+        end,
+        
+        %% Check risk parameters
+        PositionSize = config:live_position_size(),
+        case is_number(PositionSize) andalso PositionSize > 0 andalso PositionSize =< 1.0 of
+            true -> ok;
+            false -> throw({invalid_position_size, PositionSize})
+        end,
+        
+        ok
+    catch
+        Error:Reason ->
+            {error, {Error, Reason}}
+    end.
+
 %% Verify that the agent exists in the database
-verify_agent_exists(AgentId) ->
-    case genotype:dirty_read({agent, AgentId}) of
+verify_agent_exists(Agent_Id) ->
+    case genotype:dirty_read({agent, Agent_Id}) of
         undefined ->
             {error, agent_not_found};
         _Agent ->
@@ -530,7 +611,7 @@ wait_for_ib_connection(Timeout) ->
     wait_for_ib_connection(Timeout, erlang:timestamp()).
 
 wait_for_ib_connection(Timeout, StartTime) ->
-    case ib_connector:get_connection_status() of
+    case ib_bridge_connector:get_connection_status() of
         {ok, true} ->
             ok;
         {ok, false} ->
@@ -547,7 +628,7 @@ wait_for_ib_connection(Timeout, StartTime) ->
     end.
 
 %% Wait for scape to be ready
-wait_for_scape_ready(Timeout) ->
+wait_for_scape_ready(_Timeout) ->
     %% Simple implementation - in production would have proper readiness check
     timer:sleep(1000),
     case whereis(live_scape) of
@@ -562,7 +643,7 @@ subscribe_to_all_pairs([Pair | Rest]) ->
     Symbol = atom_to_list(Pair),
     ReqId = length(config:live_currency_pairs()) - length(Rest),
     
-    case ib_connector:subscribe_market_data(Symbol, ReqId) of
+    case ib_bridge_connector:subscribe_market_data(Symbol, ReqId) of
         ok ->
             io:format("Subscribed to market data for ~s~n", [Symbol]),
             subscribe_to_all_pairs(Rest);
@@ -604,10 +685,10 @@ close_all_positions([Position | Rest]) ->
     
     io:format("Closing position: ~s ~p ~s~n", [CloseAction, Quantity, Symbol]),
     
-    case ib_connector:place_order(Symbol, CloseAction, Quantity, "MKT") of
+    case ib_bridge_connector:place_order(Symbol, CloseAction, Quantity, "MKT") of
         ok ->
             %% Wait for fill confirmation
-            case ib_connector:wait_for_order_confirmation(1, 5000) of
+            case ib_bridge_connector:wait_for_order_confirmation(1, 5000) of
                 {ok, _} ->
                     io:format("Position closed successfully~n"),
                     close_all_positions(Rest);
@@ -642,26 +723,45 @@ cleanup_supervisor(SupervisorPid) ->
 
 %% Cleanup all resources
 cleanup_all_resources() ->
-    %% Cleanup ETS tables
-    ib_connector:cleanup_market_data_tables(),
+    io:format("Starting resource cleanup~n"),
     
-    %% Cleanup performance tables
-    case ets:info(live_trade_history) of
-        undefined -> ok;
-        _ -> ets:delete(live_trade_history)
+    %% Cleanup ETS tables with error handling
+    try
+        ib_bridge_connector:cleanup_market_data_tables()
+    catch
+        Error:Reason ->
+            io:format("Warning: Failed to cleanup IB market data tables: ~p:~p~n", [Error, Reason])
     end,
     
-    case ets:info(live_performance_snapshots) of
-        undefined -> ok;
-        _ -> ets:delete(live_performance_snapshots)
-    end,
+    %% Cleanup performance tables with validation
+    cleanup_ets_table(live_trade_history),
+    cleanup_ets_table(live_performance_snapshots),
+    
+    %% Cleanup any other known tables
+    cleanup_ets_table(live_price_buffer),
+    cleanup_ets_table(live_market_data),
     
     io:format("Resource cleanup completed~n").
+
+%% Helper function to safely cleanup ETS tables
+cleanup_ets_table(TableName) ->
+    case ets:info(TableName) of
+        undefined -> 
+            ok;
+        _ -> 
+            try
+                ets:delete(TableName),
+                io:format("Cleaned up ETS table: ~p~n", [TableName])
+            catch
+                Error:Reason ->
+                    io:format("Warning: Failed to cleanup ETS table ~p: ~p:~p~n", [TableName, Error, Reason])
+            end
+    end.
 
 %% Get comprehensive system status
 get_comprehensive_status(State) ->
     ComponentStatus = #{
-        ib_connector => get_component_status(ib_connector),
+        ib_bridge_connector => get_component_status(ib_bridge_connector),
         live_scape => get_component_status(live_scape),
         live_trader => get_component_status(live_trader)
     },
@@ -684,9 +784,9 @@ get_component_status(ComponentName) ->
     end.
 
 %% Perform health check on all components
-perform_health_check(State) ->
+perform_health_check(_State) ->
     %% Check if all critical processes are alive
-    CriticalProcesses = [ib_connector, live_scape, live_trader],
+    CriticalProcesses = [ib_bridge_connector, live_scape, live_trader],
     
     Issues = lists:foldl(fun(ProcessName, Acc) ->
         case whereis(ProcessName) of
@@ -700,7 +800,7 @@ perform_health_check(State) ->
     end, [], CriticalProcesses),
     
     %% Check IB connection
-    ConnectionIssues = case ib_connector:get_connection_status() of
+    ConnectionIssues = case ib_bridge_connector:get_connection_status() of
         {ok, true} -> [];
         {ok, false} -> [ib_connection_down];
         {error, _} -> [ib_connection_error]
@@ -744,22 +844,31 @@ attempt_process_restart(ProcessName) ->
 %% Attempt IB reconnection
 attempt_ib_reconnection() ->
     io:format("Attempting IB reconnection~n"),
-    %% Trigger reconnection in IB connector
-    case whereis(ib_connector) of
+    %% Trigger reconnection in IB bridge connector
+    case whereis(ib_bridge_connector) of
         undefined -> ok;
         Pid -> Pid ! reconnect
     end.
 
 %% Handle component crash
 handle_component_crash(State, Component, Reason) ->
-    io:format("Handling crash of component ~p: ~p~n", [Component, Reason]),
+    io:format("Component ~p crashed: ~p~n", [Component, Reason]),
     
-    %% Log the crash
-    CrashRecord = {component_crash, Component, Reason, erlang:timestamp()},
-    log_component_crash(CrashRecord),
+    %% Update error count
+    NewErrorCount = State#integration_state.error_count + 1,
+    UpdatedState = State#integration_state{error_count = NewErrorCount},
     
-    %% Update state status
-    State#integration_state{status = error}.
+    %% Basic recovery logic
+    case NewErrorCount =< 3 of
+        true ->
+            io:format("Attempting recovery for component ~p~n", [Component]),
+            UpdatedState#integration_state{status = error};
+        false ->
+            %% Too many errors, trigger emergency shutdown
+            io:format("Too many errors, triggering emergency shutdown~n"),
+            emergency_shutdown(),
+            UpdatedState#integration_state{status = critical_error}
+    end.
 
 %% Log component crash
 log_component_crash(CrashRecord) ->
@@ -777,9 +886,9 @@ test_system_integration() ->
     TestAgentId = get_test_agent_id(),
     
     case TestAgentId of
-        {ok, AgentId} ->
+        {ok, Agent_Id} ->
             %% Start system
-            case start_live_trading(AgentId) of
+            case start_live_trading(Agent_Id) of
                 {ok, started} ->
                     %% Run integration tests
                     TestResults = run_integration_tests(),
@@ -798,11 +907,11 @@ test_system_integration() ->
 %% Get a test agent ID from the database
 get_test_agent_id() ->
     %% Find any agent in the database for testing
-    case genotype_utils:list_all_agents() of
-        [] ->
+    case genotype_utils:list_all_agents(all) of
+        {atomic, []} ->
             {error, no_agents_available};
-        [Agent | _] ->
-            {ok, Agent#agent.id}
+        {atomic, [{Agent_Id, _Fitness, _Generation, _Specie_Id} | _]} ->
+            {ok, Agent_Id}
     end.
 
 %% Run integration tests
@@ -829,7 +938,7 @@ run_integration_tests() ->
 
 %% Test IB connection integration
 test_ib_connection_integration() ->
-    case ib_connector:get_connection_status() of
+    case ib_bridge_connector:get_connection_status() of
         {ok, true} -> {ok, connected};
         {ok, false} -> {error, not_connected};
         {error, Reason} -> {error, Reason}
@@ -839,7 +948,7 @@ test_ib_connection_integration() ->
 test_market_data_flow_integration() ->
     %% Test that market data is flowing from IB to sensors
     Symbol = "EUR.USD",
-    case ib_connector:get_market_data(Symbol) of
+    case ib_bridge_connector:get_market_data(Symbol) of
         {ok, _MarketData} -> {ok, data_flowing};
         {error, no_data} -> {error, no_market_data};
         {error, Reason} -> {error, Reason}

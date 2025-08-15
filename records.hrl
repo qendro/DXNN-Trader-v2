@@ -290,4 +290,12 @@
     exposure_amount
 }).
 
+%% IB Bridge Connector state record
+-record(bridge_state, {
+    port,
+    next_cid = 1,
+    connection_status = false,
+    last_heartbeat = 0,
+    python_pid = undefined
+}).
 

@@ -1,25 +1,20 @@
-%% Python Bridge Connector - Drop-in replacement for ib_connector.erl
-%% Maintains identical API surface while using Python ib_insync for IB communication
+%% Python Bridge Connector for Interactive Brokers
+%% Provides IB API communication via Python ib_insync library
 
 -module(ib_bridge_connector).
 -behaviour(gen_server).
 -compile(export_all).
 -include("records.hrl").
 
-%% State record
--record(bridge_state, {
-    port,
-    next_cid = 1,
-    connection_status = false,
-    last_heartbeat = 0,
-    python_pid = undefined
-}).
+%% State record - defined in records.hrl
 
-%% API Functions - identical to ib_connector.erl
+%% API Functions - Interactive Brokers communication interface
 -export([
     test_connectivity/0,
     test_handshake_detailed/0,
+    start_default_connection/0,
     start_connection/3,
+    start_link/0,
     stop_connection/0,
     subscribe_market_data/2,
     unsubscribe_market_data/1,
@@ -39,12 +34,20 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
 %% ============================================================================
-%% Public API - Drop-in replacement for ib_connector.erl
+%% Public API - Interactive Brokers Communication
 %% ============================================================================
+
+%% Start connection to Interactive Brokers via Python bridge
+start_default_connection() ->
+    start_connection("host.docker.internal", 7497, 101).
 
 %% Start connection to Interactive Brokers via Python bridge
 start_connection(Host, Port, ClientId) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, {Host, Port, ClientId}, []).
+
+%% Start link function for supervisor integration
+start_link() ->
+    start_default_connection().
 
 %% Stop connection
 stop_connection() ->
@@ -434,7 +437,7 @@ parse_json_number(Str) ->
     end, Str),
     case string:to_integer(NumStr) of
         {Int, []} -> {Int, Rest};
-        {Int, "." ++ _} -> 
+        {_Int, "." ++ _} -> 
             case string:to_float(NumStr) of
                 {Float, []} -> {Float, Rest};
                 _ -> {list_to_binary(NumStr), Rest}

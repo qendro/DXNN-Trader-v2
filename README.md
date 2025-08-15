@@ -81,3 +81,87 @@ q().
     benchmarker:start(chart_plane_50x20).
     benchmarker:start(chart_plane_100x10).
    ```
+
+
+   # Live Trader
+
+   ## Initialization 
+
+   ```
+```erlang
+make:all([load]).
+config:validate_ib_connection_config().  
+ib_bridge_connector:start_default_connection().
+ib_bridge_connector:stop_connection().
+
+live_trading_integration:get_system_status().
+live_trading_integration:startup_step_ib_connection().
+live_trading_integration:subscribe_to_all_pairs([]).
+live_trading_integration:initialize_performance_monitoring().
+live_trading_integration:get_default_risk_parameters().
+live_trading_integration:test_system_integration().
+live_trading_integration:
+live_trading_integration:
+
+Setup Commands
+First, start the system:
+
+% Compile all modules
+make:all([load]).
+
+% Start the live trading system
+live_trading_integration:start().
+% Or start with specific configuration
+live_trading_integration:start([{host, "127.0.0.1"}, {port, 7497}, {client_id, 1}]).
+
+Market Data Commands
+Get live market data for EUR/USD and USD/JPY:
+
+live_trading_integration:subscribe_market_data("EUR", "USD").
+live_trading_integration:subscribe_market_data("USD", "JPY").
+live_trading_integration:get_market_data("EUR", "USD").
+live_trading_integration:get_market_data("USD", "JPY").
+
+Order Placement Commands
+Place orders for each currency pair:
+
+live_trading_integration:place_order("EUR", "USD", buy, 0.01).
+live_trading_integration:place_order("EUR", "USD", sell, 0.01).
+live_trading_integration:place_order("USD", "JPY", buy, 0.01).
+live_trading_integration:place_order("USD", "JPY", sell, 0.01).
+
+Useful Testing Commands
+Connection and status checks:
+
+live_trading_integration:get_connection_status().
+live_trading_integration:test_connection().
+live_trading_integration:get_account_info().
+live_trading_integration:get_positions().
+live_trading_integration:get_orders().
+
+System monitoring:
+
+% Check if live trading process is running
+whereis(live_trading_integration).
+% Get system state
+sys:get_state(live_trading_integration).
+live_trading_integration:stop().
+live_trading_integration:restart().
+
+Debug and logging:
+
+% Enable debug mode
+live_trading_integration:set_debug(true).
+% Get recent logs
+live_trading_integration:get_logs().
+% Clear logs
+live_trading_integration:clear_logs().
+
+Interactive Broker Specific Commands
+If using the IB bridge:
+
+ib_bridge_connector:start().
+ib_bridge_connector:ping().
+ib_bridge_connector:get_account_summary().
+
+```

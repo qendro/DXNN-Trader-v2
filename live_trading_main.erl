@@ -205,55 +205,7 @@ validate_config() ->
             {error, Reason}
     end.
 
-%% ============================================================================
-%% Testing and Diagnostics
-%% ============================================================================
 
-%% Run system tests
-test() ->
-    io:format("Running live trading system tests~n"),
-    test_live_trading_integration:quick_test().
-
-%% Run full system tests
-test_full() ->
-    io:format("Running full live trading system tests~n"),
-    test_live_trading_integration:full_test().
-
-%% Test specific component
-test_component(Component) ->
-    test_live_trading_integration:test_component(Component).
-
-%% Test IB connection specifically
-test_ib_connection() ->
-    io:format("Testing IB connection...~n"),
-    
-    %% Test basic connectivity
-    case ib_connector:test_connectivity() of
-        ok ->
-            io:format("✓ Basic connectivity test passed~n"),
-            
-            %% Test full connection
-            Host = config:ib_host(),
-            Port = config:ib_port(),
-            ClientId = config:ib_client_id(),
-            
-            io:format("Attempting full connection to ~s:~p with client ID ~p~n", [Host, Port, ClientId]),
-            
-            case ib_connector:start_connection(Host, Port, ClientId) of
-                {ok, _Pid} ->
-                    io:format("✓ Full connection test passed~n"),
-                    
-                    %% Clean up
-                    ib_connector:stop_connection(),
-                    {ok, connection_successful};
-                {error, Reason} ->
-                    io:format("✗ Full connection test failed: ~p~n", [Reason]),
-                    {error, Reason}
-            end;
-        {error, Reason} ->
-            io:format("✗ Basic connectivity test failed: ~p~n", [Reason]),
-            {error, Reason}
-    end.
 
 %% Run diagnostics
 diagnostics() ->
@@ -311,7 +263,7 @@ check_database_connectivity() ->
 check_ib_connectivity() ->
     try
         io:format("Testing IB connectivity...~n"),
-        case ib_connector:test_connectivity() of
+        case ib_bridge_connector:test_connectivity() of
             ok ->
                 io:format("IB connectivity: OK~n"),
                 {ok, connected};
@@ -465,9 +417,6 @@ help() ->
     io:format("list_agents() - List available agents~n"),
     io:format("show_config() - Show configuration~n"),
     io:format("validate_config() - Validate configuration~n"),
-    io:format("test() - Run quick tests~n"),
-    io:format("test_full() - Run full test suite~n"),
-    io:format("test_ib_connection() - Test IB connection specifically~n"),
     io:format("diagnostics() - Run system diagnostics~n"),
     io:format("help() - Show this help~n"),
     io:format("~nQuick commands:~n"),
