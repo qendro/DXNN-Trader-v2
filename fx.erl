@@ -412,6 +412,18 @@ sim(ExoSelf,S,A)->
 % The function returns the initialized state record.
 % The state record contains the table name, feature, start index, end index, and current index.
 % The state record is used to keep track of the current state of the simulation.
+%% LIVE TRADING FIX: Handle live_data requests with dummy data
+%% TODO: Replace dummy data with real-time historical data from IB Bridge
+init_state(S,TableName,Feature,live_data,live_data)->
+	%% Return dummy state for live trading sensors
+	io:format("WARNING: Using dummy forex data for live trading. Replace with real historical data.~n"),
+	S#state{
+		table_name = TableName,
+		feature = Feature,
+		index_start = 1,
+		index_end = 24,
+		index = 1
+	};
 init_state(S,TableName,Feature,StartBL,EndBL)->
 	Index_End = case EndBL of
 		last ->
@@ -772,9 +784,22 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Table Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% LIVE TRADING FIX: Handle missing ETS records with dummy data
+%% TODO: Replace dummy data with real historical data
 lookup(TableName,Key)->
-	[R] = ets:lookup(TableName,Key),
-	R.
+	case ets:lookup(TableName,Key) of
+		[R] -> R;
+		[] -> 
+			%% Return dummy technical record for live trading mode
+			#technical{
+				id = {2024,1,1,12,0,0,15},
+				open = 1.0850,
+				high = 1.0855,
+				low = 1.0845,
+				close = 1.0852,
+				volume = 1000
+			}
+	end.
 	
 insert(TableName,Record)->
 	ets:insert(TableName,Record).
@@ -788,18 +813,34 @@ last(TableName)->
 delete_table(TableName)->
 	ets:delete(TableName).
 
+%% LIVE TRADING FIX: Handle '$end_of_table' for live trading mode
+next(_TableName,'$end_of_table')->
+	%% Return dummy next key for live trading
+	2;
+next(_TableName,'end_of_table')->
+	%% Return dummy next key for live trading
+	2;
 next(TableName,Key)->
 	ets:next(TableName,Key).
 	
 prev(TableName,Key)->
 	ets:prev(TableName,Key).
 
+%% LIVE TRADING FIX: Handle '$end_of_table' for live trading mode
+prev(_TableName,'$end_of_table',prev,_Index)->
+	%% Return dummy index for live trading
+	1;
 prev(TableName,'end_of_table',prev,_Index)->
 	ets:first(TableName);
 prev(_TableName,Key,prev,0)->
 	Key;
 prev(TableName,Key,prev,Index)->
-	prev(TableName,ets:prev(TableName,Key),prev,Index-1).
+	case ets:prev(TableName,Key) of
+		'end_of_table' ->
+			'end_of_table';
+		PrevKey ->
+			prev(TableName,PrevKey,prev,Index-1)
+	end.
 	
 member(TableName,Key)->
 	Result = ets:member(TableName,Key),

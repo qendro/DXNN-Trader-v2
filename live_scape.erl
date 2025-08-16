@@ -238,7 +238,7 @@ handle_market_data_interruption(State, Reason) ->
 %% Detect market data interruption in scape
 detect_market_data_interruption_in_scape() ->
     %% Check if IB connector is providing recent data
-    case ib_connector:get_connection_status() of
+    case ib_bridge_connector:get_connection_status() of
         {ok, true} ->
             %% Connection is up, check data freshness
             case check_data_freshness() of
@@ -287,7 +287,7 @@ attempt_market_data_recovery(Reason) ->
         connection_down ->
             %% Wait for connection recovery
             timer:sleep(2000),
-            case ib_connector:get_connection_status() of
+            case ib_bridge_connector:get_connection_status() of
                 {ok, true} -> {ok, recovered};
                 _ -> {error, recovery_failed}
             end;
@@ -305,7 +305,7 @@ request_fresh_market_data() ->
         [] -> {error, no_pairs_configured};
         [FirstPair | _] ->
             Symbol = atom_to_list(FirstPair),
-            case ib_connector:subscribe_market_data(Symbol, 1) of
+            case ib_bridge_connector:subscribe_market_data(Symbol, 1) of
                 ok -> ok;
                 {error, Reason} -> {error, Reason}
             end
@@ -642,7 +642,7 @@ execute_position_open(Signal, Symbol, Quantity, Price, State) ->
     
     io:format("Attempting to open ~s position: ~p shares of ~s at ~p~n", [Action, Quantity, Symbol, EntryPrice]),
     
-    case ib_connector:place_order(Symbol, Action, Quantity, "MKT") of
+    case ib_bridge_connector:place_order(Symbol, Action, Quantity, "MKT") of
         ok ->
             %% Wait for order confirmation with timeout
             case wait_for_order_fill(5000) of  % 5 second timeout
@@ -822,7 +822,7 @@ execute_position_close(Position, Symbol, Quantity, CurrentPrice, EntryPrice, Sta
     io:format("Attempting to close position: ~s ~p shares of ~s (P&L estimate: ~p)~n", 
              [Action, Quantity, Symbol, Position * PriceChange * Quantity]),
     
-    case ib_connector:place_order(Symbol, Action, Quantity, "MKT") of
+    case ib_bridge_connector:place_order(Symbol, Action, Quantity, "MKT") of
         ok ->
             %% Wait for order confirmation with timeout
             case wait_for_order_fill(5000) of  % 5 second timeout
@@ -923,7 +923,7 @@ get_live_price_list(TableName, HRes) ->
     Symbol = atom_to_list(TableName),
     
     %% Try to get OHLC data from IB connector
-    case ib_connector:get_ohlc_data(Symbol, 60) of  % 1-minute resolution
+    case ib_bridge_connector:get_ohlc_data(Symbol, 60) of  % 1-minute resolution
         {ok, OHLCList} when length(OHLCList) >= HRes ->
             %% Convert OHLC records to tuple format expected by sensors
             RecentData = lists:sublist(OHLCList, HRes),
@@ -946,7 +946,7 @@ get_live_price_list(TableName, HRes) ->
             end;
         {error, _Reason} ->
             %% Fallback to current market tick if OHLC not available
-            case ib_connector:get_market_data(Symbol) of
+            case ib_bridge_connector:get_market_data(Symbol) of
                 {ok, Tick} ->
                     %% Use current tick data for all points
                     Price = case Tick#market_tick.last of
@@ -966,7 +966,7 @@ get_live_price_list(TableName, HRes) ->
 
 %% Get current market price for trading
 get_current_market_price(Symbol) ->
-    case ib_connector:get_market_data(Symbol) of
+    case ib_bridge_connector:get_market_data(Symbol) of
         {ok, Tick} ->
             %% Use last price if available, otherwise use bid
             Price = case Tick#market_tick.last of

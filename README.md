@@ -102,6 +102,23 @@ live_trading_integration:get_default_risk_parameters().
 live_trading_integration:test_system_integration().
 live_trading_integration:
 live_trading_integration:
+live_trading_main:start().
+live_trading_main:find_best_agent().
+live_trading_main:diagnostics().
+live_trading_main:
+
+live_scape:start_link().
+live_scape:check_data_freshness().
+live_scape:execute_position_close(Position, Symbol, Quantity, CurrentPrice, EntryPrice, State).
+live_scape:execute_position_close(Position, Symbol, Quantity, CurrentPrice, EntryPrice, State).
+
+live_trading_integration:place_order("EUR", "USD", buy, 0.01).
+live_scape:
+
+live_trader:start_live_scape().
+
+
+
 
 Setup Commands
 First, start the system:

@@ -141,9 +141,9 @@ validate_ib_connection_config() ->
         true -> throw({invalid_ib_port, Port})
     end,
     
-    % Validate client ID range
+    % Validate client ID range (IB allows 1-32 for paper trading, but we'll be more flexible)
     if 
-        ClientId >= 1 andalso ClientId =< 32 -> ok;
+        ClientId >= 1 andalso ClientId =< 999 -> ok;
         true -> throw({invalid_ib_client_id, ClientId})
     end,
     

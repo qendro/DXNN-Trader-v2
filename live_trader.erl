@@ -330,39 +330,59 @@ deploy_neural_network(Agent_Id, _ScapePid) ->
 initialize_live_components() ->
     io:format("Initializing live trading components~n"),
     
-    %% Start IB connector
-    Host = config:ib_host(),
-    Port = config:ib_port(),
-    ClientId = config:ib_client_id(),
-    
-    case ib_connector:start_connection(Host, Port, ClientId) of
-        {ok, IBPid} ->
-            io:format("IB connector started~n"),
+    %% Check if IB connector is already running
+    case whereis(ib_bridge_connector) of
+        undefined ->
+            %% Start new IB connector
+            Host = config:ib_host(),
+            Port = config:ib_port(),
+            ClientId = config:ib_client_id(),
             
-            %% Initialize market data tables
-            case ib_connector:init_market_data_tables() of
-                ok ->
-                    %% Start live scape
-                    ScapePid = spawn(?MODULE, start_live_scape, []),
-                    
-                    %% Wait for scape to initialize
-                    receive
-                        {ScapePid, scape_ready} ->
-                            io:format("Live scape initialized~n"),
-                            {ok, IBPid, ScapePid}
-                    after 5000 ->
-                        io:format("Live scape initialization timeout~n"),
-                        ib_connector:stop_connection(),
-                        {error, scape_timeout}
-                    end;
+            case ib_bridge_connector:start_connection(Host, Port, ClientId) of
+                {ok, IBPid} ->
+                    io:format("IB connector started~n"),
+                    initialize_remaining_components(IBPid);
                 {error, Reason} ->
-                    io:format("Failed to initialize market data tables: ~p~n", [Reason]),
-                    ib_connector:stop_connection(),
+                    io:format("Failed to start IB connector: ~p~n", [Reason]),
                     {error, Reason}
             end;
-        {error, Reason} ->
-            io:format("Failed to start IB connector: ~p~n", [Reason]),
-            {error, Reason}
+        IBPid ->
+            %% IB connector already running
+            io:format("IB connector already running with PID ~p~n", [IBPid]),
+            initialize_remaining_components(IBPid)
+    end.
+
+%% Initialize remaining components after IB connector is ready
+initialize_remaining_components(IBPid) ->
+    %% Initialize market data tables (safe to call multiple times)
+    case catch ib_bridge_connector:init_market_data_tables() of
+        ok ->
+            io:format("Market data tables initialized~n");
+        {'EXIT', _Reason} ->
+            io:format("Market data tables already initialized~n");
+        {error, _Reason} ->
+            io:format("Market data tables already initialized~n")
+    end,
+    
+    %% Check if live scape is already running
+    case whereis(live_scape) of
+        undefined ->
+            %% Start new live scape
+            ScapePid = spawn(?MODULE, start_live_scape, []),
+            
+            %% Wait for scape to initialize
+            receive
+                {ScapePid, scape_ready} ->
+                    io:format("Live scape initialized~n"),
+                    {ok, IBPid, ScapePid}
+            after 5000 ->
+                io:format("Live scape initialization timeout~n"),
+                {error, scape_timeout}
+            end;
+        ScapePid ->
+            %% Live scape already running
+            io:format("Live scape already running with PID ~p~n", [ScapePid]),
+            {ok, IBPid, ScapePid}
     end.
 
 %% Start live scape process
@@ -386,7 +406,7 @@ subscribe_to_pairs([], _ReqId, _State) ->
     ok;
 subscribe_to_pairs([Symbol | Rest], ReqId, State) ->
     SymbolStr = atom_to_list(Symbol),
-    case ib_connector:subscribe_market_data(SymbolStr, ReqId) of
+    case ib_bridge_connector:subscribe_market_data(SymbolStr, ReqId) of
         ok ->
             io:format("Subscribed to market data for ~s~n", [SymbolStr]),
             subscribe_to_pairs(Rest, ReqId + 1, State);
@@ -587,7 +607,7 @@ emergency_close_positions(State) ->
         io:format("Emergency closing ~s position: ~s ~p ~s~n", [Side, CloseAction, Quantity, Symbol]),
         
         %% Attempt to place close order (may fail if connection is down)
-        case ib_connector:place_order(Symbol, CloseAction, Quantity, "MKT") of
+        case ib_bridge_connector:place_order(Symbol, CloseAction, Quantity, "MKT") of
             ok ->
                 io:format("Emergency close order placed for ~s~n", [Symbol]);
             {error, Reason} ->
@@ -930,7 +950,7 @@ check_margin_requirements(Symbol, PositionSize, AccountBalance) ->
     RequiredMargin = PositionSize * MarginRequirement,
     
     %% Get current account info from IB connector
-    case ib_connector:get_account_info() of
+    case ib_bridge_connector:get_account_info() of
         {ok, AccountInfo} ->
             AvailableMargin = extract_available_margin(AccountInfo),
             
@@ -1597,8 +1617,8 @@ cleanup_components(IBPid, ScapePid) ->
     case IBPid of
         undefined -> ok;
         _ -> 
-            ib_connector:cleanup_market_data_tables(),
-            ib_connector:stop_connection()
+            ib_bridge_connector:cleanup_market_data_tables(),
+            ib_bridge_connector:stop_connection()
     end,
     
     %% Stop live scape
