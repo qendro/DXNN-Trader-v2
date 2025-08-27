@@ -94,6 +94,8 @@ config:validate_ib_connection_config().
 ib_bridge_connector:start_default_connection().
 ib_bridge_connector:stop_connection().
 
+ib_bridge_connector:place_order("EUR.USD", "BUY", 1000, "MKT").
+
 live_trading_integration:get_system_status().
 live_trading_integration:startup_step_ib_connection().
 live_trading_integration:subscribe_to_all_pairs([]).
