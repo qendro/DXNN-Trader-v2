@@ -15,6 +15,19 @@
 -define(LIVE_PRICE_BUFFER, live_price_buffer).
 -define(MAX_BUFFER_SIZE, 1000).
 
+%% Live ETS table definitions
+-define(LIVE_TABLES, [live_EURUSD1, live_EURUSD15, live_EURUSD30, live_EURUSD60]).
+-define(HISTORICAL_TABLES, ['EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60']).
+
+%% Technical record definition (matching fx.erl)
+-record(technical,{
+    id,    %%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate}
+    open,
+    high,
+    low,
+    close,
+    volume}).
+
 %% ============================================================================
 %% Public API - Scape Interface
 %% ============================================================================
@@ -29,6 +42,15 @@ start_link() ->
 init_scape() ->
     %% Initialize ETS table for price buffer
     init_price_buffer(),
+    
+    %% Initialize live tables if live trading is enabled
+    case config:live_trading_enabled() of
+        true ->
+            init_live_tables(),
+            start_live_data_feeder();
+        false ->
+            ok
+    end,
     
     %% Wait for exoself to connect
     receive
@@ -480,12 +502,35 @@ notify_market_data_failure(Reason) ->
 
 %% Handle sensor requests for market data
 handle_sense_request(TableName, Feature, Parameters, State) ->
+    case is_live_table_request(TableName) of
+        true ->
+            %% Handle live data request
+            handle_live_sense_request(TableName, Feature, Parameters, State);
+        false ->
+            %% Handle historical data request (existing logic)
+            handle_historical_sense_request(TableName, Feature, Parameters, State)
+    end.
+
+%% Handle live data sensor requests
+handle_live_sense_request(TableName, Feature, Parameters, State) ->
+    LiveTableName = get_live_table_name(TableName),
+    
+    %% Ensure live table has data
+    case ensure_live_table_with_data(LiveTableName, TableName) of
+        {ok, _DataRange} ->
+            %% Use live table with same logic as historical
+            handle_historical_sense_request(LiveTableName, Feature, Parameters, State);
+        {error, Reason} ->
+            io:format("Live data not available: ~p, using historical~n", [Reason]),
+            handle_historical_sense_request(TableName, Feature, Parameters, State)
+    end.
+
+%% Handle historical data sensor requests (existing logic)
+handle_historical_sense_request(TableName, Feature, Parameters, State) ->
     case Parameters of
         [HRes, VRes, graph_sensor] ->
-            %% Handle fx_PCI (Price Chart Input) sensor
             handle_pci_sensor(TableName, HRes, VRes, State);
         [HRes, list_sensor] ->
-            %% Handle fx_PLI (Price List Input) sensor  
             handle_pli_sensor(TableName, HRes, State);
         _ ->
             io:format("Unknown sensor parameters: ~p~n", [Parameters]),
@@ -1066,13 +1111,30 @@ init_price_buffer() ->
             io:format("Live price buffer cleared~n")
     end.
 
-%% Clean up price buffer
+%% Clean up price buffer and live tables
 cleanup_price_buffer() ->
+    io:format("Clearing scape market data~n"),
+    %% Clear price buffer
     case ets:info(?LIVE_PRICE_BUFFER) of
         undefined -> ok;
+        _ -> ets:delete_all_objects(?LIVE_PRICE_BUFFER)
+    end,
+    
+    %% Clean up live tables
+    case config:live_trading_enabled() of
+        true ->
+            [cleanup_live_table(TableName) || TableName <- ?LIVE_TABLES];
+        false ->
+            ok
+    end.
+
+%% Clean up individual live table
+cleanup_live_table(TableName) ->
+    case ets:info(TableName) of
+        undefined -> ok;
         _ -> 
-            ets:delete(?LIVE_PRICE_BUFFER),
-            io:format("Live price buffer cleaned up~n")
+            ets:delete(TableName),
+            io:format("Cleaned up live table: ~p~n", [TableName])
     end.
 
 %% Add price data to buffer (for future use)
@@ -1102,3 +1164,568 @@ wait_for_order_fill(TimeoutMs) ->
     after TimeoutMs ->
         {error, timeout}
     end.
+
+%% ============================================================================
+%% Live Table Management
+%% ============================================================================
+
+%% Initialize live trading tables
+init_live_tables() ->
+    io:format("Initializing live FX tables:~p~n", [?LIVE_TABLES]),
+    [init_live_table(TableName) || TableName <- ?LIVE_TABLES],
+    io:format("Live FX tables initialized~n").
+
+init_live_table(TableName) ->
+    ets:new(TableName, [ordered_set, public, named_table, {keypos, 2}]).
+
+%% Get live table name from historical table name
+get_live_table_name(TableName) ->
+    list_to_atom("live_" ++ atom_to_list(TableName)).
+
+%% Check if table is a live table
+is_live_table(TableName) ->
+    lists:member(TableName, ?LIVE_TABLES).
+
+%% Check if this is a live data request
+is_live_table_request(TableName) ->
+    %% Check if the request is for live_data or if we're in live trading mode
+    case config:live_trading_enabled() of
+        true ->
+            %% In live mode, check if this table has a live equivalent
+            lists:member(TableName, ?HISTORICAL_TABLES) orelse
+            lists:member(TableName, ?LIVE_TABLES);
+        false ->
+            false
+    end.
+
+%% Get historical table name from live table name
+get_historical_table_name(LiveTableName) ->
+    TableNameStr = atom_to_list(LiveTableName),
+    case string:prefix(TableNameStr, "live_") of
+        nomatch -> undefined;
+        HistoricalName -> list_to_atom(HistoricalName)
+    end.
+
+%% Get live table name from historical table name
+get_live_table_name(HistoricalTableName) ->
+    TableNameStr = atom_to_list(HistoricalTableName),
+    list_to_atom("live_" ++ TableNameStr).
+
+%% ============================================================================
+%% Live Data Conversion Functions
+%% ============================================================================
+
+%% Convert IB OHLC data to technical record format
+convert_ohlc_to_technical(OHLC) ->
+    #technical{
+        id = {OHLC#live_ohlc.timestamp, 60},  % 60-second sampling rate
+        open = OHLC#live_ohlc.open,
+        high = OHLC#live_ohlc.high,
+        low = OHLC#live_ohlc.low,
+        close = OHLC#live_ohlc.close,
+        volume = OHLC#live_ohlc.volume
+    }.
+
+%% Convert timestamp to technical record ID format
+timestamp_to_id(Timestamp) ->
+    {Year, Month, Day} = date(),
+    {Hour, Minute, Second} = time(),
+    {Year, Month, Day, Hour, Minute, Second, 60}.  % 60-second sampling rate
+
+%% ============================================================================
+%% Live Table Data Pulling Functions
+%% ============================================================================
+
+%% Ensure live table exists and has data, pulling from IB if needed
+ensure_live_table_with_data(LiveTableName, HistoricalTableName) ->
+    %% Create live table if it doesn't exist
+    case ets:info(LiveTableName) of
+        undefined ->
+            init_live_table(LiveTableName);
+        _ ->
+            ok
+    end,
+    
+    %% Check if we have recent data, if not pull from IB
+    case has_recent_data(LiveTableName) of
+        true ->
+            %% Use existing data
+            Index_End = ets:last(LiveTableName),
+            Index_Start = max(1, Index_End - 99),
+            {ok, {Index_Start, Index_End}};
+        false ->
+            %% Pull fresh data from IB Bridge
+            pull_live_data_from_ib(LiveTableName, HistoricalTableName)
+    end.
+
+%% Check if live table has recent data (within last 5 minutes)
+has_recent_data(LiveTableName) ->
+    case ets:last(LiveTableName) of
+        '$end_of_table' ->
+            false;
+        LastIndex ->
+            {Year, Month, Day, Hour, Minute, Second, _} = LastIndex,
+            {CurrentYear, CurrentMonth, CurrentDay} = date(),
+            {CurrentHour, CurrentMinute, CurrentSecond} = time(),
+            
+            LastTime = calendar:datetime_to_gregorian_seconds({{Year, Month, Day}, {Hour, Minute, Second}}),
+            CurrentTime = calendar:datetime_to_gregorian_seconds({{CurrentYear, CurrentMonth, CurrentDay}, {CurrentHour, CurrentMinute, CurrentSecond}}),
+            
+            %% Data is recent if it's within 5 minutes
+            (CurrentTime - LastTime) < 300
+    end.
+
+%% Pull live data from IB Bridge
+pull_live_data_from_ib(LiveTableName, HistoricalTableName) ->
+    %% Get currency pair from table name
+    CurrencyPair = get_currency_pair_from_table_name(LiveTableName),
+    
+    case ib_bridge_connector:get_ohlc_data(CurrencyPair, 60) of  % 1-minute bars
+        {ok, OHLCList} when length(OHLCList) > 0 ->
+            %% Convert and insert new data
+            lists:foreach(fun(OHLC) ->
+                TechnicalRecord = convert_ohlc_to_technical(OHLC),
+                ets:insert(LiveTableName, TechnicalRecord)
+            end, OHLCList),
+            
+            %% Return data range
+            Index_End = ets:last(LiveTableName),
+            Index_Start = max(1, Index_End - 99),
+            {ok, {Index_Start, Index_End}};
+        {ok, []} ->
+            %% No live data available, fallback to historical
+            io:format("No live data available for ~p, using historical~n", [CurrencyPair]),
+            fallback_to_historical_data(LiveTableName, HistoricalTableName);
+        {error, Reason} ->
+            %% IB error, fallback to historical
+            io:format("IB Bridge error for ~p: ~p, using historical~n", [CurrencyPair, Reason]),
+            fallback_to_historical_data(LiveTableName, HistoricalTableName)
+    end.
+
+%% Get currency pair string from live table name
+get_currency_pair_from_table_name(LiveTableName) ->
+    TableNameStr = atom_to_list(LiveTableName),
+    case string:prefix(TableNameStr, "live_") of
+        nomatch -> 
+            %% Fallback to table name itself
+            TableNameStr;
+        CurrencyPair -> 
+            CurrencyPair
+    end.
+
+%% Fallback to historical data when live data is not available
+fallback_to_historical_data(LiveTableName, HistoricalTableName) ->
+    case ets:info(HistoricalTableName) of
+        undefined ->
+            {error, no_historical_data};
+        _ ->
+            %% Copy last 100 data points from historical table
+            LastIndex = ets:last(HistoricalTableName),
+            StartIndex = max(1, LastIndex - 99),
+            copy_historical_to_live(HistoricalTableName, LiveTableName, StartIndex, LastIndex),
+            {ok, {StartIndex, LastIndex}}
+    end.
+
+%% Copy data from historical table to live table
+copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex) ->
+    copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, StartIndex).
+
+copy_historical_to_live(_HistoricalTable, _LiveTable, _StartIndex, EndIndex, CurrentIndex) 
+    when CurrentIndex > EndIndex ->
+    ok;
+copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, CurrentIndex) ->
+    case ets:lookup(HistoricalTable, CurrentIndex) of
+        [Record] ->
+            ets:insert(LiveTable, Record),
+            copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, CurrentIndex + 1);
+        [] ->
+            copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, CurrentIndex + 1)
+    end.
+
+%% ============================================================================
+%% Live Data Feeder System
+%% ============================================================================
+
+%% Start live data feeder process
+start_live_data_feeder() ->
+    case whereis(live_data_feeder) of
+        undefined ->
+            Pid = spawn(fun() -> live_data_feeder_loop() end),
+            register(live_data_feeder, Pid),
+            {ok, Pid};
+        Pid ->
+            {ok, Pid}
+    end.
+
+%% Stop live data feeder process
+stop_live_data_feeder() ->
+    case whereis(live_data_feeder) of
+        undefined -> ok;
+        Pid -> 
+            Pid ! stop,
+            ok
+    end.
+
+%% Main live data feeder loop with proactive data collection
+live_data_feeder_loop() ->
+    %% Get live data from IB Bridge for all configured pairs
+    CurrencyPairs = config:live_currency_pairs(),
+    
+    %% Proactively update all live tables
+    lists:foreach(fun(Pair) ->
+        update_live_table_with_ib_data(Pair)
+    end, CurrencyPairs),
+    
+    %% Check for pending data requests and fulfill them
+    fulfill_pending_data_requests(),
+    
+    %% Wait before next update
+    receive
+        stop -> ok;
+        {request_data, From, TableName, Index} ->
+            %% Handle immediate data request
+            handle_immediate_data_request(From, TableName, Index),
+            live_data_feeder_loop()
+    after config:live_data_update_interval() ->
+        live_data_feeder_loop()
+    end.
+
+%% Handle immediate data requests from lookup functions
+handle_immediate_data_request(From, TableName, Index) ->
+    case pull_missing_data(TableName, Index) of
+        {ok, Row} ->
+            From ! {data_ready, Row};
+        {error, Reason} ->
+            From ! {data_error, Reason}
+    end.
+
+%% Fulfill any pending data requests
+fulfill_pending_data_requests() ->
+    %% This could be enhanced to track pending requests
+    %% For now, we rely on the pull-on-demand strategy in lookup functions
+    ok.
+
+%% Update live table with data from IB Bridge
+update_live_table_with_ib_data(CurrencyPair) ->
+    Symbol = atom_to_list(CurrencyPair),
+    LiveTableName = get_live_table_name(CurrencyPair),
+    
+    %% Get recent data from IB Bridge
+    case ib_bridge_connector:get_recent_ohlc_data(Symbol, 60, 100) of  % Last 100 bars
+        {ok, OHLCList} when length(OHLCList) > 0 ->
+            %% Convert and insert new data
+            lists:foreach(fun(OHLC) ->
+                TechnicalRecord = convert_ohlc_to_technical(OHLC),
+                ets:insert(LiveTableName, TechnicalRecord)
+            end, OHLCList),
+            
+            %% Keep only recent data (last 1000 points)
+            cleanup_old_live_data(LiveTableName, config:live_data_max_records());
+        {ok, []} ->
+            io:format("No OHLC data available for ~s~n", [Symbol]);
+        {error, Reason} ->
+            io:format("Failed to get OHLC data for ~s: ~p~n", [Symbol, Reason])
+    end.
+
+%% Clean up old data from live table
+cleanup_old_live_data(TableName, MaxRecords) ->
+    case ets:info(TableName, size) of
+        Size when Size > MaxRecords ->
+            %% Remove oldest records
+            RecordsToRemove = Size - MaxRecords,
+            remove_oldest_records(TableName, RecordsToRemove);
+        _ ->
+            ok
+    end.
+
+%% Remove oldest records from table
+remove_oldest_records(TableName, Count) ->
+    remove_oldest_records(TableName, Count, 0).
+
+remove_oldest_records(_TableName, Count, Removed) when Removed >= Count ->
+    ok;
+remove_oldest_records(TableName, Count, Removed) ->
+    case ets:first(TableName) of
+        '$end_of_table' ->
+            ok;
+        Key ->
+            ets:delete(TableName, Key),
+            remove_oldest_records(TableName, Count, Removed + 1)
+    end.
+
+%% ============================================================================
+%% Pull-on-Demand Data Access Functions
+%% ============================================================================
+
+%% Handle data requests in live tables with pull-on-demand strategy
+lookup_live_with_pull(TableName, RequestedIndex) ->
+    case ets:lookup(TableName, RequestedIndex) of
+        [Row] -> 
+            %% Data exists, return it immediately
+            Row;
+        [] ->
+            %% Data doesn't exist, try to pull it
+            case pull_missing_data(TableName, RequestedIndex) of
+                {ok, Row} ->
+                    %% Successfully pulled data
+                    Row;
+                {error, _Reason} ->
+                    %% Failed to pull data, return latest available or undefined
+                    get_latest_available_data(TableName)
+            end
+    end.
+
+%% Enhanced sensor data access with live table support
+get_sensor_data(TableName, Feature, Parameters) ->
+    case is_live_table_request(TableName) of
+        true ->
+            %% Use live table with pull-on-demand
+            LiveTableName = get_live_table_name(TableName),
+            get_live_sensor_data(LiveTableName, Feature, Parameters);
+        false ->
+            %% Use historical table (existing logic)
+            get_historical_sensor_data(TableName, Feature, Parameters)
+    end.
+
+%% Get live sensor data with pull-on-demand support
+get_live_sensor_data(LiveTableName, Feature, Parameters) ->
+    case Parameters of
+        [HRes, VRes, graph_sensor] ->
+            get_live_pci_sensor_data(LiveTableName, HRes, VRes);
+        [HRes, list_sensor] ->
+            get_live_pli_sensor_data(LiveTableName, HRes);
+        _ ->
+            io:format("Unknown live sensor parameters: ~p~n", [Parameters]),
+            []
+    end.
+
+%% Get historical sensor data (existing logic)
+get_historical_sensor_data(TableName, Feature, Parameters) ->
+    case Parameters of
+        [HRes, VRes, graph_sensor] ->
+            get_historical_pci_sensor_data(TableName, HRes, VRes);
+        [HRes, list_sensor] ->
+            get_historical_pli_sensor_data(TableName, HRes);
+        _ ->
+            io:format("Unknown historical sensor parameters: ~p~n", [Parameters]),
+            []
+    end.
+
+%% Get live PLI sensor data
+get_live_pli_sensor_data(LiveTableName, HRes) ->
+    %% Get last HRes records from live table
+    case ets:last(LiveTableName) of
+        '$end_of_table' ->
+            [];
+        LastIndex ->
+            get_live_price_list(LiveTableName, HRes, LastIndex)
+    end.
+
+%% Get live PCI sensor data
+get_live_pci_sensor_data(LiveTableName, HRes, VRes) ->
+    %% Get last HRes records from live table
+    case ets:last(LiveTableName) of
+        '$end_of_table' ->
+            lists:duplicate(HRes * VRes, -1);
+        LastIndex ->
+            get_live_price_list_for_encoding(LiveTableName, HRes, VRes, LastIndex)
+    end.
+
+%% Get historical PLI sensor data
+get_historical_pli_sensor_data(TableName, HRes) ->
+    %% Use existing historical data logic
+    get_live_price_list(TableName, HRes).
+
+%% Get historical PCI sensor data
+get_historical_pci_sensor_data(TableName, HRes, VRes) ->
+    %% Use existing historical data logic
+    PriceList = get_live_price_list(TableName, HRes),
+    encode_price_list_to_plane(PriceList, HRes, VRes).
+
+%% Get live price list from live table
+get_live_price_list(LiveTableName, HRes, LastIndex) ->
+    get_live_price_list(LiveTableName, HRes, LastIndex, []).
+
+get_live_price_list(_LiveTableName, 0, _CurrentIndex, Acc) ->
+    lists:reverse(Acc);
+get_live_price_list(LiveTableName, HRes, CurrentIndex, Acc) ->
+    case ets:lookup(LiveTableName, CurrentIndex) of
+        [#technical{open=Open, close=Close, high=High, low=Low}] ->
+            PriceTuple = {Open, Close, High, Low},
+            get_live_price_list(LiveTableName, HRes - 1, CurrentIndex - 1, [PriceTuple | Acc]);
+        [] ->
+            %% Try to pull missing data
+            case pull_missing_data(LiveTableName, CurrentIndex) of
+                {ok, #technical{open=Open, close=Close, high=High, low=Low}} ->
+                    PriceTuple = {Open, Close, High, Low},
+                    get_live_price_list(LiveTableName, HRes - 1, CurrentIndex - 1, [PriceTuple | Acc]);
+                {error, _} ->
+                    %% Use default price tuple
+                    DefaultTuple = {1.0, 1.0, 1.0, 1.0},
+                    get_live_price_list(LiveTableName, HRes - 1, CurrentIndex - 1, [DefaultTuple | Acc])
+            end
+    end.
+
+%% Get live price list for encoding
+get_live_price_list_for_encoding(LiveTableName, HRes, VRes, LastIndex) ->
+    PriceList = get_live_price_list(LiveTableName, HRes, LastIndex),
+    encode_price_list_to_plane(PriceList, HRes, VRes).
+
+%% Encode price list to plane format
+encode_price_list_to_plane(PriceList, HRes, VRes) ->
+    case PriceList of
+        [] ->
+            lists:duplicate(HRes * VRes, -1);
+        _ ->
+            %% Calculate vertical range for encoding
+            HighPrices = [High || {_Open, _Close, High, _Low} <- PriceList],
+            LowPrices = [Low || {_Open, _Close, _High, Low} <- PriceList],
+            
+            LVMax1 = lists:max(HighPrices),
+            LVMin1 = lists:min(LowPrices),
+            LVMax = LVMax1 + abs(LVMax1 - LVMin1) / 20,
+            LVMin = LVMin1 - abs(LVMax1 - LVMin1) / 20,
+            VStep = (LVMax - LVMin) / VRes,
+            V_StartPos = LVMin + VStep / 2,
+            
+            %% Encode price data to plane format
+            encode_to_plane(HRes * VRes, PriceList, V_StartPos, VStep, [])
+    end.
+
+%% Pull missing data from IB Bridge
+pull_missing_data(TableName, RequestedIndex) ->
+    %% Get currency pair from table name
+    CurrencyPair = get_currency_pair_from_table_name(TableName),
+    
+    %% Determine time range to request from IB
+    {StartTime, EndTime} = calculate_request_time_range(RequestedIndex),
+    
+    case ib_bridge_connector:get_ohlc_data_range(CurrencyPair, 60, StartTime, EndTime) of
+        {ok, OHLCList} when length(OHLCList) > 0 ->
+            %% Convert and insert new data
+            lists:foreach(fun(OHLC) ->
+                TechnicalRecord = convert_ohlc_to_technical(OHLC),
+                ets:insert(TableName, TechnicalRecord)
+            end, OHLCList),
+            
+            %% Try to get the requested data again
+            case ets:lookup(TableName, RequestedIndex) of
+                [Row] -> {ok, Row};
+                [] -> {error, data_not_found}
+            end;
+        {ok, []} ->
+            {error, no_data_available};
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% Calculate time range for IB data request
+calculate_request_time_range(RequestedIndex) ->
+    {Year, Month, Day, Hour, Minute, Second, _} = RequestedIndex,
+    RequestedTime = {{Year, Month, Day}, {Hour, Minute, Second}},
+    
+    %% Request 10 minutes before and after the requested time
+    StartTime = calendar:gregorian_seconds_to_datetime(
+        calendar:datetime_to_gregorian_seconds(RequestedTime) - 600
+    ),
+    EndTime = calendar:gregorian_seconds_to_datetime(
+        calendar:datetime_to_gregorian_seconds(RequestedTime) + 600
+    ),
+    
+    {StartTime, EndTime}.
+
+%% Get the latest available data from the table
+get_latest_available_data(TableName) ->
+    case ets:last(TableName) of
+        '$end_of_table' ->
+            %% No data available at all
+            create_default_technical_record();
+        LastIndex ->
+            %% Return the most recent data point
+            case ets:lookup(TableName, LastIndex) of
+                [Row] -> Row;
+                [] -> create_default_technical_record()
+            end
+    end.
+
+%% Create a default technical record when no data is available
+create_default_technical_record() ->
+    #technical{
+        id = {2024, 1, 1, 0, 0, 0, 60},  % {Year,Month,Day,Hour,Minute,Second,sampling_rate}
+        open = 1.0,
+        high = 1.0,
+        low = 1.0,
+        close = 1.0,
+        volume = 0
+    }.
+
+%% ============================================================================
+%% Live Table Navigation Functions
+%% ============================================================================
+
+%% Enhanced navigation functions with live table support
+next_live(TableName, CurrentIndex) ->
+    case is_live_table(TableName) of
+        true ->
+            %% Live table navigation
+            ets:next(TableName, CurrentIndex);
+        false ->
+            %% Historical table navigation (existing logic)
+            ets:next(TableName, CurrentIndex)
+    end.
+
+%% Get first record from live table
+first_live(TableName) ->
+    case is_live_table(TableName) of
+        true ->
+            ets:first(TableName);
+        false ->
+            ets:first(TableName)
+    end.
+
+%% Get last record from live table
+last_live(TableName) ->
+    case is_live_table(TableName) of
+        true ->
+            ets:last(TableName);
+        false ->
+            ets:last(TableName)
+    end.
+
+%% ============================================================================
+%% Performance Monitoring Functions
+%% ============================================================================
+
+%% Monitor live table performance
+monitor_live_tables() ->
+    io:format("=== Live Table Performance Report ===~n"),
+    lists:foreach(fun(TableName) ->
+        case ets:info(TableName) of
+            undefined ->
+                io:format("~p: Not initialized~n", [TableName]);
+            Info ->
+                Size = proplists:get_value(size, Info),
+                Memory = proplists:get_value(memory, Info),
+                io:format("~p: ~p records, ~p bytes~n", [TableName, Size, Memory])
+        end
+    end, ?LIVE_TABLES).
+
+%% Monitor data freshness
+monitor_data_freshness() ->
+    io:format("=== Data Freshness Report ===~n"),
+    lists:foreach(fun(TableName) ->
+        case ets:last(TableName) of
+            '$end_of_table' ->
+                io:format("~p: No data~n", [TableName]);
+            LastIndex ->
+                {Year, Month, Day, Hour, Minute, Second, _} = LastIndex,
+                {CurrentYear, CurrentMonth, CurrentDay} = date(),
+                {CurrentHour, CurrentMinute, CurrentSecond} = time(),
+                
+                LastTime = calendar:datetime_to_gregorian_seconds({{Year, Month, Day}, {Hour, Minute, Second}}),
+                CurrentTime = calendar:datetime_to_gregorian_seconds({{CurrentYear, CurrentMonth, CurrentDay}, {CurrentHour, CurrentMinute, CurrentSecond}}),
+                
+                AgeSeconds = CurrentTime - LastTime,
+                io:format("~p: Last update ~p seconds ago~n", [TableName, AgeSeconds])
+        end
+    end, ?LIVE_TABLES).

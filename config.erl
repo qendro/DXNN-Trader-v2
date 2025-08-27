@@ -276,3 +276,18 @@ get_live_trading_config() ->
         {live_position_timeout, live_position_timeout()}
     ].
 
+%% ============================================================================
+%% Live ETS Tables Configuration
+%% ============================================================================
+
+%% Live trading configuration
+live_trading_enabled() -> true.  % Set to false to disable live trading
+live_data_update_interval() -> 30000.  % 30 seconds (more frequent updates)
+live_data_max_records() -> 1000.  % Max records per live table
+
+%% Pull-on-demand strategy configuration
+live_data_pull_timeout() -> 10000.  % 10 seconds timeout for IB data requests
+live_data_freshness_threshold() -> 300.  % 5 minutes - data considered stale after this
+live_data_pull_range_minutes() -> 20.  % Pull 20 minutes of data around requested time
+live_data_fallback_strategy() -> historical.  % Options: historical, latest_available, fail
+
