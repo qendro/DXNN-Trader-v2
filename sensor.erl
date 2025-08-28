@@ -59,7 +59,7 @@ fx_PCI(Exoself_Id,VL,Parameters,Scape)->
 	end.
 
 %This function encodes the Price List Input (PLI) sensor data.
-% It retrieves the last 200 rows of the EURUSD15 table and outputs the close prices as a vector.
+% It retrieves the last 200 rows of the EURUSD1 table and outputs the close prices as a vector.
 % The function takes the Exoself_Id, VL (vector length), Parameters (which includes the resolution and type of data), and Scape (the process that handles the data
 fx_PLI(Exoself_Id,VL,Parameters,Scape)->
 	[HRes,Type] = Parameters,%Type=open|close|high|low

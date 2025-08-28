@@ -102,6 +102,32 @@ status() ->
             {error, Reason}
     end.
 
+%% Get market data status (shows latest tick without spam)
+market_status() ->
+    case ib_bridge_connector:get_connection_status() of
+        {ok, true} ->
+            case ib_bridge_connector:get_market_data("EUR.USD") of
+                {ok, Tick} ->
+                    io:format("~n=== MARKET DATA STATUS ===~n"),
+                    io:format("Symbol: ~p~n", [Tick#market_tick.symbol]),
+                    io:format("Bid: ~p~n", [Tick#market_tick.bid]),
+                    io:format("Ask: ~p~n", [Tick#market_tick.ask]),
+                    io:format("Last: ~p~n", [Tick#market_tick.last]),
+                    io:format("Timestamp: ~p~n", [Tick#market_tick.timestamp]),
+                    io:format("=========================~n"),
+                    {ok, Tick};
+                {error, Reason} ->
+                    io:format("No market data available: ~p~n", [Reason]),
+                    {error, Reason}
+            end;
+        {ok, false} ->
+            io:format("IB Bridge not connected~n"),
+            {error, not_connected};
+        {error, Reason} ->
+            io:format("Cannot get connection status: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
 %% ============================================================================
 %% Agent Management
 %% ============================================================================
@@ -403,6 +429,10 @@ st() ->
 perf() ->
     performance().
 
+%% Quick market status command
+ms() ->
+    market_status().
+
 %% Help command
 help() ->
     io:format("~n=== LIVE TRADING COMMANDS ===~n"),
@@ -412,6 +442,7 @@ help() ->
     io:format("emergency_stop() - Emergency shutdown~n"),
     io:format("restart() - Restart system~n"),
     io:format("status() - Get system status~n"),
+    io:format("market_status() - Check latest market data~n"),
     io:format("performance() - Get performance summary~n"),
     io:format("performance_report() - Get detailed performance~n"),
     io:format("list_agents() - List available agents~n"),
@@ -423,5 +454,6 @@ help() ->
     io:format("go() - Quick start~n"),
     io:format("halt() - Quick stop~n"),
     io:format("st() - Quick status~n"),
+    io:format("ms() - Market status~n"),
     io:format("perf() - Quick performance~n"),
     io:format("=============================~n").

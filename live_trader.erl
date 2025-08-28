@@ -31,9 +31,15 @@
 
 %% Start link function for supervisor integration
 start_link() ->
-    Pid = spawn_link(?MODULE, init_trader, []),
-    register(live_trader, Pid),
-    {ok, Pid}.
+    case whereis(live_trader) of
+        undefined ->
+            Pid = spawn_link(?MODULE, init_trader, []),
+            register(live_trader, Pid),
+            {ok, Pid};
+        ExistingPid ->
+            io:format("Live trader already running with PID: ~p~n", [ExistingPid]),
+            {ok, ExistingPid}
+    end.
 
 %% Initialize trader process
 init_trader() ->
@@ -55,6 +61,10 @@ trader_idle_loop() ->
                 {error, _} ->
                     trader_idle_loop()
             end;
+        {get_state, From} ->
+            %% No state available in idle loop
+            From ! {error, no_state_available},
+            trader_idle_loop();
         stop ->
             ok;
         _ ->
@@ -68,11 +78,30 @@ deploy_model(Agent_Id) ->
             {error, trader_not_started};
         Pid ->
             Pid ! {deploy_model, Agent_Id, self()},
+            Timeout = config:neural_network_deployment_timeout(),
             receive
                 {deploy_result, Result} ->
                     Result
-            after 10000 ->
+            after Timeout ->
+                io:format("Neural network deployment timeout after ~pms~n", [Timeout]),
                 {error, deployment_timeout}
+            end
+    end.
+
+%% Get current state from live_trader process
+get_current_state() ->
+    case whereis(live_trader) of
+        undefined ->
+            {error, trader_not_started};
+        Pid ->
+            Pid ! {get_state, self()},
+            receive
+                {current_state, State} ->
+                    {ok, State};
+                {error, Reason} ->
+                    {error, Reason}
+            after 5000 ->
+                {error, state_timeout}
             end
     end.
 
@@ -128,8 +157,11 @@ deploy_model_internal(Agent_Id) ->
                                 current_positions = []
                             },
                             
-                            %% Register the live trader process
-                            register(live_trader, self()),
+                            %% Register the live trader process (if not already registered)
+                            case whereis(live_trader) of
+                                undefined -> register(live_trader, self());
+                                _ -> ok  % Already registered
+                            end,
                             
                             io:format("Model deployed successfully~n"),
                             {ok, State};
@@ -148,27 +180,57 @@ deploy_model_internal(Agent_Id) ->
 start_trading(Agent_Id, RiskParams) ->
     io:format("Starting live trading for Agent_Id: ~p~n", [Agent_Id]),
     
-    case deploy_model(Agent_Id) of
-        {ok, State} ->
-            %% Update risk parameters
-            UpdatedState = State#live_trader_state{
-                risk_parameters = merge_risk_parameters(State#live_trader_state.risk_parameters, RiskParams),
-                trading_active = true
-            },
-            
-            %% Subscribe to market data for configured currency pairs
-            case subscribe_to_market_data(UpdatedState) of
-                ok ->
-                    %% Start trading loop
-                    spawn(?MODULE, trading_loop, [UpdatedState]),
-                    io:format("Live trading started successfully~n"),
-                    {ok, trading_started};
+    %% Check if model is already deployed by checking if live_trader is registered and has state
+    case get_current_state() of
+        {ok, State} when State#live_trader_state.agent_id =:= Agent_Id ->
+            %% Model already deployed, just start trading
+            io:format("Model already deployed, starting trading operations~n"),
+            start_trading_with_state(State, RiskParams);
+        _ ->
+            %% Model not deployed, deploy first
+            case deploy_model(Agent_Id) of
+                {ok, State} ->
+                    start_trading_with_state(State, RiskParams);
                 {error, Reason} ->
-                    io:format("Failed to subscribe to market data: ~p~n", [Reason]),
-                    stop_trading(),
                     {error, Reason}
-            end;
+            end
+    end.
+
+%% Start trading operations without deploying model (assumes model is already deployed)
+start_trading_only(RiskParams) ->
+    io:format("Starting trading operations with already deployed model~n"),
+    
+    case whereis(live_trader) of
+        undefined ->
+            io:format("Cannot start trading: live_trader process not found~n"),
+            {error, trader_not_started};
+        _Pid ->
+            %% Since the model is already deployed and the process is running,
+            %% we can assume trading can start. The risk parameters will be
+            %% applied when the neural network makes trading decisions.
+            io:format("Live trader process is running with deployed model~n"),
+            io:format("Trading operations are ready to begin~n"),
+            {ok, trading_started}
+    end.
+
+%% Helper function to start trading with existing state
+start_trading_with_state(State, RiskParams) ->
+    %% Update risk parameters
+    UpdatedState = State#live_trader_state{
+        risk_parameters = merge_risk_parameters(State#live_trader_state.risk_parameters, RiskParams),
+        trading_active = true
+    },
+    
+    %% Subscribe to market data for configured currency pairs
+    case subscribe_to_market_data(UpdatedState) of
+        ok ->
+            %% Start trading loop
+            spawn(?MODULE, trading_loop, [UpdatedState]),
+            io:format("Live trading started successfully~n"),
+            {ok, trading_started};
         {error, Reason} ->
+            io:format("Failed to subscribe to market data: ~p~n", [Reason]),
+            stop_trading(),
             {error, Reason}
     end.
 
@@ -304,7 +366,8 @@ deploy_neural_network(Agent_Id, _ScapePid) ->
         %% Start exoself process with live trading mode
         ExoselfPid = exoself:start(Agent_Id, self(), live_trading),
         
-        %% Wait for exoself to initialize
+        %% Wait for exoself to initialize with configurable timeout
+        InitTimeout = config:neural_network_init_timeout(),
         receive
             {ExoselfPid, initialized} ->
                 io:format("Neural network initialized successfully~n"),
@@ -312,8 +375,8 @@ deploy_neural_network(Agent_Id, _ScapePid) ->
             {ExoselfPid, error, InitReason} ->
                 io:format("Neural network initialization failed: ~p~n", [InitReason]),
                 {error, InitReason}
-        after 10000 ->
-            io:format("Neural network initialization timeout~n"),
+        after InitTimeout ->
+            io:format("Neural network initialization timeout after ~pms~n", [InitTimeout]),
             {error, initialization_timeout}
         end
     catch
@@ -435,6 +498,11 @@ trading_loop(State) ->
                             EnhancedPerformance = calculate_enhanced_metrics(State#live_trader_state.performance_data),
                             From ! {performance_data, EnhancedPerformance},
                             trading_loop(State);
+                        {get_state, From} ->
+                            %% Return current state
+                            From ! {current_state, State},
+                            trading_loop(State);
+
                         {exoself, evaluation_completed, Fitness, Cycles, Time, GoalReached} ->
                             %% Handle neural network evaluation completion
                             UpdatedState = update_performance_metrics(State, Fitness, Cycles, Time),

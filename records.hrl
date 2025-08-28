@@ -296,6 +296,7 @@
     next_cid = 1,
     connection_status = false,
     last_heartbeat = 0,
-    python_pid = undefined
+    python_pid = undefined,
+    market_tickers = #{}  % Map of Symbol -> #market_tick{}
 }).
 

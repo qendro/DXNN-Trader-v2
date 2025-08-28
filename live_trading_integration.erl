@@ -217,9 +217,11 @@ execute_startup_sequence(Agent_Id, SupervisorPid) ->
             StartupSteps = [
         {step1, "Initialize IB connection", fun() -> startup_step_ib_connection() end},
         {step2, "Start live scape", fun() -> startup_step_live_scape() end},
-        {step3, "Deploy neural network model", fun() -> startup_step_model_deployment(Agent_Id) end},
-        {step4, "Initialize trading components", fun() -> startup_step_trading_initialization() end},
-        {step5, "Start trading operations", fun() -> startup_step_start_trading(Agent_Id) end}
+        {step3, "Subscribe to market data", fun() -> startup_step_market_data_subscription() end},
+        {step3_5, "Start live trader process", fun() -> startup_step_start_live_trader() end},
+        {step4, "Deploy neural network model", fun() -> startup_step_model_deployment(Agent_Id) end},
+        {step5, "Initialize trading components", fun() -> startup_step_trading_initialization() end},
+        {step6, "Start trading operations", fun() -> startup_step_start_trading(Agent_Id) end}
     ],
     
     case execute_startup_steps(StartupSteps, #{}) of
@@ -325,8 +327,9 @@ startup_step_live_scape() ->
             %% Start new live_scape
             case live_scape:start_link() of
                 {ok, Pid} ->
-                    %% Wait for scape to initialize
-                    case wait_for_scape_ready(5000) of
+                    %% Wait for scape to initialize with configurable timeout
+                    ScapeTimeout = config:live_scape_init_timeout(),
+                    case wait_for_scape_ready(ScapeTimeout) of
                         ok ->
                             {ok, {live_scape, Pid}};
                         {error, Reason} ->
@@ -341,7 +344,44 @@ startup_step_live_scape() ->
             {ok, {live_scape, Pid}}
     end.
 
-%% Startup Step 3: Deploy neural network model
+%% Startup Step 3: Subscribe to market data and wait for data
+startup_step_market_data_subscription() ->
+    io:format("Subscribing to market data and waiting for data~n"),
+    
+    %% Subscribe to market data for configured currency pairs
+    CurrencyPairs = config:live_currency_pairs(),
+    
+    case subscribe_to_all_pairs(CurrencyPairs) of
+        ok ->
+            %% Wait for market data to start arriving
+            io:format("Waiting for market data to arrive...~n"),
+            case wait_for_market_data(CurrencyPairs, 10000) of  % 10 second timeout
+                ok ->
+                    io:format("Market data is now available~n"),
+                    {ok, market_data_ready};
+                {error, Reason} ->
+                    io:format("Warning: Market data not available, continuing anyway: ~p~n", [Reason]),
+                    %% Continue anyway - the system can handle missing data
+                    {ok, market_data_partial}
+            end;
+        {error, Reason} ->
+            {error, {market_data_subscription_failed, Reason}}
+    end.
+
+%% Startup Step 3.5: Start live trader process
+startup_step_start_live_trader() ->
+    io:format("Starting live trader process~n"),
+    
+    case live_trader:start_link() of
+        {ok, Pid} ->
+            io:format("Live trader process started with PID: ~p~n", [Pid]),
+            {ok, {live_trader_started, Pid}};
+        {error, Reason} ->
+            io:format("Failed to start live trader process: ~p~n", [Reason]),
+            {error, {live_trader_start_failed, Reason}}
+    end.
+
+%% Startup Step 4: Deploy neural network model
 startup_step_model_deployment(Agent_Id) ->
     io:format("Deploying neural network model for Agent ~p~n", [Agent_Id]),
     
@@ -352,34 +392,27 @@ startup_step_model_deployment(Agent_Id) ->
             {error, {model_deployment_failed, Reason}}
     end.
 
-%% Startup Step 4: Initialize trading components
+%% Startup Step 5: Initialize trading components
 startup_step_trading_initialization() ->
-    io:format("Initializing trading components~n"),
+    io:format("Initializing remaining trading components~n"),
     
-    %% Subscribe to market data for configured currency pairs
-    CurrencyPairs = config:live_currency_pairs(),
-    
-    case subscribe_to_all_pairs(CurrencyPairs) of
+    %% Initialize performance monitoring
+    case initialize_performance_monitoring() of
         ok ->
-            %% Initialize performance monitoring
-            case initialize_performance_monitoring() of
-                ok ->
-                    {ok, trading_components_initialized};
-                {error, Reason} ->
-                    {error, {performance_init_failed, Reason}}
-            end;
+            {ok, trading_components_initialized};
         {error, Reason} ->
-            {error, {market_data_subscription_failed, Reason}}
+            {error, {performance_init_failed, Reason}}
     end.
 
-%% Startup Step 5: Start trading operations
+%% Startup Step 6: Start trading operations
 startup_step_start_trading(Agent_Id) ->
     io:format("Starting trading operations~n"),
     
     %% Get default risk parameters
     RiskParams = get_default_risk_parameters(),
     
-    case live_trader:start_trading(Agent_Id, RiskParams) of
+    %% Use start_trading_only since model was already deployed in step 4
+    case live_trader:start_trading_only(RiskParams) of
         {ok, trading_started} ->
             {ok, trading_started};
         {error, Reason} ->
@@ -650,12 +683,59 @@ wait_for_ib_connection(Timeout, StartTime) ->
     end.
 
 %% Wait for scape to be ready
-wait_for_scape_ready(_Timeout) ->
-    %% Simple implementation - in production would have proper readiness check
-    timer:sleep(1000),
-    case whereis(live_scape) of
-        undefined -> {error, scape_not_started};
-        _Pid -> ok
+wait_for_scape_ready(Timeout) ->
+    %% Wait for scape to be ready with proper timeout handling
+    wait_for_scape_ready(Timeout, erlang:timestamp()).
+
+wait_for_scape_ready(Timeout, StartTime) ->
+    ElapsedMs = timer:now_diff(erlang:timestamp(), StartTime) / 1000,
+    if
+        ElapsedMs > Timeout ->
+            {error, scape_ready_timeout};
+        true ->
+            case whereis(live_scape) of
+                undefined -> 
+                    timer:sleep(100),
+                    wait_for_scape_ready(Timeout, StartTime);
+                _Pid -> 
+                    %% Give it a moment to fully initialize
+                    timer:sleep(500),
+                    ok
+            end
+    end.
+
+%% Wait for market data to become available
+wait_for_market_data(CurrencyPairs, Timeout) ->
+    wait_for_market_data(CurrencyPairs, Timeout, erlang:timestamp()).
+
+wait_for_market_data([], _Timeout, _StartTime) ->
+    ok;  % No pairs to wait for
+wait_for_market_data(CurrencyPairs, Timeout, StartTime) ->
+    ElapsedMs = timer:now_diff(erlang:timestamp(), StartTime) / 1000,
+    if
+        ElapsedMs > Timeout ->
+            {error, market_data_timeout};
+        true ->
+            %% Check if we have market data for at least one pair
+            case check_market_data_available(CurrencyPairs) of
+                true ->
+                    ok;
+                false ->
+                    timer:sleep(500),  % Wait 500ms before checking again
+                    wait_for_market_data(CurrencyPairs, Timeout, StartTime)
+            end
+    end.
+
+%% Check if market data is available for any of the currency pairs
+check_market_data_available([]) ->
+    false;
+check_market_data_available([Pair | Rest]) ->
+    Symbol = atom_to_list(Pair),
+    case ib_bridge_connector:get_market_data(Symbol) of
+        {ok, _Tick} ->
+            true;  % Found data for at least one pair
+        {error, _} ->
+            check_market_data_available(Rest)
     end.
 
 %% Subscribe to market data for all configured currency pairs

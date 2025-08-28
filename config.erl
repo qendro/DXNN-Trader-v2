@@ -16,7 +16,7 @@ buy_money_fixed() -> 100.                    % Options: any positive number (fix
 min_profit_threshold() -> 0.000150.          % Options: 0.00001-0.01 (minimum profit in pips)
 
 %% === Data Parameters ===
-primary_currency_pair() -> 'EURUSD15'.        % Options: 'EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60'
+primary_currency_pair() -> 'EURUSD1'.         % Options: 'EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60'
 data_start_index() -> 1000.                  % Options: 1-N (starting row for training data)
 data_end_index() -> 200.                     % Options: data_start_index+1 to N (ending row for training)
 benchmark_end_index() -> last.               % Options: last, or specific number (ending row for benchmark)
@@ -290,4 +290,34 @@ live_data_pull_timeout() -> 10000.  % 10 seconds timeout for IB data requests
 live_data_freshness_threshold() -> 300.  % 5 minutes - data considered stale after this
 live_data_pull_range_minutes() -> 20.  % Pull 20 minutes of data around requested time
 live_data_fallback_strategy() -> historical.  % Options: historical, latest_available, fail
+
+%% ============================================================================
+%% Neural Network Initialization Timeouts
+%% ============================================================================
+
+%% Neural network deployment timeouts (in milliseconds)
+neural_network_init_timeout() -> 60000.      % 60 seconds for neural network initialization
+neural_network_deployment_timeout() -> 45000. % 45 seconds for model deployment
+neural_network_startup_timeout() -> 120000.   % 2 minutes for complete startup process
+neural_network_sensor_init_timeout() -> 30000. % 30 seconds for sensor initialization
+neural_network_actuator_init_timeout() -> 15000. % 15 seconds for actuator initialization
+
+%% Live trading startup timeouts (in milliseconds)
+live_trading_startup_timeout() -> 180000.    % 3 minutes for complete live trading startup
+live_scape_init_timeout() -> 45000.          % 45 seconds for live scape initialization
+ib_connection_timeout() -> 30000.            % 30 seconds for IB connection establishment
+ib_handshake_timeout() -> 20000.             % 20 seconds for IB handshake completion
+live_data_initialization_timeout() -> 60000. % 60 seconds for live data table initialization
+
+%% Process supervision timeouts
+exoself_startup_timeout() -> 90000.          % 90 seconds for exoself process startup
+cortex_initialization_timeout() -> 45000.    % 45 seconds for cortex initialization
+neuron_spawn_timeout() -> 30000.             % 30 seconds for neuron spawning
+sensor_actuator_link_timeout() -> 25000.     % 25 seconds for sensor/actuator linking
+
+%% Retry and backoff configuration
+neural_network_init_retries() -> 3.          % Number of retries for neural network initialization
+neural_network_retry_delay() -> 5000.        % 5 seconds delay between retries
+live_data_init_retries() -> 2.               % Number of retries for live data initialization
+ib_connection_retries() -> 5.                % Number of retries for IB connection
 

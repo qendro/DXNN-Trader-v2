@@ -52,15 +52,9 @@ def write_msg(obj):
         logger.error(f"Error writing message: {e}")
 
 def log_info(msg, *args):
-    """Log to both Python logger and Erlang"""
+    """Log to Python logger only (not to Erlang to reduce noise)"""
     formatted_msg = msg % args if args else msg
     logger.info(formatted_msg)
-    write_msg({
-        "v": 1,
-        "type": "log",
-        "level": "info",
-        "message": formatted_msg
-    })
 
 def send_error(cid, code, message):
     """Send error message with proper framing"""
@@ -156,14 +150,13 @@ async def handle_connect(cmd, cid):
     
     try:
         log_info("Connecting to IB %s:%d (client_id=%d)", host, port, client_id)
-        log_info("Running in Docker - connecting to host machine TWS")
         
         # Connect with longer timeout for Docker networking
         await ib.connectAsync(host, port, clientId=client_id, timeout=10)
         
         # Enable delayed data for paper trading
         ib.reqMarketDataType(3)  # 1=real-time, 3=delayed
-        log_info("Market data type set to delayed (3)")
+        log_info("Set market data type to delayed (3)")
         
         write_msg({"v": 1, "type": "connected", "cid": cid})
         log_info("Connected to IB successfully")
@@ -174,7 +167,6 @@ async def handle_connect(cmd, cid):
         
     except Exception as e:
         log_info("Connection failed: %s", str(e))
-        log_info("Make sure TWS is running on host with API enabled (port 7497)")
         send_error(cid, "IB_CONN", str(e))
 
 async def handle_subscribe(cmd, cid):
@@ -187,7 +179,6 @@ async def handle_subscribe(cmd, cid):
         contract = parse_symbol(symbol)
         ticker = ib.reqMktData(contract)
         write_msg({"v": 1, "type": "subscribed", "cid": cid, "symbol": symbol})
-        log_info("Market data subscription successful for %s", symbol)
         
     except Exception as e:
         log_info("Subscription failed for %s: %s", symbol, str(e))
@@ -296,15 +287,17 @@ def on_pending_tickers(tickers):
         for ticker in tickers:
             # Use symbol formatter for consistent output
             symbol = format_symbol_for_output(ticker.contract.symbol)
-            write_msg({
-                "v": 1,
-                "type": "tick",
-                "symbol": symbol,
-                "bid": n(ticker.bid),
-                "ask": n(ticker.ask),
-                "last": n(ticker.last),
-                "volume": n(ticker.volume)
-            })
+            # Only send tick if we have valid data
+            if ticker.bid is not None or ticker.ask is not None or ticker.last is not None:
+                write_msg({
+                    "v": 1,
+                    "type": "tick",
+                    "symbol": symbol,
+                    "bid": n(ticker.bid),
+                    "ask": n(ticker.ask),
+                    "last": n(ticker.last),
+                    "volume": n(ticker.volume)
+                })
     except Exception as e:
         log_info("Tick processing error: %s", str(e))
 

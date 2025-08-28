@@ -115,6 +115,15 @@ prep(Agent_Id,PM_PId,OpMode)->
 		opmode=OpMode
 	},
 	%io:format("S:~p~n",[{S,OpMode}]),
+	
+	%% Send initialization confirmation for live trading mode
+	case OpMode of
+		live_trading ->
+			S#state.pm_pid ! {self(), initialized};
+		_ ->
+			ok
+	end,
+	
 	loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 

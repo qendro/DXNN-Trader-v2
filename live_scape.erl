@@ -16,8 +16,8 @@
 -define(MAX_BUFFER_SIZE, 1000).
 
 %% Live ETS table definitions
--define(LIVE_TABLES, [live_EURUSD1, live_EURUSD15, live_EURUSD30, live_EURUSD60]).
--define(HISTORICAL_TABLES, ['EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60']).
+-define(LIVE_TABLES, [live_EURUSD1]).
+-define(HISTORICAL_TABLES, ['EURUSD1']).
 
 %% Technical record definition (matching fx.erl)
 -record(technical,{
@@ -27,6 +27,9 @@
     low,
     close,
     volume}).
+
+%% State record definition (matching fx.erl for compatibility)
+-record(state,{table_name,feature,index_start,index_end,index,price_list=[]}).
 
 %% ============================================================================
 %% Public API - Scape Interface
@@ -89,9 +92,7 @@ live_sim(ExoSelf_PId) ->
 live_sim(ExoSelf_PId, State) ->
     receive
         {From, sense, TableName, Feature, Parameters, Start, Finish} ->
-            %% Handle sensor requests for market data with error handling
-            io:format("Live scape received sense request: ~p ~p ~p~n", 
-                     [TableName, Feature, Parameters]),
+            %% Handle sensor requests for market data with error handling (silent processing)
             
             try
                 {Result, UpdatedState} = handle_sense_request_with_error_handling(TableName, Feature, Parameters, State),
@@ -116,7 +117,29 @@ live_sim(ExoSelf_PId, State) ->
             
         {From, trade, TableName, TradeSignal} ->
             %% Handle trade execution requests with comprehensive error handling
-            io:format("Live scape received trade signal: ~p~n", [TradeSignal]),
+            %% Enhanced trading decision output
+            DecisionStr = case TradeSignal of
+                1 -> "BUY";
+                -1 -> "SELL"; 
+                0 -> "HOLD";
+                _ -> "INVALID"
+            end,
+            
+            %% Get current market data if available
+            CurrentPrice = case State#live_state.price_list of
+                [LatestPrice | _] -> LatestPrice;
+                [] -> 0.0
+            end,
+            
+            PrevPC = State#live_state.previous_pc,
+            Position = case State#live_state.current_position of
+                1 -> "LONG";
+                -1 -> "SHORT";
+                0 -> "FLAT"
+            end,
+            
+            io:format("🤖 TRADING DECISION: ~s | Signal: ~.4f | Price: ~.5f | Trend: ~.4f% | Position: ~s~n", 
+                     [DecisionStr, TradeSignal, CurrentPrice, PrevPC * 100, Position]),
             
             try
                 {Fitness, HaltFlag, UpdatedState} = handle_trade_request_with_error_handling(TradeSignal, State),
@@ -336,7 +359,7 @@ request_fresh_market_data() ->
 %% Validate trade conditions before execution
 validate_trade_conditions(TradeSignal, State) ->
     %% Check if we have valid market data
-    case get_current_market_price(atom_to_list(State#live_state.table_name)) of
+    case get_current_market_price(get_currency_pair_from_table_name(State#live_state.table_name)) of
         {ok, _Price} ->
             %% Check if signal is valid
             case is_valid_trade_signal(TradeSignal) of
@@ -497,6 +520,122 @@ notify_market_data_failure(Reason) ->
     end.
 
 %% ============================================================================
+%% Sensor Interface Functions (delegated from fx.erl)
+%% ============================================================================
+
+%% Initialize state for live data requests (called from fx.erl)
+init_state(S, TableName, Feature, live_data, live_data) ->
+    %% Only log initialization once per table to avoid spam
+    case get({initialized, TableName}) of
+        true -> ok;
+        _ -> 
+            io:format("Initializing live data state for ~p~n", [TableName]),
+            put({initialized, TableName}, true)
+    end,
+    
+    %% Ensure live tables are initialized (only once)
+    case get(live_tables_initialized) of
+        true -> ok;
+        _ ->
+            case config:live_trading_enabled() of
+                true ->
+                    init_live_tables(),
+                    put(live_tables_initialized, true);
+                false ->
+                    ok
+            end
+    end,
+    
+    %% Get live table name
+    LiveTableName = get_live_table_name(TableName),
+    
+    %% Ensure live table has data
+    case ensure_live_table_with_data(LiveTableName, TableName) of
+        {ok, {Index_Start, Index_End}} ->
+            %% Return fx.erl compatible state record with live data range
+            S#state{
+                table_name = LiveTableName,
+                feature = Feature,
+                index_start = Index_Start,
+                index_end = Index_End,
+                index = Index_Start,
+                price_list = []
+            };
+        {error, Reason} ->
+            io:format("Live data initialization failed: ~p, using fallback~n", [Reason]),
+            %% Fallback to a reasonable range using fx.erl state format
+            S#state{
+                table_name = TableName,
+                feature = Feature,
+                index_start = 1,
+                index_end = 100,
+                index = 1,
+                price_list = []
+            }
+    end.
+
+%% Sense function for live data (delegated from fx.erl)
+sense(S, Parameters) ->
+    case Parameters of
+        [HRes, VRes, graph_sensor] ->
+            handle_pci_sensor(S#state.table_name, HRes, VRes, S);
+        [HRes, list_sensor] ->
+            handle_pli_sensor(S#state.table_name, HRes, S);
+        _ ->
+            io:format("Unknown sensor parameters: ~p~n", [Parameters]),
+            {[], S}
+    end.
+
+%% Lookup function for live data (delegated from fx.erl)
+lookup(TableName, Index) ->
+    case is_live_table(TableName) of
+        true ->
+            lookup_live_with_pull(TableName, Index);
+        false ->
+            %% Delegate to fx.erl for historical data
+            fx:lookup(TableName, Index)
+    end.
+
+%% Next function for live data (delegated from fx.erl)
+next(TableName, Index) ->
+    case is_live_table(TableName) of
+        true ->
+            next_live(TableName, Index);
+        false ->
+            %% Delegate to fx.erl for historical data
+            fx:next(TableName, Index)
+    end.
+
+%% Previous function for live data (delegated from fx.erl)
+prev(TableName, CurrentIndex, Direction, Count) ->
+    case is_live_table(TableName) of
+        true ->
+            %% Implement live table prev navigation
+            prev_live(TableName, CurrentIndex, Direction, Count);
+        false ->
+            %% Delegate to fx.erl for historical data
+            fx:prev(TableName, CurrentIndex, Direction, Count)
+    end.
+
+%% Previous navigation for live tables
+prev_live(TableName, CurrentIndex, prev, 0) ->
+    CurrentIndex;
+prev_live(TableName, CurrentIndex, prev, Count) when Count > 0 ->
+    case ets:prev(TableName, CurrentIndex) of
+        '$end_of_table' ->
+            CurrentIndex;
+        PrevIndex ->
+            prev_live(TableName, PrevIndex, prev, Count - 1)
+    end;
+prev_live(TableName, CurrentIndex, next, Count) when Count > 0 ->
+    case ets:next(TableName, CurrentIndex) of
+        '$end_of_table' ->
+            CurrentIndex;
+        NextIndex ->
+            prev_live(TableName, NextIndex, next, Count - 1)
+    end.
+
+%% ============================================================================
 %% Sensor Request Handling
 %% ============================================================================
 
@@ -521,8 +660,10 @@ handle_live_sense_request(TableName, Feature, Parameters, State) ->
             %% Use live table with same logic as historical
             handle_historical_sense_request(LiveTableName, Feature, Parameters, State);
         {error, Reason} ->
-            io:format("Live data not available: ~p, using historical~n", [Reason]),
-            handle_historical_sense_request(TableName, Feature, Parameters, State)
+            io:format("Live data not available: ~p, waiting for data...~n", [Reason]),
+            %% Wait for live data instead of falling back to historical
+            timer:sleep(1000),  % Wait 1 second
+            handle_live_sense_request(TableName, Feature, Parameters, State)
     end.
 
 %% Handle historical data sensor requests (existing logic)
@@ -539,32 +680,71 @@ handle_historical_sense_request(TableName, Feature, Parameters, State) ->
 
 %% Handle fx_PLI sensor - returns list of closing prices
 handle_pli_sensor(TableName, HRes, State) ->
-    %% Get live price data from IB connector
-    PriceList = get_live_price_list(TableName, HRes),
+    %% Get live price data using fx.erl compatible approach
+    Index = State#state.index,
+    PriceListPs = State#state.price_list,
     
-    %% Extract closing prices and normalize
-    ClosePrices = [Close || {_Open, Close, _High, _Low} <- PriceList],
-    NormalizedPrices = normalize_vector(ClosePrices),
+    case lists:keyfind(HRes, 2, PriceListPs) of
+        false ->
+            %% Get trailing index and build price list
+            Trailing_Index = prev_live(TableName, Index, prev, HRes-1),
+            U_PList = get_live_price_list_fx_format(TableName, Trailing_Index, HRes, []),
+            U_PriceListPs = [{U_PList, HRes} | PriceListPs];
+        {PList, HRes} ->
+            %% Update with current data
+            case lookup(TableName, Index) of
+                R when is_record(R, technical) ->
+                    U_PList = [{R#technical.open, R#technical.close, R#technical.high, R#technical.low} | lists:sublist(PList, HRes-1)],
+                    U_PriceListPs = lists:keyreplace(HRes, 2, PriceListPs, {U_PList, HRes});
+                _ ->
+                    %% Use existing list if lookup fails
+                    U_PList = PList,
+                    U_PriceListPs = PriceListPs
+            end
+    end,
+    
+    %% Extract closing prices
+    ClosePrices = [Close || {_Open, Close, _High, _Low} <- U_PList],
     
     %% Update state with price list for caching
-    UpdatedState = update_price_list_cache(State, HRes, PriceList),
+    UpdatedState = State#state{price_list = U_PriceListPs},
     
-    {NormalizedPrices, UpdatedState}.
+    {ClosePrices, UpdatedState}.
 
 %% Handle fx_PCI sensor - returns plane-encoded price data
 handle_pci_sensor(TableName, HRes, VRes, State) ->
-    %% Get live price data from IB connector
-    PriceList = get_live_price_list(TableName, HRes),
+    %% Get live price data using fx.erl compatible approach
+    Index = State#state.index,
+    PriceListPs = State#state.price_list,
+    
+    case lists:keyfind(HRes, 2, PriceListPs) of
+        false ->
+            %% Get trailing index and build price list
+            Trailing_Index = prev_live(TableName, Index, prev, HRes-1),
+            U_PList = get_live_price_list_fx_format(TableName, Trailing_Index, HRes, []),
+            U_PriceListPs = [{U_PList, HRes} | PriceListPs];
+        {PList, HRes} ->
+            %% Update with current data
+            case lookup(TableName, Index) of
+                R when is_record(R, technical) ->
+                    U_PList = [{R#technical.open, R#technical.close, R#technical.high, R#technical.low} | lists:sublist(PList, HRes-1)],
+                    U_PriceListPs = lists:keyreplace(HRes, 2, PriceListPs, {U_PList, HRes});
+                _ ->
+                    %% Use existing list if lookup fails
+                    U_PList = PList,
+                    U_PriceListPs = PriceListPs
+            end
+    end,
     
     %% Calculate vertical range for encoding
-    HighPrices = [High || {_Open, _Close, High, _Low} <- PriceList],
-    LowPrices = [Low || {_Open, _Close, _High, Low} <- PriceList],
-    
-    case {HighPrices, LowPrices} of
-        {[], []} ->
+    case U_PList of
+        [] ->
             %% No data available
             {lists:duplicate(HRes * VRes, -1), State};
         _ ->
+            HighPrices = [High || {_Open, _Close, High, _Low} <- U_PList],
+            LowPrices = [Low || {_Open, _Close, _High, Low} <- U_PList],
+            
             LVMax1 = lists:max(HighPrices),
             LVMin1 = lists:min(LowPrices),
             LVMax = LVMax1 + abs(LVMax1 - LVMin1) / 20,
@@ -572,11 +752,11 @@ handle_pci_sensor(TableName, HRes, VRes, State) ->
             VStep = (LVMax - LVMin) / VRes,
             V_StartPos = LVMin + VStep / 2,
             
-            %% Encode price data to plane format
-            EncodedData = encode_to_plane(HRes * VRes, PriceList, V_StartPos, VStep, []),
+            %% Encode price data to plane format (using fx.erl compatible function)
+            EncodedData = encode_to_plane_fx_format(HRes * VRes, {U_PList, U_PList}, V_StartPos, VStep, []),
             
             %% Update state with price list for caching
-            UpdatedState = update_price_list_cache(State, HRes, PriceList),
+            UpdatedState = State#state{price_list = U_PriceListPs},
             
             {EncodedData, UpdatedState}
     end.
@@ -638,7 +818,7 @@ handle_trade_request(TradeSignal, State) ->
 %% Open a new trading position with comprehensive risk management
 open_position(Signal, State) ->
     %% Get current market price from IB connector
-    Symbol = atom_to_list(State#live_state.table_name),
+    Symbol = get_currency_pair_from_table_name(State#live_state.table_name),
     
     case get_current_market_price(Symbol) of
         {ok, Price} ->
@@ -731,7 +911,7 @@ calculate_risk_adjusted_position_size(Symbol, AccountBalance, RiskParams, Signal
     PositionValue = AccountBalance * EffectivePositionSize,
     
     %% Convert to quantity (simplified - in production would use current price and lot sizes)
-    case get_current_market_price(Symbol) of
+    case get_current_market_price(get_currency_pair_from_table_name(list_to_atom(Symbol))) of
         {ok, CurrentPrice} ->
             LotSize = config:account_lot_size(),
             Leverage = config:account_leverage(),
@@ -809,7 +989,7 @@ close_position(State) ->
     Position = State#live_state.current_position,
     EntryPrice = State#live_state.entry_price,
     
-    case get_current_market_price(Symbol) of
+    case get_current_market_price(get_currency_pair_from_table_name(State#live_state.table_name)) of
         {ok, CurrentPrice} ->
             %% Calculate P&L and risk metrics
             PriceChange = CurrentPrice - EntryPrice,
@@ -965,7 +1145,7 @@ determine_halt_flag(NewBalance, Profit, State) ->
 
 %% Get live price data from IB connector and format for sensors
 get_live_price_list(TableName, HRes) ->
-    Symbol = atom_to_list(TableName),
+    Symbol = get_currency_pair_from_table_name(TableName),
     
     %% Try to get OHLC data from IB connector
     case ib_bridge_connector:get_ohlc_data(Symbol, 60) of  % 1-minute resolution
@@ -978,8 +1158,22 @@ get_live_price_list(TableName, HRes) ->
             %% Not enough data - pad with last known values
             case OHLCList of
                 [] ->
-                    %% No data at all - return dummy data
-                    lists:duplicate(HRes, {1.0, 1.0, 1.0, 1.0});
+                    %% No OHLC data - try to get current market price
+                    case ib_bridge_connector:get_market_data(Symbol) of
+                        {ok, Tick} ->
+                            Price = case Tick#market_tick.last of
+                                undefined -> 
+                                    case Tick#market_tick.bid of
+                                        undefined -> Tick#market_tick.ask;
+                                        Bid -> Bid
+                                    end;
+                                Last -> Last
+                            end,
+                            lists:duplicate(HRes, {Price, Price, Price, Price});
+                        {error, _} ->
+                            io:format("ERROR: No market data available for ~p~n", [Symbol]),
+                            exit({no_market_data, Symbol})
+                    end;
                 [LastOHLC | _] ->
                     %% Pad with last known values
                     LastTuple = {LastOHLC#live_ohlc.open, LastOHLC#live_ohlc.close,
@@ -997,15 +1191,43 @@ get_live_price_list(TableName, HRes) ->
                     Price = case Tick#market_tick.last of
                         undefined -> 
                             case Tick#market_tick.bid of
-                                undefined -> 1.0;  % Fallback price
+                                undefined -> 
+                                    case Tick#market_tick.ask of
+                                        undefined -> 
+                                            io:format("ERROR: No price data available from IB for ~p~n", [Symbol]),
+                                            exit({no_market_data, Symbol});
+                                        Ask -> Ask
+                                    end;
                                 Bid -> Bid
                             end;
                         Last -> Last
                     end,
                     lists:duplicate(HRes, {Price, Price, Price, Price});
-                {error, _} ->
-                    %% No data available - return dummy data
-                    lists:duplicate(HRes, {1.0, 1.0, 1.0, 1.0})
+                {error, no_data_available} ->
+                    %% Try to subscribe and wait briefly for data
+                    io:format("No market data for ~p, attempting subscription...~n", [Symbol]),
+                    ib_bridge_connector:subscribe_market_data(Symbol),
+                    timer:sleep(1000),  % Wait 1 second for data
+                    case ib_bridge_connector:get_market_data(Symbol) of
+                        {ok, Tick} ->
+                            Price = case Tick#market_tick.last of
+                                undefined -> 
+                                    case Tick#market_tick.bid of
+                                        undefined -> Tick#market_tick.ask;
+                                        Bid -> Bid
+                                    end;
+                                Last -> Last
+                            end,
+                            lists:duplicate(HRes, {Price, Price, Price, Price});
+                        {error, _} ->
+                            io:format("Still waiting for market data for ~p, retrying...~n", [Symbol]),
+                            timer:sleep(2000),  % Wait 2 seconds
+                            get_live_price_list(TableName, HRes)  % Retry the whole function
+                    end;
+                {error, Other} ->
+                    io:format("IB Bridge error for ~p: ~p, retrying...~n", [Symbol, Other]),
+                    timer:sleep(2000),  % Wait 2 seconds
+                    get_live_price_list(TableName, HRes)  % Retry the whole function
             end
     end.
 
@@ -1026,6 +1248,62 @@ get_current_market_price(Symbol) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+%% ============================================================================
+%% FX.erl Compatible Helper Functions
+%% ============================================================================
+
+%% Get live price list in fx.erl format
+get_live_price_list_fx_format(_Table, EndKey, 0, Acc) ->
+    Acc;
+get_live_price_list_fx_format(_Table, '$end_of_table', _Index, Acc) ->
+    Acc;
+get_live_price_list_fx_format(Table, Key, Index, Acc) ->
+    case lookup(Table, Key) of
+        R when is_record(R, technical) ->
+            PriceTuple = {R#technical.open, R#technical.close, R#technical.high, R#technical.low},
+            get_live_price_list_fx_format(Table, next(Table, Key), Index-1, [PriceTuple | Acc]);
+        _ ->
+            %% If lookup fails, try to get current market data
+            case ib_bridge_connector:get_market_data('EURUSD') of
+                {ok, Tick} ->
+                    Price = case Tick#market_tick.last of
+                        undefined -> 
+                            case Tick#market_tick.bid of
+                                undefined -> Tick#market_tick.ask;
+                                Bid -> Bid
+                            end;
+                        Last -> Last
+                    end,
+                    RealTuple = {Price, Price, Price, Price},
+                    get_live_price_list_fx_format(Table, next(Table, Key), Index-1, [RealTuple | Acc]);
+                {error, _} ->
+                    %% Last resort - skip this data point
+                    get_live_price_list_fx_format(Table, next(Table, Key), Index-1, Acc)
+            end
+    end.
+
+%% Encode to plane format (fx.erl compatible)
+encode_to_plane_fx_format(Index, {[{Open, Close, High, Low} | VList], MemList}, VPos, VStep, Acc) ->
+    {BHigh, BLow} = case Open > Close of
+        true -> {Open, Close};
+        false -> {Close, Open}
+    end,
+    
+    O = case (VPos + VStep/2 > BLow) and (VPos - VStep/2 =< BHigh) of
+        true -> 1;
+        false ->
+            case (VPos + VStep/2 > Low) and (VPos - VStep/2 =< High) of
+                true -> 0;
+                false -> -1
+            end
+    end,
+    
+    encode_to_plane_fx_format(Index-1, {VList, MemList}, VPos, VStep, [O | Acc]);
+encode_to_plane_fx_format(0, {[], _MemList}, _VPos, _VStep, Acc) ->
+    Acc;
+encode_to_plane_fx_format(Index, {[], MemList}, VPos, VStep, Acc) ->
+    encode_to_plane_fx_format(Index, {MemList, MemList}, VPos + VStep, VStep, Acc).
 
 %% ============================================================================
 %% Data Processing Utilities
@@ -1170,17 +1448,38 @@ wait_for_order_fill(TimeoutMs) ->
 %% ============================================================================
 
 %% Initialize live trading tables
+%% Always recreate live tables (delete if present, then new)
 init_live_tables() ->
-    io:format("Initializing live FX tables:~p~n", [?LIVE_TABLES]),
-    [init_live_table(TableName) || TableName <- ?LIVE_TABLES],
-    io:format("Live FX tables initialized~n").
+    io:format("Initializing live FX tables: ~p~n", [?LIVE_TABLES]),
+    lists:foreach(
+      fun(TableName) ->
+          case ets:info(TableName) of
+              undefined -> ok;
+              _ -> ets:delete(TableName)
+          end,
+          ets:new(TableName, [ordered_set, public, named_table, {keypos, 2}])
+      end,
+      ?LIVE_TABLES
+    ),
+    io:format("Live FX tables initialized~n"),
+    ok.
+
 
 init_live_table(TableName) ->
     ets:new(TableName, [ordered_set, public, named_table, {keypos, 2}]).
 
-%% Get live table name from historical table name
-get_live_table_name(TableName) ->
-    list_to_atom("live_" ++ atom_to_list(TableName)).
+%% Get live table name from historical table name (accepts atom or string)
+get_live_table_name(Name) when is_atom(Name) ->
+    list_to_atom("live_" ++ atom_to_list(Name));
+get_live_table_name(Name) when is_list(Name) ->
+    "live_" ++ Name.
+
+%% Convert IB currency pair format to historical table format
+convert_ib_pair_to_historical_table('EUR.USD') -> 'EURUSD1';
+convert_ib_pair_to_historical_table("EUR.USD") -> 'EURUSD1';
+convert_ib_pair_to_historical_table('EURUSD') -> 'EURUSD1';
+convert_ib_pair_to_historical_table("EURUSD") -> 'EURUSD1';
+convert_ib_pair_to_historical_table(Other) -> Other.  % Pass through if no conversion needed
 
 %% Check if table is a live table
 is_live_table(TableName) ->
@@ -1206,11 +1505,6 @@ get_historical_table_name(LiveTableName) ->
         HistoricalName -> list_to_atom(HistoricalName)
     end.
 
-%% Get live table name from historical table name
-get_live_table_name(HistoricalTableName) ->
-    TableNameStr = atom_to_list(HistoricalTableName),
-    list_to_atom("live_" ++ TableNameStr).
-
 %% ============================================================================
 %% Live Data Conversion Functions
 %% ============================================================================
@@ -1218,7 +1512,7 @@ get_live_table_name(HistoricalTableName) ->
 %% Convert IB OHLC data to technical record format
 convert_ohlc_to_technical(OHLC) ->
     #technical{
-        id = {OHLC#live_ohlc.timestamp, 60},  % 60-second sampling rate
+        id = OHLC#live_ohlc.timestamp,  % Use timestamp directly (already includes sampling rate)
         open = OHLC#live_ohlc.open,
         high = OHLC#live_ohlc.high,
         low = OHLC#live_ohlc.low,
@@ -1251,8 +1545,13 @@ ensure_live_table_with_data(LiveTableName, HistoricalTableName) ->
         true ->
             %% Use existing data
             Index_End = ets:last(LiveTableName),
-            Index_Start = max(1, Index_End - 99),
-            {ok, {Index_Start, Index_End}};
+            case Index_End of
+                '$end_of_table' ->
+                    {error, no_live_data};
+                _ ->
+                    Index_Start = find_start_index(LiveTableName, Index_End, 99),
+                    {ok, {Index_Start, Index_End}}
+            end;
         false ->
             %% Pull fresh data from IB Bridge
             pull_live_data_from_ib(LiveTableName, HistoricalTableName)
@@ -1290,16 +1589,23 @@ pull_live_data_from_ib(LiveTableName, HistoricalTableName) ->
             
             %% Return data range
             Index_End = ets:last(LiveTableName),
-            Index_Start = max(1, Index_End - 99),
-            {ok, {Index_Start, Index_End}};
+            case Index_End of
+                '$end_of_table' ->
+                    {error, no_live_data};
+                _ ->
+                    Index_Start = find_start_index(LiveTableName, Index_End, 99),
+                    {ok, {Index_Start, Index_End}}
+            end;
         {ok, []} ->
-            %% No live data available, fallback to historical
-            io:format("No live data available for ~p, using historical~n", [CurrencyPair]),
-            fallback_to_historical_data(LiveTableName, HistoricalTableName);
+            %% No live data available, wait and retry
+            io:format("No live data available for ~p, waiting...~n", [CurrencyPair]),
+            timer:sleep(2000),  % Wait 2 seconds
+            pull_live_data_from_ib(LiveTableName, HistoricalTableName);
         {error, Reason} ->
-            %% IB error, fallback to historical
-            io:format("IB Bridge error for ~p: ~p, using historical~n", [CurrencyPair, Reason]),
-            fallback_to_historical_data(LiveTableName, HistoricalTableName)
+            %% IB error, wait and retry
+            io:format("IB Bridge error for ~p: ~p, retrying...~n", [CurrencyPair, Reason]),
+            timer:sleep(2000),  % Wait 2 seconds
+            pull_live_data_from_ib(LiveTableName, HistoricalTableName)
     end.
 
 %% Get currency pair string from live table name
@@ -1307,11 +1613,18 @@ get_currency_pair_from_table_name(LiveTableName) ->
     TableNameStr = atom_to_list(LiveTableName),
     case string:prefix(TableNameStr, "live_") of
         nomatch -> 
-            %% Fallback to table name itself
-            TableNameStr;
-        CurrencyPair -> 
-            CurrencyPair
+            %% Convert historical table names to IB format
+            convert_to_ib_symbol(TableNameStr);
+        Remainder -> 
+            %% Convert live table names to IB format
+            convert_to_ib_symbol(Remainder)
     end.
+
+%% Convert internal table names to IB symbol format
+convert_to_ib_symbol("EURUSD" ++ _) -> "EUR.USD";
+convert_to_ib_symbol("GBPUSD" ++ _) -> "GBP.USD";
+convert_to_ib_symbol("USDJPY" ++ _) -> "USD.JPY";
+convert_to_ib_symbol(Other) -> Other.
 
 %% Fallback to historical data when live data is not available
 fallback_to_historical_data(LiveTableName, HistoricalTableName) ->
@@ -1319,27 +1632,64 @@ fallback_to_historical_data(LiveTableName, HistoricalTableName) ->
         undefined ->
             {error, no_historical_data};
         _ ->
-            %% Copy last 100 data points from historical table
+            %% Get the last 100 data points from historical table
             LastIndex = ets:last(HistoricalTableName),
-            StartIndex = max(1, LastIndex - 99),
-            copy_historical_to_live(HistoricalTableName, LiveTableName, StartIndex, LastIndex),
-            {ok, {StartIndex, LastIndex}}
+            case LastIndex of
+                '$end_of_table' ->
+                    {error, no_historical_data};
+                _ ->
+                    %% Navigate backwards to find start index (get last 100 records)
+                    StartIndex = find_start_index(HistoricalTableName, LastIndex, 99),
+                    copy_historical_to_live(HistoricalTableName, LiveTableName, StartIndex, LastIndex),
+                    {ok, {StartIndex, LastIndex}}
+            end
+    end.
+
+%% Find start index by navigating backwards N steps
+find_start_index(TableName, CurrentIndex, 0) ->
+    CurrentIndex;
+find_start_index(TableName, CurrentIndex, StepsRemaining) ->
+    case ets:prev(TableName, CurrentIndex) of
+        '$end_of_table' ->
+            CurrentIndex;  % Reached beginning of table
+        PrevIndex ->
+            find_start_index(TableName, PrevIndex, StepsRemaining - 1)
     end.
 
 %% Copy data from historical table to live table
 copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex) ->
-    copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, StartIndex).
+    copy_historical_range(HistoricalTable, LiveTable, StartIndex, EndIndex).
 
-copy_historical_to_live(_HistoricalTable, _LiveTable, _StartIndex, EndIndex, CurrentIndex) 
-    when CurrentIndex > EndIndex ->
-    ok;
-copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, CurrentIndex) ->
+%% Copy records from StartIndex to EndIndex using ETS navigation
+copy_historical_range(HistoricalTable, LiveTable, CurrentIndex, EndIndex) ->
     case ets:lookup(HistoricalTable, CurrentIndex) of
         [Record] ->
             ets:insert(LiveTable, Record),
-            copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, CurrentIndex + 1);
+            case CurrentIndex of
+                EndIndex ->
+                    ok;  % Reached end index
+                _ ->
+                    %% Get next index and continue
+                    case ets:next(HistoricalTable, CurrentIndex) of
+                        '$end_of_table' ->
+                            ok;  % Reached end of table
+                        NextIndex ->
+                            copy_historical_range(HistoricalTable, LiveTable, NextIndex, EndIndex)
+                    end
+            end;
         [] ->
-            copy_historical_to_live(HistoricalTable, LiveTable, StartIndex, EndIndex, CurrentIndex + 1)
+            %% Record not found, try next index
+            case CurrentIndex of
+                EndIndex ->
+                    ok;  % Reached end index
+                _ ->
+                    case ets:next(HistoricalTable, CurrentIndex) of
+                        '$end_of_table' ->
+                            ok;  % Reached end of table
+                        NextIndex ->
+                            copy_historical_range(HistoricalTable, LiveTable, NextIndex, EndIndex)
+                    end
+            end
     end.
 
 %% ============================================================================
@@ -1407,11 +1757,13 @@ fulfill_pending_data_requests() ->
 
 %% Update live table with data from IB Bridge
 update_live_table_with_ib_data(CurrencyPair) ->
-    Symbol = atom_to_list(CurrencyPair),
-    LiveTableName = get_live_table_name(CurrencyPair),
+    %% Convert IB format to historical table format
+    HistoricalTableName = convert_ib_pair_to_historical_table(CurrencyPair),
+    Symbol = get_currency_pair_from_table_name(HistoricalTableName),
+    LiveTableName = get_live_table_name(HistoricalTableName),
     
     %% Get recent data from IB Bridge
-    case ib_bridge_connector:get_recent_ohlc_data(Symbol, 60, 100) of  % Last 100 bars
+    case ib_bridge_connector:get_ohlc_data(Symbol, 60) of  % 1-minute bars
         {ok, OHLCList} when length(OHLCList) > 0 ->
             %% Convert and insert new data
             lists:foreach(fun(OHLC) ->
@@ -1552,17 +1904,53 @@ get_live_price_list(LiveTableName, HRes, CurrentIndex, Acc) ->
     case ets:lookup(LiveTableName, CurrentIndex) of
         [#technical{open=Open, close=Close, high=High, low=Low}] ->
             PriceTuple = {Open, Close, High, Low},
-            get_live_price_list(LiveTableName, HRes - 1, CurrentIndex - 1, [PriceTuple | Acc]);
+            %% Get previous index using ETS navigation
+            case ets:prev(LiveTableName, CurrentIndex) of
+                '$end_of_table' ->
+                    lists:reverse([PriceTuple | Acc]);
+                PrevIndex ->
+                    get_live_price_list(LiveTableName, HRes - 1, PrevIndex, [PriceTuple | Acc])
+            end;
         [] ->
             %% Try to pull missing data
             case pull_missing_data(LiveTableName, CurrentIndex) of
                 {ok, #technical{open=Open, close=Close, high=High, low=Low}} ->
                     PriceTuple = {Open, Close, High, Low},
-                    get_live_price_list(LiveTableName, HRes - 1, CurrentIndex - 1, [PriceTuple | Acc]);
+                    %% Get previous index using ETS navigation
+                    case ets:prev(LiveTableName, CurrentIndex) of
+                        '$end_of_table' ->
+                            lists:reverse([PriceTuple | Acc]);
+                        PrevIndex ->
+                            get_live_price_list(LiveTableName, HRes - 1, PrevIndex, [PriceTuple | Acc])
+                    end;
                 {error, _} ->
-                    %% Use default price tuple
-                    DefaultTuple = {1.0, 1.0, 1.0, 1.0},
-                    get_live_price_list(LiveTableName, HRes - 1, CurrentIndex - 1, [DefaultTuple | Acc])
+                    %% Try to get real market data instead of dummy data
+                    case ib_bridge_connector:get_market_data('EURUSD') of
+                        {ok, Tick} ->
+                            Price = case Tick#market_tick.last of
+                                undefined -> 
+                                    case Tick#market_tick.bid of
+                                        undefined -> Tick#market_tick.ask;
+                                        Bid -> Bid
+                                    end;
+                                Last -> Last
+                            end,
+                            RealTuple = {Price, Price, Price, Price},
+                            case ets:prev(LiveTableName, CurrentIndex) of
+                                '$end_of_table' ->
+                                    lists:reverse([RealTuple | Acc]);
+                                PrevIndex ->
+                                    get_live_price_list(LiveTableName, HRes - 1, PrevIndex, [RealTuple | Acc])
+                            end;
+                        {error, _} ->
+                            %% Skip this data point if no real data available
+                            case ets:prev(LiveTableName, CurrentIndex) of
+                                '$end_of_table' ->
+                                    lists:reverse(Acc);
+                                PrevIndex ->
+                                    get_live_price_list(LiveTableName, HRes - 1, PrevIndex, Acc)
+                            end
+                    end
             end
     end.
 

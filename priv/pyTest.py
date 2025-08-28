@@ -31,6 +31,7 @@
 # m.fetch_fut_expiries_to_csv('MCL', 'NYMEX', '5 Y', 'mcl_expiries.csv')
 # m.save_past_expiries_csv('MCL', 'NYMEX', 5, 'mcl_expiries_past_5y.csv')
 # m.run_eurusd_live_1min_to_txt('eurusd_1min_live.txt')
+# m.stream_eurusd_ticks_live()
 
 
 
@@ -569,3 +570,38 @@ def run_eurusd_1min_ohlc_to_txt(filename='eurusd_1min.txt'):
     finally:
         f.close()
         # ib.cancelMktData(ticker)  # uncomment if you want to explicitly cancel
+
+
+def stream_eurusd_ticks_live():
+    """
+    Event-driven EURUSD streaming: prints each tick as it arrives.
+    Requires real-time market data (use ib.reqMarketDataType(1)).
+    Ctrl+C to stop.
+    """
+    # Ensure you're on real-time (1). Remove this if you intentionally want delayed.
+    ib.reqMarketDataType(1)
+
+    contract = Forex('EURUSD')
+    ib.qualifyContracts(contract)
+
+    # Subscribe to live market data (no snapshot)
+    ticker = ib.reqMktData(contract, '', False, False)
+
+    def on_update(tk):
+        bid, ask = tk.bid, tk.ask
+        t = tk.time or datetime.now(timezone.utc)
+        if bid is not None and ask is not None:
+            mid = (bid + ask) / 2.0
+            print(f"{t:%Y-%m-%d %H:%M:%S}  Bid={bid:.5f}  Ask={ask:.5f}  Mid={mid:.5f}")
+
+    # Fire on every incoming tick update
+    ticker.updateEvent += on_update
+
+    print("Streaming EURUSD ticks (event-driven)… Ctrl+C to stop")
+    try:
+        ib.run()  # start the event loop; prints happen as ticks arrive
+    except KeyboardInterrupt:
+        print("\nStopped streaming.")
+    finally:
+        ib.cancelMktData(ticker)
+        ticker.updateEvent -= on_update

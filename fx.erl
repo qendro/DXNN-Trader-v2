@@ -1,7 +1,7 @@
 
 -module(fx).
 -compile(export_all).
--define(ALL_TABLES,[metadata,'EURUSD1','EURUSD15','EURUSD30','EURUSD60']).
+-define(ALL_TABLES,[metadata,'EURUSD1']).
 %-define(T2D,[{'EURUSD1',1},{'EURUSD15',15},{'EURUSD30',30},{'EURUSD60',60}]).
 %-define(SOURCE_DIR,"/home/puter/.wine/dosdevices/c:/Program Files/MetaTrader - Alpari (US)/experts/files/").
 -define(FX_TABLES_DIR,"fx_tables/").
@@ -32,45 +32,7 @@
 	close,
 	volume]).
 
--record(technical_e,{
-	id,	%%%key={Year,Month,Day,Hour,Minute,Second}
-	open,
-	high,
-	low,
-	close,
-	volume,
-	diff,
-	up_diff,
-	down_diff,
-	ud_ema27,
-	dd_ema27,
-	ema2,
-	ema3,
-	ema6,
-	ema9,
-	ema14,
-	ema26,
-	ema50,
-	ema100,
-	sma2,
-	sma3,
-	sma6,
-	sma9,
-	sma14,
-	sma26,
-	sma50,
-	sma100,
-	rsi,
-	macd,
-	macd_signal,
-	adi,
-	sts_kfast,
-	sts_dfast,
-	sts_dslow,
-	sts_dfull,
-	bix9,
-	trix9
-}).
+
 
 % Debug tags now use direct config function calls (no macros needed)
 
@@ -124,20 +86,20 @@ go()->
 	erase().
 	
 market_properties()->
-	random:seed(now()),
+	rand:seed(exsss),
 	market_properties(config:primary_currency_pair(),close,[config:internal_sensor_dimensions(),list_sensor],config:market_props_start(),config:market_props_end()).
 market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 	max(CurrencyPair,Feature,Parameters,StartIndex,EndIndex),
 	erase().
 
-	random(CurrencyPair,Feature,Parameters,Start,Finish)->
+	random(CurrencyPair,Feature,_Parameters,Start,Finish)->
 		S = #state{},
 		A = create_account(),
 		InitS = init_state(S,CurrencyPair,Feature,Start,Finish),
-		AvgRandomProfit=lists:sum([random_profit(CurrencyPair,InitS,A) || _<-lists:seq(1,1000)])/1000,
+		_AvgRandomProfit=lists:sum([random_profit(CurrencyPair,InitS,A) || _<-lists:seq(1,1000)])/1000,
 		erase().
 	random_profit(CurrencyPair,S,A)->
-		Trade_Signal = random:uniform(3)-2,
+		Trade_Signal = rand:uniform(3)-2,
 		case profit_trade(S,A,Trade_Signal) of
 			{U_S,U_A}->
 				random_profit(CurrencyPair,U_S,U_A);
@@ -145,7 +107,7 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 				Profit
 		end.
 		
-	max(CurrencyPair,Feature,Parameters,Start,Finish)->
+	max(CurrencyPair,Feature,_Parameters,Start,Finish)->
 		S = #state{},
 		A = create_account(),
 		InitS = init_state(S,CurrencyPair,Feature,Start,Finish),
@@ -180,7 +142,7 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 					find_next_flip(CurrencyPair,Index,Close,EndIndex,short)
 			end.
 		
-			find_next_flip(CurrencyPair,EndIndex,Close,EndIndex,long)->
+			find_next_flip(_CurrencyPair,EndIndex,Close,EndIndex,long)->
 				{EndIndex,Close};
 			find_next_flip(CurrencyPair,Index,Close,EndIndex,long)->
 				%move the index forward until a change in sign occurs. Then return index of the last closing price of the same sign.
@@ -194,7 +156,7 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 					false ->
 						{Index,Close}
 				end;
-			find_next_flip(CurrencyPair,EndIndex,Close,EndIndex,short)->
+			find_next_flip(_CurrencyPair,EndIndex,Close,EndIndex,short)->
 				{EndIndex,Close};
 			find_next_flip(CurrencyPair,Index,Close,EndIndex,short)->
 				%move the index forward until a change in sign occurs. Then return index of the last closing price of the same sign.
@@ -212,15 +174,15 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 						{Index,Close}
 				end.
 		
-		forward(CurrencyPair,S,A,TradeSignal,FlipIndex,FlipIndex)->
+		forward(_CurrencyPair,S,A,TradeSignal,FlipIndex,FlipIndex)->
 			profit_trade(S,A,TradeSignal);
-		forward(CurrencyPair,S,A,TradeSignal,Index,FlipIndex)->
+		forward(CurrencyPair,S,A,TradeSignal,_Index,FlipIndex)->
 			{U_S,U_A}=profit_trade(S,A,TradeSignal),
 			NextIndex = U_S#state.index,
 			forward(CurrencyPair,U_S,U_A,TradeSignal,NextIndex,FlipIndex).
 			
-		max_profit_sense(S,A,Parameters)->
-			{Result,U_S} = sense(S,Parameters),
+		max_profit_sense(S,_A,Parameters)->
+			{_Result,U_S} = sense(S,Parameters),
 			U_S.
 		
 		profit_trade(S,A,TradeSignal)->	
@@ -252,15 +214,16 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 			end.
 
 ts(PId)->
-	PId ! {self(),sense,'EURUSD15',close,[HRes=5,VRes=5,graph_sensor]},
+	HRes=5,VRes=5,
+	PId ! {self(),sense,'EURUSD1',close,[HRes,VRes,graph_sensor]},
 	receive 
-		{From,Result}->
-			io:format("From:~p Result:~p~n",[From,Result])
+		{_From,Result}->
+			io:format("Result:~p~n",[Result])
 	end.
 tt(PId,TradeSignal)->
-	PId ! {self(),trade,'EURUSD15',TradeSignal},
+	PId ! {self(),trade,'EURUSD1',TradeSignal},
 	receive 
-		{From,Result}->
+		{_From,Result}->
 			io:format("Trade_Signal:~p~n Result:~p~n",[TradeSignal,Result])
 	end.
 
@@ -301,8 +264,11 @@ sim(ExoSelf,S,A)->
 			{Result,U_S}=case S#state.table_name of
 				undefined ->
 					sense(init_state(S,TableName,Feature,Start,Finish),Parameters);
-				TableName ->
-					sense(S,Parameters)
+				CurrentTableName when CurrentTableName =:= TableName ->
+					sense(S,Parameters);
+				_OtherTableName ->
+					%% Table name mismatch, reinitialize state
+					sense(init_state(S,TableName,Feature,Start,Finish),Parameters)
 			end,
 			From ! {self(),Result},
 			%io:format("State:~p~n",[U_S]),
@@ -321,7 +287,7 @@ sim(ExoSelf,S,A)->
 					ok
 			end,
 			fx:sim(ExoSelf,U_S,A);
-		{From,sense,internals,Parameters}->
+		{From,sense,internals,_Parameters}->
 			%Internals are the current long/short/nothing position, the buy price (or -1 if in do nothing state)
 			%io:format("A#account.order: ~p~n",[A#account.order]),
 			% This is the current state of the account
@@ -336,7 +302,7 @@ sim(ExoSelf,S,A)->
 					%io:format("O:~p~n",[O]),
 					Position = O#order.position,
 					Entry = O#order.entry,
-					Percentage_Change = O#order.percentage_change,
+					_Percentage_Change = O#order.percentage_change,
 					%io:format("self():~p CurPC:~p PrevPC:~p~n",[self(),Percentage_Change,get(prev_PC)]),
 					[Position,Entry,get(prev_PC)]
 			end,
@@ -412,18 +378,18 @@ sim(ExoSelf,S,A)->
 % The function returns the initialized state record.
 % The state record contains the table name, feature, start index, end index, and current index.
 % The state record is used to keep track of the current state of the simulation.
-%% LIVE TRADING FIX: Handle live_data requests with dummy data
-%% TODO: Replace dummy data with real-time historical data from IB Bridge
+%% LIVE TRADING FIX: Delegate live_data requests to live_scape module
 init_state(S,TableName,Feature,live_data,live_data)->
-	%% Return dummy state for live trading sensors
-	io:format("WARNING: Using dummy forex data for live trading. Replace with real historical data.~n"),
-	S#state{
-		table_name = TableName,
-		feature = Feature,
-		index_start = 1,
-		index_end = 24,
-		index = 1
-	};
+	%% Delegate to live_scape for proper live data handling
+	case whereis(live_scape) of
+		undefined ->
+			%% Error if live_scape not available for live data
+			io:format("ERROR: live_scape not available for live data requests~n"),
+			exit({live_scape_not_available, TableName});
+		_Pid ->
+			%% Use live_scape for live data initialization
+			live_scape:init_state(S,TableName,Feature,live_data,live_data)
+	end;
 init_state(S,TableName,Feature,StartBL,EndBL)->
 	Index_End = case EndBL of
 		last ->
@@ -495,7 +461,7 @@ update_account(S,A)->
 % It uses the record_info function to get the field names based on the record type.
 r()->r(#account{}).
 r(R)->
-	[RName|Element_Values] = A=tuple_to_list(R),
+	[RName|Element_Values] = tuple_to_list(R),
 	Element_Names = case RName of
 		account ->
 			record_info(fields, account);
@@ -516,7 +482,7 @@ r(R)->
 %-record(state,{table_name,feature,index_start,index_end,index,price_list}).
 %-record(order,{pair,position,entry,units,change,percentage_change,profit}).
 determine_profit(A)->
-	U_Realized_PL = A#account.realized_PL + A#account.unrealized_PL.
+	_U_Realized_PL = A#account.realized_PL + A#account.unrealized_PL.
 
 make_trade(S,A,Action)->
 	case A#account.order of
@@ -544,11 +510,11 @@ make_trade(S,A,Action)->
 	end.
 	
 open_order(S,A,Action)->
-	Order_Size = config:order_size_percentage(),% Open order size is 20% of the current account balance.
+	_Order_Size = config:order_size_percentage(),% Open order size is 20% of the current account balance.
 	BuyMoney = config:buy_money_fixed(),
 	Spread=A#account.spread,
 	Leverage = A#account.leverage,
-	Balance = A#account.balance,
+	_Balance = A#account.balance,
 	TableName = S#state.table_name,
 	Index = S#state.index,
 	Row = fx:lookup(TableName,Index),
@@ -568,11 +534,46 @@ close_order(S,A)->
 	A#account{balance=U_Balance,realized_PL=U_Realized_PL,unrealized_PL = 0,order=undefined}.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FX SENSORS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sense(S,Parameters)->
+	%% Check if this is a live table request and delegate to live_scape
+	TableName = S#state.table_name,
+	case is_live_table_request(TableName) of
+		true ->
+			%% Delegate to live_scape for live data processing
+			case whereis(live_scape) of
+				undefined ->
+					%% Wait for live_scape to become available
+					io:format("WARNING: live_scape not available, waiting...~n"),
+					timer:sleep(5000),
+					sense(S, Parameters);
+				_Pid ->
+					%% Use live_scape for live data
+					live_scape:sense(S, Parameters)
+			end;
+		false ->
+			%% Use historical data processing
+			sense_historical(S, Parameters)
+	end.
+
+%% Historical data sensing (original fx.erl logic)
+sense_historical(S, Parameters) ->
 	case Parameters of
 		[HRes,VRes,graph_sensor]->
 			{Result,U_S}=plane_encoded(HRes,VRes,S);
 		[HRes,list_sensor]->
 			{Result,U_S}=list_encoded(HRes,S)
+	end.
+
+%% Check if table name indicates a live data request
+is_live_table_request(TableName) ->
+	%% Check if we're in live trading mode and this is a supported table
+	case config:live_trading_enabled() of
+		true ->
+			%% Check if this table has a live equivalent or is already a live table
+			SupportedTables = ['EURUSD1'],
+			LiveTables = [live_EURUSD1],
+			lists:member(TableName, SupportedTables) orelse lists:member(TableName, LiveTables);
+		false ->
+			false
 	end.
 
 % This function encodes the list sensor data.
@@ -784,22 +785,41 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Table Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% LIVE TRADING FIX: Handle missing ETS records with dummy data
-%% TODO: Replace dummy data with real historical data
-lookup(TableName,Key)->
-	case ets:lookup(TableName,Key) of
-		[R] -> R;
-		[] -> 
-			%% Return dummy technical record for live trading mode
-			#technical{
-				id = {2024,1,1,12,0,0,15},
-				open = 1.0850,
-				high = 1.0855,
-				low = 1.0845,
-				close = 1.0852,
-				volume = 1000
-			}
+%% LIVE TRADING FIX: Handle live tables by delegating to live_scape
+lookup(TableName, Key) ->
+	case is_live_table_request(TableName) of
+		true ->
+			%% Delegate to live_scape for live table lookup
+			case whereis(live_scape) of
+				undefined ->
+					%% Fallback to direct ETS lookup
+					case ets:lookup(TableName, Key) of
+						[R] -> R;
+						[] -> create_dummy_technical_record(Key)
+					end;
+				_Pid ->
+					live_scape:lookup(TableName, Key)
+			end;
+		false ->
+			%% Use direct ETS lookup for historical tables
+			case ets:lookup(TableName, Key) of
+				[R] -> R;
+				[] -> 
+					%% Return dummy technical record for missing historical data
+					create_dummy_technical_record(Key)
+			end
 	end.
+
+%% Create dummy technical record with given key
+create_dummy_technical_record(Key) ->
+	#technical{
+		id = Key,
+		open = 1.0850,
+		high = 1.0855,
+		low = 1.0845,
+		close = 1.0852,
+		volume = 1000
+	}.
 	
 insert(TableName,Record)->
 	ets:insert(TableName,Record).
@@ -813,33 +833,78 @@ last(TableName)->
 delete_table(TableName)->
 	ets:delete(TableName).
 
-%% LIVE TRADING FIX: Handle '$end_of_table' for live trading mode
-next(_TableName,'$end_of_table')->
-	%% Return dummy next key for live trading
-	2;
-next(_TableName,'end_of_table')->
-	%% Return dummy next key for live trading
-	2;
-next(TableName,Key)->
-	ets:next(TableName,Key).
+%% LIVE TRADING FIX: Handle live tables by delegating to live_scape
+next(TableName, Key) ->
+	case is_live_table_request(TableName) of
+		true ->
+			%% Delegate to live_scape for live table navigation
+			case whereis(live_scape) of
+				undefined ->
+					%% Fallback to direct ETS navigation
+					case ets:next(TableName, Key) of
+						'$end_of_table' -> '$end_of_table';
+						NextKey -> NextKey
+					end;
+				_Pid ->
+					live_scape:next(TableName, Key)
+			end;
+		false ->
+			%% Use direct ETS navigation for historical tables
+			case Key of
+				'$end_of_table' -> '$end_of_table';
+				'end_of_table' -> '$end_of_table';
+				_ -> ets:next(TableName, Key)
+			end
+	end.
 	
-prev(TableName,Key)->
-	ets:prev(TableName,Key).
+%% Simple prev function for ETS navigation
+prev(TableName, Key) ->
+	case is_live_table_request(TableName) of
+		true ->
+			%% Delegate to live_scape for live table navigation
+			case whereis(live_scape) of
+				undefined ->
+					ets:prev(TableName, Key);
+				_Pid ->
+					%% Use live_scape prev function (simplified)
+					case ets:prev(TableName, Key) of
+						'$end_of_table' -> '$end_of_table';
+						PrevKey -> PrevKey
+					end
+			end;
+		false ->
+			ets:prev(TableName, Key)
+	end.
 
-%% LIVE TRADING FIX: Handle '$end_of_table' for live trading mode
-prev(_TableName,'$end_of_table',prev,_Index)->
-	%% Return dummy index for live trading
+%% Complex prev function with count parameter
+prev(TableName, Key, Direction, Count) ->
+	case is_live_table_request(TableName) of
+		true ->
+			%% Delegate to live_scape for live table navigation
+			case whereis(live_scape) of
+				undefined ->
+					prev_historical(TableName, Key, Direction, Count);
+				_Pid ->
+					live_scape:prev(TableName, Key, Direction, Count)
+			end;
+		false ->
+			prev_historical(TableName, Key, Direction, Count)
+	end.
+
+%% Historical table prev navigation
+prev_historical(_TableName, '$end_of_table', prev, _Index) ->
+	%% Return dummy index for end of table
 	1;
-prev(TableName,'end_of_table',prev,_Index)->
+prev_historical(TableName, 'end_of_table', prev, _Index) ->
 	ets:first(TableName);
-prev(_TableName,Key,prev,0)->
+prev_historical(_TableName, Key, prev, 0) ->
 	Key;
-prev(TableName,Key,prev,Index)->
-	case ets:prev(TableName,Key) of
-		'end_of_table' ->
-			'end_of_table';
+prev_historical(TableName, Key, prev, Index) ->
+	case ets:prev(TableName, Key) of
+		'$end_of_table' ->
+			'$end_of_table';
 		PrevKey ->
-			prev(TableName,PrevKey,prev,Index-1)
+			prev_historical(TableName, PrevKey, prev, Index-1)
 	end.
 	
 member(TableName,Key)->
