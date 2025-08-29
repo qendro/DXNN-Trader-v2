@@ -242,12 +242,11 @@ open_position(Signal, State) ->
     Symbol = "EUR.USD",  % Default symbol
     Action =
         case Signal of
-            1 ->
-                "BUY";
-            -1 ->
-                "SELL"
+            1 -> "BUY";
+            -1 -> "SELL"
         end,
-    Quantity = 0.1,  % Default quantity
+    %% IB FX expects quantity in base currency units (e.g., 10_000 = 0.1 lot)
+    Quantity = 10000,  % Default: 0.1 lot
 
     %% Send trade signal to Python service
     TradeMessage =
@@ -305,10 +304,14 @@ start_python_service() ->
     %% Start Python ib_service.py as external port in Docker environment
     %% Docker runs with --network host so Python can reach IB TWS on host
     PythonCmd = "python3 priv/ib_service.py",
-    Port = open_port({spawn, PythonCmd}, [binary, {packet, 4}, stderr_to_stdout]),
+    %% Important: do NOT merge stderr into stdout when using {packet,4}.
+    %% Any non-framed log output would corrupt the packet stream.
+    Port = open_port({spawn, PythonCmd}, [binary, {packet, 4}]),
 
     %% Start message handler
     HandlerPid = spawn_link(?MODULE, python_port_loop, [Port]),
+    %% Ensure the handler receives all port data
+    erlang:port_connect(Port, HandlerPid),
     register(python_port_handler, HandlerPid),
     Port.
 
@@ -316,7 +319,6 @@ python_port_loop(Port) ->
     receive
         {Port, {data, Data}} ->
             try
-                %% Simple JSON parsing - fallback if jsx not available
                 Message = parse_json_simple(Data),
                 handle_python_message(Message),
                 python_port_loop(Port)
@@ -352,7 +354,6 @@ handle_python_message(Message) ->
             TradeData = maps:get(<<"data">>, Message, #{}),
             live_scape_new ! {python_trade_confirmation, TradeData};
         <<"heartbeat">> ->
-            %% Python service is alive
             ok;
         _ ->
             ok
@@ -379,6 +380,7 @@ cleanup_python_service(Port) ->
 %% ============================================================================
 
 handle_ohlc_bar(OhlcData) ->
+    io:format("handle_ohlc_bar called: ~p~n", [OhlcData]),
     %% Extract canonical OHLC data
     Symbol = maps:get(<<"symbol">>, OhlcData, <<"EUR.USD">>),
     TOpen = maps:get(<<"t_open">>, OhlcData, <<"">>),
@@ -408,62 +410,77 @@ handle_ohlc_bar(OhlcData) ->
     ets:insert(ohlc_data, OhlcBar).
 
 %% ============================================================================
-%% READINESS GATE
+%% READINESS GATE (simple ISO parser, no deps)
 %% ============================================================================
 
 wait_for_readiness() ->
-    %% Wait for "Ã¢ÂÂ¥M bars per symbol AND last_bar_age < Xs"
+    %% Wait for ">= MinBars AND last_bar_age < MaxAgeSeconds"
     MinBars = 10,
     MaxAgeSeconds = 300,  % 5 minutes
-
     wait_for_readiness_loop(MinBars, MaxAgeSeconds, 30).  % 30 attempts
 
 wait_for_readiness_loop(_MinBars, _MaxAgeSeconds, 0) ->
-    %% Give up after max attempts
-    ok;
+    ok;  % give up
 wait_for_readiness_loop(MinBars, MaxAgeSeconds, Attempts) ->
     case check_readiness(MinBars, MaxAgeSeconds) of
-        true ->
-            ok;
+        true -> ok;
         false ->
-            timer:sleep(1000),  % Wait 1 second
+            timer:sleep(1000),
             wait_for_readiness_loop(MinBars, MaxAgeSeconds, Attempts - 1)
     end.
 
 check_readiness(MinBars, MaxAgeSeconds) ->
-    %% Check if we have enough bars and recent data
     case ets:info(ohlc_data, size) of
-        undefined ->
-            false;
-        Size when Size < MinBars ->
-            false;
+        undefined -> false;
+        Size when Size < MinBars -> false;
         _ ->
-            %% Check age of last bar
             case ets:last(ohlc_data) of
-                '$end_of_table' ->
-                    false;
+                '$end_of_table' -> false;
                 LastKey ->
                     case ets:lookup(ohlc_data, LastKey) of
-                        [#ohlc_bar{t_open = TOpen}] ->
-                            check_bar_age(TOpen, MaxAgeSeconds);
-                        [] ->
-                            false
+                        [#ohlc_bar{t_open = TOpenStr}] ->
+                            check_bar_age(TOpenStr, MaxAgeSeconds);
+                        [] -> false
                     end
             end
     end.
 
 check_bar_age(TOpenStr, MaxAgeSeconds) ->
-    try
-        %% Parse ISO timestamp and check age
-        TOpen = iso8601:parse(TOpenStr),
-        Now = calendar:universal_time(),
-        AgeSecs =
-            calendar:datetime_to_gregorian_seconds(Now)
-            - calendar:datetime_to_gregorian_seconds(TOpen),
-        AgeSecs =< MaxAgeSeconds
-    catch
-        _:_ ->
+    case parse_iso_utc(TOpenStr) of
+        {ok, DT} ->
+            Now = calendar:universal_time(),
+            AgeSecs = calendar:datetime_to_gregorian_seconds(Now)
+                      - calendar:datetime_to_gregorian_seconds(DT),
+            AgeSecs =< MaxAgeSeconds;
+        error ->
             false
+    end.
+
+%% Accepts "YYYY-MM-DDTHH:MM:SS" optionally ending with "Z" or ".sssZ"
+parse_iso_utc(Str0) when is_list(Str0) ->
+    parse_iso_utc(list_to_binary(Str0));
+parse_iso_utc(Bin) when is_binary(Bin) ->
+    %% Trim to first 19 chars if longer (ignore millis and TZ)
+    Safe =
+        case byte_size(Bin) of
+            N when N >= 19 -> binary:part(Bin, 0, 19);
+            _ -> Bin
+        end,
+    case binary_to_list(Safe) of
+        [Y1,Y2,Y3,Y4,$-,M1,M2,$-,D1,D2,$T,H1,H2,$:,N1,N2,$:,S1,S2] ->
+            try
+                Y = list_to_integer([Y1,Y2,Y3,Y4]),
+                Mo = list_to_integer([M1,M2]),
+                D  = list_to_integer([D1,D2]),
+                H  = list_to_integer([H1,H2]),
+                Mi = list_to_integer([N1,N2]),
+                S  = list_to_integer([S1,S2]),
+                {ok, {{Y,Mo,D},{H,Mi,S}}}
+            catch _:_ ->
+                error
+            end;
+        _ ->
+            error
     end.
 
 %% ============================================================================
@@ -472,8 +489,6 @@ check_bar_age(TOpenStr, MaxAgeSeconds) ->
 
 init_state(S, _TableName, Feature, live_data, live_data) ->
     ensure_ohlc_tables(),
-
-    %% Return fx-compatible state
     IndexEnd = ets:last(ohlc_data),
     {IndexStart, IndexEnd1} =
         case IndexEnd of
@@ -482,7 +497,6 @@ init_state(S, _TableName, Feature, live_data, live_data) ->
             _ ->
                 {find_start_index(IndexEnd, ?DEFAULT_HRES - 1), IndexEnd}
         end,
-
     S#state{table_name = ohlc_data,
             feature = Feature,
             index_start = IndexStart,
@@ -504,10 +518,8 @@ sense(S = #state{}, Parameters) ->
 
 lookup(Table, Index) ->
     case ets:lookup(Table, Index) of
-        [Record] ->
-            Record;
-        [] ->
-            undefined
+        [Record] -> Record;
+        [] -> undefined
     end.
 
 next(Table, Index) ->
@@ -518,79 +530,119 @@ prev(Table, Current, prev, Count) ->
 prev(Table, Current, next, Count) ->
     step_next(Table, Current, Count).
 
-step_prev(_Table, Index, 0) ->
-    Index;
+step_prev(_Table, Index, 0) -> Index;
 step_prev(Table, Index, N) ->
     case ets:prev(Table, Index) of
-        '$end_of_table' ->
-            Index;
-        PrevIndex ->
-            step_prev(Table, PrevIndex, N - 1)
+        '$end_of_table' -> Index;
+        PrevIndex -> step_prev(Table, PrevIndex, N - 1)
     end.
 
-step_next(_Table, Index, 0) ->
-    Index;
+step_next(_Table, Index, 0) -> Index;
 step_next(Table, Index, N) ->
     case ets:next(Table, Index) of
-        '$end_of_table' ->
-            Index;
-        NextIndex ->
-            step_next(Table, NextIndex, N - 1)
+        '$end_of_table' -> Index;
+        NextIndex -> step_next(Table, NextIndex, N - 1)
     end.
 
 trade(_TableName, TradeSignal, LiveState) ->
     handle_trade(TradeSignal, LiveState).
 
 %% ============================================================================
-%% SIMPLE JSON PARSING (Docker-friendly)
+%% SIMPLE JSON (no deps): parse only what we use; encode only what we send
 %% ============================================================================
 
-parse_json_simple(Data) ->
-    %% Try jsx first, fallback to simple parsing
-    try
-        jsx:decode(Data, [return_maps])
-    catch
-        error:undef ->
-            %% jsx not available, use simple term parsing
-            parse_json_fallback(Data);
-        _:_ ->
-            parse_json_fallback(Data)
+parse_json_simple(Bin) when is_binary(Bin) ->
+    %% We support messages like:
+    %% {"type":"ohlc_bar","data":{"symbol":"EUR.USD","t_open":"...","o":1.0,"h":...,"l":...,"c":...,"vol":0,"source":"live"}, "timestamp":...}
+    %% {"type":"trade_confirmation","data":{...}}
+    %% {"type":"heartbeat", ...}
+    Type = get_json_string(Bin, <<"type">>),
+    case Type of
+        <<"ohlc_bar">> ->
+            DataBin = get_json_object_blob(Bin, <<"data">>),
+            #{<<"type">> => <<"ohlc_bar">>,
+              <<"data">> => #{
+                    <<"symbol">> => get_json_string(DataBin, <<"symbol">>, <<"EUR.USD">>),
+                    <<"t_open">> => get_json_string(DataBin, <<"t_open">>, <<>>),
+                    <<"o">> => get_json_number(DataBin, <<"o">>, 0.0),
+                    <<"h">> => get_json_number(DataBin, <<"h">>, 0.0),
+                    <<"l">> => get_json_number(DataBin, <<"l">>, 0.0),
+                    <<"c">> => get_json_number(DataBin, <<"c">>, 0.0),
+                    <<"vol">> => trunc(get_json_number(DataBin, <<"vol">>, 0)),
+                    <<"source">> => get_json_string(DataBin, <<"source">>, <<"live">>)
+                }};
+        <<"trade_confirmation">> ->
+            DataBin2 = get_json_object_blob(Bin, <<"data">>),
+            %% Pass through what we commonly care about
+            #{<<"type">> => <<"trade_confirmation">>,
+              <<"data">> => #{
+                    <<"status">> => get_json_string(DataBin2, <<"status">>, <<"error">>),
+                    <<"position">> => trunc(get_json_number(DataBin2, <<"position">>, 0)),
+                    <<"entry_price">> => get_json_number(DataBin2, <<"entry_price">>, 0.0),
+                    <<"pnl">> => get_json_number(DataBin2, <<"pnl">>, 0.0)
+                }};
+        <<"heartbeat">> ->
+            #{<<"type">> => <<"heartbeat">>};
+        _ ->
+            #{<<"type">> => Type}
     end.
 
-encode_json_simple(Message) ->
-    %% Try jsx first, fallback to simple encoding
-    try
-        jsx:encode(Message)
-    catch
-        error:undef ->
-            %% jsx not available, use simple term encoding
-            encode_json_fallback(Message);
-        _:_ ->
-            encode_json_fallback(Message)
+encode_json_simple(#{type := trade_signal,
+                     symbol := Symbol,
+                     action := Action,
+                     quantity := Quantity,
+                     signal := Signal}) ->
+    %% Encode only the trade_signal we send to Python
+    %% {"type":"trade_signal","symbol":"EUR.USD","action":"BUY","quantity":0.1,"signal":1}
+    Cid = erlang:unique_integer([monotonic]),
+    list_to_binary(io_lib:format(
+        "{\"type\":\"trade_signal\",\"symbol\":\"~s\",\"action\":\"~s\",\"quantity\":~p,\"signal\":~p,\"cid\":~p}",
+        [Symbol, Action, Quantity, Signal, Cid]
+    ));
+encode_json_simple(Map) when is_map(Map) ->
+    %% Fallback: minimal {"type":"unknown"} to avoid crashes
+    Type = case maps:get(type, Map, unknown) of
+               T when is_atom(T) -> atom_to_list(T);
+               T when is_list(T) -> T;
+               T when is_binary(T) -> binary_to_list(T);
+               _ -> "unknown"
+           end,
+    list_to_binary(io_lib:format("{\"type\":\"~s\"}", [Type])).
+
+%% ---- Tiny JSON helpers (string/number/object[data]) ------------------------
+
+get_json_string(Bin, Key) ->
+    get_json_string(Bin, Key, <<>>).
+
+get_json_string(Bin, Key, Default) ->
+    %% Match "Key":"value"
+    Pat = <<$\", Key/binary, $\", $:, $\", (<<"([^\"]*)">>)/binary, $\">>,
+    case re:run(Bin, Pat, [{capture, all_but_first, binary}, unicode]) of
+        {match, [Val]} -> Val;
+        _ -> Default
     end.
 
-parse_json_fallback(Data) ->
-    %% Very simple JSON-like parsing for basic messages
-    %% This is a minimal fallback - in production you'd want proper JSON
-    try
-        _String = binary_to_list(Data),
-        %% For now, just return a basic map structure
-        #{<<"type">> => <<"unknown">>, <<"data">> => #{}}
-    catch
-        _:_ ->
-            #{<<"type">> => <<"error">>, <<"data">> => #{}}
+get_json_number(Bin, Key, Default) ->
+    %% Match "Key":-?123(.456)?
+    Pat = <<$\", Key/binary, $\", $:, (<<"\\s*(-?\\d+(?:\\.\\d+)?)">>)/binary>>,
+    case re:run(Bin, Pat, [{capture, all_but_first, list}, unicode]) of
+        {match, [NumList]} ->
+            try list_to_float(NumList)
+            catch _:_ ->
+                try list_to_integer(NumList)
+                catch _:_ -> Default
+                end
+            end;
+        _ -> Default
     end.
 
-encode_json_fallback(Message) ->
-    %% Very simple JSON-like encoding for basic messages
-    %% This is a minimal fallback - in production you'd want proper JSON
-    try
-        %% Convert basic map to simple JSON-like string
-        Type = maps:get(type, Message, "unknown"),
-        list_to_binary("{\"type\":\"" ++ atom_to_list(Type) ++ "\"}")
-    catch
-        _:_ ->
-            <<"{\"type\":\"error\"}">>
+get_json_object_blob(Bin, Key) ->
+    %% Very simple: capture inside first {...} after "Key":
+    %% Works because `data` is a flat object without nested braces.
+    Pat = <<$\", Key/binary, $\", $:, $\\, ${, (<<"([^}]*)">>)/binary, $}>>,
+    case re:run(Bin, Pat, [{capture, all_but_first, binary}, unicode, dotall]) of
+        {match, [Inner]} -> Inner;
+        _ -> <<>>
     end.
 
 %% ============================================================================

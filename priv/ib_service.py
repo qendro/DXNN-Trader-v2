@@ -19,6 +19,7 @@ import asyncio
 import time
 import logging
 import os
+import math
 from datetime import datetime, timedelta
 from ib_insync import IB, Forex, MarketOrder, LimitOrder, util
 
@@ -58,7 +59,7 @@ def load_config():
         "data": {
             "historical_weeks": 1,
             "bar_size": "1 min",
-            "preload_on_startup": False
+            "preload_on_startup": True
         },
         "monitoring": {
             "heartbeat_interval": 3,
@@ -210,7 +211,7 @@ class HistoricalDataLoader:
                     'h': float(bar.high),
                     'l': float(bar.low),
                     'c': float(bar.close),
-                    'vol': int(bar.volume),
+                    'vol': int(bar.volume) if isinstance(bar.volume, (int, float)) and math.isfinite(bar.volume) else 0,
                     'source': 'historical'
                 }
                 self.bridge.send_ohlc_bar(ohlc_bar)
@@ -243,8 +244,10 @@ class LiveTickAggregator:
 
     def process_tick(self, symbol, price, volume, timestamp):
         """Process individual tick and aggregate into 1-minute bars"""
-        if not price or price <= 0:
+        # Sanitize inputs (handle None/NaN)
+        if not isinstance(price, (int, float)) or not math.isfinite(price):
             return
+        vol = int(volume) if isinstance(volume, (int, float)) and math.isfinite(volume) and volume > 0 else 0
 
         bar_start = self._get_bar_start_time(timestamp)
 
@@ -253,11 +256,11 @@ class LiveTickAggregator:
             self.current_bars[symbol] = {
                 'symbol': symbol,
                 'start_time': bar_start,
-                'o': price,
-                'h': price,
-                'l': price,
-                'c': price,
-                'vol': volume or 0,
+                'o': float(price),
+                'h': float(price),
+                'l': float(price),
+                'c': float(price),
+                'vol': vol,
                 'tick_count': 1
             }
         else:
@@ -276,18 +279,18 @@ class LiveTickAggregator:
                     'h': completed_bar['h'],
                     'l': completed_bar['l'],
                     'c': completed_bar['c'],
-                    'vol': completed_bar['vol'],
+                    'vol': int(completed_bar['vol']) if isinstance(completed_bar['vol'], (int, float)) and math.isfinite(completed_bar['vol']) and completed_bar['vol'] >= 0 else 0,
                     'source': 'live'
                 })
 
                 # Start new bar
-                self._start_new_bar(symbol, price, volume or 0, bar_start)
+                self._start_new_bar(symbol, price, vol, bar_start)
             else:
                 # Update current bar
                 current_bar['h'] = max(current_bar['h'], price)
                 current_bar['l'] = min(current_bar['l'], price)
                 current_bar['c'] = price
-                current_bar['vol'] += volume or 0
+                current_bar['vol'] = (current_bar['vol'] if isinstance(current_bar['vol'], (int, float)) and math.isfinite(current_bar['vol']) else 0) + vol
                 current_bar['tick_count'] += 1
 
     def _get_bar_start_time(self, timestamp):
@@ -309,11 +312,11 @@ class LiveTickAggregator:
         self.current_bars[symbol] = {
             'symbol': symbol,
             'start_time': bar_start,
-            'o': price,
-            'h': price,
-            'l': price,
-            'c': price,
-            'vol': volume,
+            'o': float(price),
+            'h': float(price),
+            'l': float(price),
+            'c': float(price),
+            'vol': int(volume) if isinstance(volume, (int, float)) and math.isfinite(volume) and volume >= 0 else 0,
             'tick_count': 1
         }
 
@@ -569,15 +572,27 @@ class ErlangBridge:
 
     def send_ohlc_bar(self, ohlc_bar):
         """Send OHLC bar using canonical schema"""
-        # Ensure canonical format
+        # Ensure canonical format and sanitize NaN/None
+        try:
+            o = float(ohlc_bar['o'])
+            h = float(ohlc_bar['h'])
+            l = float(ohlc_bar['l'])
+            c = float(ohlc_bar['c'])
+            if not all(map(math.isfinite, (o, h, l, c))):
+                return  # drop invalid bar
+            vol_in = ohlc_bar.get('vol', 0)
+            vol = int(vol_in) if isinstance(vol_in, (int, float)) and math.isfinite(vol_in) and vol_in >= 0 else 0
+        except Exception:
+            return
+
         canonical_bar = {
             'symbol': ohlc_bar['symbol'],
             't_open': ohlc_bar['t_open'],
-            'o': float(ohlc_bar['o']),
-            'h': float(ohlc_bar['h']),
-            'l': float(ohlc_bar['l']),
-            'c': float(ohlc_bar['c']),
-            'vol': int(ohlc_bar['vol']),
+            'o': o,
+            'h': h,
+            'l': l,
+            'c': c,
+            'vol': vol,
             'source': ohlc_bar['source']
         }
         
@@ -889,10 +904,11 @@ class IBService:
                 # Proper FX symbol mapping: SYMBOL.CURRENCY
                 symbol_out = self._format_symbol_for_output(ticker.contract)
 
-                if price:
-                    self.tick_aggregator.process_tick(
-                        symbol_out, price, ticker.volume or 0, datetime.now()
-                    )
+                # Sanitize price and volume
+                if isinstance(price, (int, float)) and math.isfinite(price):
+                    vol = ticker.volume
+                    vol = vol if isinstance(vol, (int, float)) and math.isfinite(vol) and vol > 0 else 0
+                    self.tick_aggregator.process_tick(symbol_out, price, vol, datetime.now())
 
                 # Also send raw tick to Erlang for monitoring
                 self.bridge._send_to_erlang({
