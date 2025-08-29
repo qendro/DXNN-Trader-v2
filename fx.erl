@@ -222,9 +222,9 @@ ts(PId)->
 	end.
 tt(PId,TradeSignal)->
 	PId ! {self(),trade,'EURUSD1',TradeSignal},
-	receive 
-		{_From,Result}->
-			io:format("Trade_Signal:~p~n Result:~p~n",[TradeSignal,Result])
+	receive
+		{_From, Profit, IsOver} ->
+			io:format("Trade_Signal:~p~n Profit:~p IsOver:~p~n", [TradeSignal, Profit, IsOver])
 	end.
 
 %Entry Point for Starting the Forex Simulation
