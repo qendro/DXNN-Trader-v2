@@ -12,7 +12,7 @@
 -export([
     start_link/0, gen/2, prep/1,
     init_state/5, sense/2, lookup/2, next/2, prev/4, trade/3,
-    init_scape/0
+    init_scape/0 
 ]).
 
 %% --- Tables / Records -------------------------------------------------------
@@ -55,14 +55,10 @@ prep(ExoSelf_PId) ->
 %% --- Main loop (minimal) ----------------------------------------------------
 
 live_sim(ExoSelf_PId) ->
-    %% Ensure trading fields are initialized so handle_trade/2 matches
+    %% #live_state is defined in records.hrl
     State = #live_state{
-        table_name       = get_live_table_name(config:primary_currency_pair()),
-        account_balance  = config:account_initial_balance(),
-        current_position = 0,
-        entry_price      = 0.0,
-        realized_pnl     = 0.0,
-        previous_pc      = 0.0
+        table_name = get_live_table_name(config:primary_currency_pair()),
+        account_balance = config:account_initial_balance()
     },
     loop(ExoSelf_PId, State).
 

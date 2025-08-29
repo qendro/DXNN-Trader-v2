@@ -17,25 +17,28 @@ from ib_insync import IB, Forex, MarketOrder, util
 try:
     util.useAsyncio()
 except AttributeError:
-    # Older version of ib_insync doesn't need this
     pass
 
-# Setup logging
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Global state - keep it simple
+# Global state
 ib = IB()
 running = True
+
+# Remember last connect params for reconnection
+_last_connect = {"host": "host.docker.internal", "port": 7497, "client_id": 101}
+
+# ---------------- I/O ----------------
 
 async def read_msg():
     """Read length-prefixed message from Erlang"""
     try:
-        hdr = await asyncio.get_running_loop().run_in_executor(
-            None, sys.stdin.buffer.read, 4)
-        if not hdr: 
+        hdr = await asyncio.get_running_loop().run_in_executor(None, sys.stdin.buffer.read, 4)
+        if not hdr:
             return None
-        (n,) = struct.unpack('>I', hdr)  # big-endian
+        (n,) = struct.unpack('>I', hdr)
         data = sys.stdin.buffer.read(n)
         return json.loads(data)
     except Exception as e:
@@ -52,67 +55,50 @@ def write_msg(obj):
         logger.error(f"Error writing message: {e}")
 
 def log_info(msg, *args):
-    """Log to Python logger only (not to Erlang to reduce noise)"""
-    formatted_msg = msg % args if args else msg
-    logger.info(formatted_msg)
+    logger.info(msg % args if args else msg)
 
 def send_error(cid, code, message):
-    """Send error message with proper framing"""
-    write_msg({
-        "v": 1,
-        "type": "error",
-        "cid": cid,
-        "code": code,  # IB_CONN, IB_REJECT, BRIDGE_IO, BAD_REQ
-        "message": message
-    })
+    write_msg({"v": 1, "type": "error", "cid": cid, "code": code, "message": message})
 
 def validate_message(msg):
-    """Validate required message fields"""
-    if not isinstance(msg, dict):
-        return False
-    required = ['type', 'cid']
-    return all(field in msg for field in required)
+    return isinstance(msg, dict) and all(k in msg for k in ("type", "cid"))
 
 def n(x):
     """NaN-safe helper: NaN→None for JSON"""
-    return None if x != x or x is None else x
+    return None if x is None or x != x else x
 
-def parse_symbol(sym):
-    """Convert external format 'EUR.USD' to ib_insync Forex('EURUSD')"""
+# ---------------- Symbol helpers ----------------
+
+def parse_symbol(sym: str) -> Forex:
+    """'EUR.USD' → Forex('EURUSD'); pass-through if already EURUSD"""
     if '.' in sym:
-        base, quote = sym.split('.')
+        base, quote = sym.split('.', 1)
         return Forex(base + quote)
-    else:
-        # Already in EURUSD format
-        return Forex(sym)
+    return Forex(sym)
 
-def format_symbol_for_output(contract_symbol):
-    """Convert EURUSD back to EUR.USD format for output"""
+def format_symbol_for_output(contract_symbol: str) -> str:
+    """EURUSD → EUR.USD (preferred by Erlang side)"""
     if len(contract_symbol) == 6:
         return f"{contract_symbol[:3]}.{contract_symbol[3:]}"
-    elif len(contract_symbol) == 3:
-        # Handle case where only base currency is returned
-        return f"{contract_symbol}.USD"  # Assume USD quote for now
+    if len(contract_symbol) == 3:
+        return f"{contract_symbol}.USD"
     return contract_symbol
+
+# ---------------- Main loop ----------------
 
 async def main():
     global running
+    log_info("Python bridge starting up")
     try:
-        log_info("Python bridge starting up")
         while running:
-            try:
-                msg = await read_msg()
-                if msg is None:  # EOF from Erlang
-                    log_info("Received EOF, shutting down")
-                    running = False
-                    break
-                if not validate_message(msg):
-                    send_error(None, "BAD_REQ", "Missing required fields")
-                    continue
-                await handle_command(msg)
-            except Exception as e:
-                log_info("Error handling message: %s", str(e))
-                send_error(None, "BRIDGE_IO", str(e))
+            msg = await read_msg()
+            if msg is None:  # EOF
+                log_info("Received EOF, shutting down")
+                break
+            if not validate_message(msg):
+                send_error(None, "BAD_REQ", "Missing required fields")
+                continue
+            await handle_command(msg)
     except KeyboardInterrupt:
         log_info("Received interrupt, shutting down")
     finally:
@@ -121,188 +107,184 @@ async def main():
         log_info("Bridge shutdown complete")
 
 async def handle_command(cmd):
-    cmd_type = cmd.get('type')
+    t = cmd.get('type')
     cid = cmd.get('cid')
-    
     try:
-        if cmd_type == 'connect':
+        if t == 'connect':
             await handle_connect(cmd, cid)
-        elif cmd_type == 'subscribe':
+        elif t == 'subscribe':
             await handle_subscribe(cmd, cid)
-        elif cmd_type == 'place_order':
+        elif t == 'place_order':
             await handle_place_order(cmd, cid)
         else:
-            send_error(cid, "BAD_REQ", f"Unknown command type: {cmd_type}")
+            send_error(cid, "BAD_REQ", f"Unknown command type: {t}")
     except Exception as e:
         log_info("Error in handle_command: %s", str(e))
         send_error(cid, "BRIDGE_IO", str(e))
 
+# ---------------- Commands ----------------
+
 async def handle_connect(cmd, cid):
-    """Handle connection request with paper trading enforcement"""
-    port = cmd.get('port', 7497)
-    host = cmd.get('host', '127.0.0.1')
-    client_id = cmd.get('client_id', 1)
-    
-    # Paper-only guard - strict check before connect
+    """Connect with paper-trading enforcement"""
+    host = cmd.get('host', _last_connect["host"])
+    port = cmd.get('port', _last_connect["port"])
+    client_id = cmd.get('client_id', _last_connect["client_id"])
+
+    # Paper-only guard
     if port != 7497 and not os.getenv('ALLOW_LIVE'):
         send_error(cid, "IB_REJECT", "Paper only (port 7497)")
         return
-    
+
     try:
         log_info("Connecting to IB %s:%d (client_id=%d)", host, port, client_id)
-        
-        # Connect with longer timeout for Docker networking
         await ib.connectAsync(host, port, clientId=client_id, timeout=10)
-        
-        # Enable delayed data for paper trading
-        ib.reqMarketDataType(3)  # 1=real-time, 3=delayed
-        log_info("Set market data type to delayed (3)")
-        
+        ib.reqMarketDataType(3)  # delayed data for paper
         write_msg({"v": 1, "type": "connected", "cid": cid})
         log_info("Connected to IB successfully")
-        
-        # Start heartbeat and connection monitor after connect
+
+        # store for reconnection
+        _last_connect.update({"host": host, "port": port, "client_id": client_id})
+
+        # background tasks
         asyncio.create_task(heartbeat())
         asyncio.create_task(connection_monitor())
-        
     except Exception as e:
         log_info("Connection failed: %s", str(e))
         send_error(cid, "IB_CONN", str(e))
 
 async def handle_subscribe(cmd, cid):
-    """Handle market data subscription with symbol normalization"""
     symbol = cmd.get('symbol', 'EUR.USD')
-    
     try:
         log_info("Subscribing to market data for %s", symbol)
-        # Use symbol parser for proper conversion
         contract = parse_symbol(symbol)
-        ticker = ib.reqMktData(contract)
+        ib.reqMktData(contract)
         write_msg({"v": 1, "type": "subscribed", "cid": cid, "symbol": symbol})
-        
     except Exception as e:
         log_info("Subscription failed for %s: %s", symbol, str(e))
         send_error(cid, "IB_REJECT", str(e))
 
 async def handle_place_order(cmd, cid):
-    """Handle order placement with paper trading safety"""
+    """Place order and forward fills via Trade.updateEvent"""
     symbol = cmd.get('symbol')
-    action = cmd.get('action')  # 'BUY' or 'SELL'
+    action = cmd.get('action')        # 'BUY' or 'SELL'
     quantity = cmd.get('quantity')
-    order_type = cmd.get('order_type', 'MKT')  # Default to market order
-    
-    # Validate required parameters
+    order_type = cmd.get('order_type', 'MKT')
+
     if not all([symbol, action, quantity]):
         send_error(cid, "BAD_REQ", "Missing required order parameters: symbol, action, quantity")
         return
-    
-    # Paper trading safety - ensure we're on paper account
+
     if not os.getenv('ALLOW_LIVE_ORDERS'):
         log_info("Order placement: Paper trading mode enforced")
-    
+
     try:
         log_info("Placing %s order: %s %s %s", order_type, action, quantity, symbol)
-        
-        # Parse symbol and create contract
+
         contract = parse_symbol(symbol)
-        
-        # Create market order (simple for Phase 3)
         order = MarketOrder(action, quantity)
-        
-        # Place order
         trade = ib.placeOrder(contract, order)
-        
-        # Send confirmation
+
+        # Send immediate ack (order submitted)
         write_msg({
-            "v": 1,
-            "type": "order_placed",
-            "cid": cid,
+            "v": 1, "type": "order_placed", "cid": cid,
             "order_id": trade.order.orderId,
-            "symbol": symbol,
-            "action": action,
-            "quantity": quantity,
-            "order_type": order_type
+            "symbol": symbol, "action": action,
+            "quantity": quantity, "order_type": order_type
         })
-        
         log_info("Order placed successfully: ID %s", trade.order.orderId)
-        
+
+        # --- NEW: forward fills/updates back to Erlang ---
+        def on_trade_update(tr: "ib_insync.objects.Trade"):
+            try:
+                st = tr.orderStatus.status  # e.g., 'PreSubmitted','Submitted','Filled','PartiallyFilled'
+                payload = {
+                    "v": 1,
+                    "type": "order_status",
+                    "order_id": tr.order.orderId,
+                    "symbol": format_symbol_for_output(tr.contract.symbol),
+                    "action": tr.order.action,
+                    "status": st,
+                    "filled": n(tr.orderStatus.filled),
+                    "avg_price": n(tr.orderStatus.avgFillPrice)
+                }
+                write_msg(payload)
+
+                if st in ("Filled", "PartiallyFilled"):
+                    # also emit a dedicated 'order_filled' for convenience
+                    write_msg({
+                        "v": 1, "type": "order_filled",
+                        "order_id": tr.order.orderId,
+                        "symbol": format_symbol_for_output(tr.contract.symbol),
+                        "side": tr.order.action,
+                        "filled": n(tr.orderStatus.filled),
+                        "price": n(tr.orderStatus.avgFillPrice)
+                    })
+            except Exception as e:
+                log_info("on_trade_update error: %s", str(e))
+
+        trade.updateEvent += on_trade_update
+        # -------------------------------------------------
+
     except Exception as e:
         log_info("Order placement failed for %s %s %s: %s", action, quantity, symbol, str(e))
         send_error(cid, "IB_REJECT", str(e))
 
+# ---------------- Background tasks ----------------
+
 async def heartbeat():
-    """Send heartbeat every 3 seconds when connected"""
     while running:
         try:
-            write_msg({
-                "v": 1, 
-                "type": "beat", 
-                "ts": int(time.time() * 1000),
-                "tws_ok": ib.isConnected()
-            })
-            await asyncio.sleep(3)
+            write_msg({"v": 1, "type": "beat", "ts": int(time.time() * 1000), "tws_ok": ib.isConnected()})
         except Exception as e:
             log_info("Heartbeat error: %s", str(e))
-            await asyncio.sleep(3)  # Continue heartbeat even on error
+        await asyncio.sleep(3)
 
 async def connection_monitor():
-    """Monitor connection and attempt reconnection if needed"""
     reconnect_attempts = 0
     max_attempts = 5
-    
     while running:
         try:
             if not ib.isConnected() and reconnect_attempts < max_attempts:
                 log_info("Connection lost, attempting reconnection (%d/%d)", reconnect_attempts + 1, max_attempts)
                 write_msg({"v": 1, "type": "resync", "phase": "start"})
-                
                 try:
-                    # Use stored connection parameters (simplified for Phase 2)
-                    await ib.connectAsync('host.docker.internal', 7497, clientId=101, timeout=10)
-                    ib.reqMarketDataType(3)  # Re-enable delayed data
-                    
+                    await ib.connectAsync(_last_connect["host"], _last_connect["port"],
+                                          clientId=_last_connect["client_id"], timeout=10)
+                    ib.reqMarketDataType(3)
                     write_msg({"v": 1, "type": "resync", "phase": "done"})
                     log_info("Reconnection successful")
-                    reconnect_attempts = 0  # Reset counter on success
-                    
+                    reconnect_attempts = 0
                 except Exception as e:
                     reconnect_attempts += 1
                     log_info("Reconnection attempt failed: %s", str(e))
                     send_error(None, "IB_CONN", f"Reconnect failed: {str(e)}")
-                    
             elif reconnect_attempts >= max_attempts:
                 log_info("Max reconnection attempts reached, giving up")
                 write_msg({"v": 1, "type": "resync", "phase": "failed"})
                 break
-                
-            await asyncio.sleep(5)  # Check every 5 seconds
-            
         except Exception as e:
             log_info("Connection monitor error: %s", str(e))
-            await asyncio.sleep(5)
+        await asyncio.sleep(5)
+
+# ---------------- Tick forwarding ----------------
 
 def on_pending_tickers(tickers):
-    """Handle tick updates - ib_insync passes list of tickers"""
     try:
-        for ticker in tickers:
-            # Use symbol formatter for consistent output
-            symbol = format_symbol_for_output(ticker.contract.symbol)
-            # Only send tick if we have valid data
-            if ticker.bid is not None or ticker.ask is not None or ticker.last is not None:
-                write_msg({
-                    "v": 1,
-                    "type": "tick",
-                    "symbol": symbol,
-                    "bid": n(ticker.bid),
-                    "ask": n(ticker.ask),
-                    "last": n(ticker.last),
-                    "volume": n(ticker.volume)
-                })
+        for t in tickers:
+            if t.bid is None and t.ask is None and t.last is None:
+                continue
+            write_msg({
+                "v": 1, "type": "tick",
+                "symbol": format_symbol_for_output(t.contract.symbol),
+                "bid": n(t.bid), "ask": n(t.ask), "last": n(t.last),
+                "volume": n(t.volume)
+            })
     except Exception as e:
         log_info("Tick processing error: %s", str(e))
 
-# Register tick handler - ib_insync passes list of tickers
 ib.pendingTickersEvent += on_pending_tickers
+
+# ---------------- Entrypoint ----------------
 
 if __name__ == '__main__':
     asyncio.run(main())
