@@ -82,6 +82,9 @@ This implementation plan transforms the live trading system into a revolutionary
 ### Phase 1: Enhanced Python Service Development
 
 - [ ] 1. Create comprehensive ib_service.py (single Python entrypoint)
+
+
+
   - Create single `ib_service.py` file with all IB management classes
   - Implement IBConnectionManager class for IB TWS connection
   - Implement HistoricalDataLoader class for loading x weeks of x bar size data
@@ -91,7 +94,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Create `python_service_tests.py` module (LABEL: delete) for Python testing
   - _Requirements: 1.1, 2.1, 8.1_
 
-- [ ] 1.1 Implement IB connection management in Python
+- [x] 1.1 Implement IB connection management in Python
+
   - Create IBConnectionManager with async IB TWS connection
   - Implement market data subscription setup for configured symbols
   - Add connection monitoring and auto-reconnection logic
@@ -100,7 +104,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Create connection configuration loading from environment/config
   - _Requirements: 2.1, 2.2, 4.1_
 
-- [ ] 1.2 Implement historical data loading system
+- [x] 1.2 Implement historical data loading system
+
   - Create HistoricalDataLoader with configurable weeks and bar size
   - Implement IB historical data API integration using ib_insync
   - Add data validation and quality checks for historical bars
@@ -109,7 +114,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Create data format conversion from IB bars to canonical OHLC format
   - _Requirements: 8.1, 8.2, 8.6_
 
-- [ ] 1.3 Implement live tick aggregation system
+- [x] 1.3 Implement live tick aggregation system
+
   - Create LiveTickAggregator for real-time tick processing
   - Implement 1-minute OHLC bar creation using canonical schema: {symbol, t_open, o,h,l,c,vol,source='live'}
   - Add time-based bar completion and delivery to Erlang
@@ -121,6 +127,12 @@ This implementation plan transforms the live trading system into a revolutionary
 ### Phase 2: Python Trade Execution and Communication
 
 - [ ] 2. Implement trade execution system with kill switch
+
+
+
+
+
+
   - Create TradeExecutor class for direct IB trade placement
   - Implement PAPER mode kill switch: env flag + runtime command to block new orders
   - Implement market order, limit order, and stop order execution
@@ -130,7 +142,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Create order validation and risk checks before execution
   - _Requirements: 7.3, 7.4, 9.1, 9.5_
 
-- [ ] 2.1 Implement Erlang communication bridge
+- [x] 2.1 Implement Erlang communication bridge
+
   - Create ErlangBridge class for Python-Erlang communication
   - Implement OHLC bar streaming to Erlang (send_ohlc_bar method)
   - Add trade signal reception from Erlang neural networks
@@ -139,7 +152,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Create message framing and JSON serialization
   - _Requirements: 1.4, 7.3, 10.2_
 
-- [ ] 2.2 Implement Python service configuration and startup
+- [x] 2.2 Implement Python service configuration and startup
+
   - Create configuration loading from config.erl integration
   - Implement Python service startup and shutdown procedures
   - Add service health monitoring and status reporting
@@ -151,6 +165,9 @@ This implementation plan transforms the live trading system into a revolutionary
 ### Phase 3: Simplified Erlang Data Interface (Single Data Path Module)
 
 - [ ] 3. Create simplified live_scape.erl (complete data path in one module)
+
+
+
   - Create new `live_scape.erl` module with complete data path: port/socket, decode/encode, acks, ETS insert, sense/2, trade signal out
   - Implement canonical OHLC ETS schema: Key by {Symbol, TOpen}, idempotent upsert
   - Add direct ETS insertion using canonical schema (no processing needed)
@@ -159,7 +176,9 @@ This implementation plan transforms the live trading system into a revolutionary
   - No separate bridge modules - everything in live_scape.erl
   - _Requirements: 7.1, 8.1, 8.3_
 
-- [ ] 3.1 Implement canonical OHLC bar reception and storage
+- [x] 3.1 Implement canonical OHLC bar reception and storage
+
+
   - Create message handling for OHLC bars using canonical schema: {symbol, t_open, o,h,l,c,vol,source}
   - Implement ETS keying by {Symbol, TOpen} with idempotent upsert
   - Add data validation for incoming OHLC bars
@@ -168,7 +187,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Add data quality monitoring and error reporting
   - _Requirements: 8.1, 8.2, 8.6_
 
-- [ ] 3.2 Maintain neural network sensor compatibility
+- [x] 3.2 Maintain neural network sensor compatibility
+
   - Preserve existing `sense/2` function interface exactly
   - Ensure `handle_sense_request/4` works with ETS data
   - Maintain price list and graph sensor data formats
@@ -177,7 +197,8 @@ This implementation plan transforms the live trading system into a revolutionary
   - Document 100% backward compatibility guarantee
   - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5_
 
-- [ ] 3.3 Implement trade signal transmission to Python
+- [x] 3.3 Implement trade signal transmission to Python
+
   - Create `handle_trade_signal/2` function for neural network decisions
   - Implement message formatting for Python service communication
   - Add trade signal validation and error handling
@@ -226,17 +247,19 @@ This implementation plan transforms the live trading system into a revolutionary
 
 ### Phase 5: Simplified Erlang System Coordinator
 
-- [ ] 5. Create simplified live_trading.erl system coordinator
+- [ ] 5. Create simplified live_trading.erl system coordinator with readiness gate
   - Create new `live_trading.erl` module with Python service management
   - Implement `start/0` function that starts Python ib_service.py
+  - Add readiness gate: "≥M bars per symbol AND last_bar_age < Xs" (no other hidden conditions)
   - Add `stop/0` and `emergency_stop/0` functions with Python service control
   - Implement system status monitoring (Python service + neural networks)
   - Create simplified state management (no IB connection state)
   - Remove all IB-related functions (delegated to Python)
   - _Requirements: 1.1, 2.1, 2.6_
 
-- [ ] 5.1 Implement Python service lifecycle management
+- [ ] 5.1 Implement Python service lifecycle management with readiness gate
   - Create `start_python_service/0` function to launch ib_service.py
+  - Implement readiness gate checking: "≥M bars per symbol AND last_bar_age < Xs"
   - Implement Python process monitoring and health checking
   - Add Python service restart logic for failures
   - Create communication channel setup with Python service

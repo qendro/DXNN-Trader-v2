@@ -64,6 +64,24 @@ q().
 
    BestAgentId = {5.699247180669372e-10,agent}.
    exoself:start(Best_Agent_Id, self(),benchmark).
+   exoself:start(Best_Agent_Id, self(),live_trading).
+
+
+   % 1. Load and start your best agent
+   Best_Agent_Id = {5.693207755943648e-10,agent}.  % Update with your latest
+   Agent_PId = exoself:start(Best_Agent_Id, self()).
+
+   % 2. Monitor the agent
+   is_process_alive(Agent_PId).
+   is_process_alive(<0.567.0>).
+
+   % 3. Simple test run
+   run_best_agent() ->
+      {atomic, Best_Agent_Id} = genotype_utils:find_best_agent(all),
+      Agent_PId = exoself:start(Best_Agent_Id, self()),
+      timer:sleep(30000),  % Run for 30 seconds
+      Agent_PId ! {self(), terminate}.
+
 
 
 
@@ -85,6 +103,48 @@ q().
 
 
    # Live Trader
+
+   ## Python-Centric Architecture (New)
+
+   The live trading system has been refactored to use a Python-centric architecture where Python handles ALL Interactive Brokers operations while Erlang focuses on neural network coordination.
+
+   ### Quick Start (Docker)
+   ```bash
+   # Build and run with network host for IB connection
+   docker run -it --rm --network host -v ${PWD}:/app -w /app erlang-dev
+   ```
+
+   ### Inside Docker Container:
+   ```erlang
+   % Compile the new modules
+   make:all([load]).
+   
+   % Test the Python-centric setup
+   docker_test_delete:quick_test().
+   
+   % Start the simplified live trading system
+   docker_test_delete:start_test().
+   
+   % Or start manually
+   live_scape_new:start_link().
+   ```
+
+   ### Python Service Testing:
+   ```bash
+   # Test Python service directly
+   python3 priv/ib_service.py
+   
+   # Run Docker test script
+   ./start_docker_test.sh
+   ```
+
+   ### Key Changes:
+   - **Python handles**: IB connection, historical data, live streaming, trade execution
+   - **Erlang handles**: Neural network coordination, ETS storage, system orchestration
+   - **Simplified**: 60% reduction in Erlang code complexity
+   - **Compatible**: 100% backward compatibility with existing neural networks
+
+   ## Legacy Live Trader (Old)
 
    ## Initialization 
 

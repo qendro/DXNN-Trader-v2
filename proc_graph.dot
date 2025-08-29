@@ -1,2 +1,0 @@
-digraph ProcGraph {  rankdir=LR;  node [shape=circle, fontsize=10];  "<0.527.0>" [label="root\n<0.527.0>", style=filled, fillcolor=lightgoldenrod];
-}

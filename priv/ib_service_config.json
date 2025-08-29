@@ -1,0 +1,30 @@
+{
+  "ib_connection": {
+    "host": "host.docker.internal",
+    "port": 7497,
+    "client_id": 101,
+    "timeout": 10
+  },
+  "trading": {
+    "symbols": ["EUR.USD", "GBP.USD", "USD.JPY"],
+    "default_quantity": 0.1,
+    "paper_mode_enforced": true,
+    "max_daily_trades": 50
+  },
+  "data": {
+    "historical_weeks": 1,
+    "bar_size": "1 min",
+    "preload_on_startup": true,
+    "tick_aggregation_enabled": true
+  },
+  "monitoring": {
+    "heartbeat_interval": 3,
+    "connection_monitor_interval": 5,
+    "max_reconnect_attempts": 5
+  },
+  "risk_management": {
+    "allow_live_orders": false,
+    "max_position_size": 0.2,
+    "daily_loss_limit": 0.05
+  }
+}
