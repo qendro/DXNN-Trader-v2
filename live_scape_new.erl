@@ -52,7 +52,7 @@ init_scape() ->
     PythonPort = start_python_service(),
 
     %% Wait for initial data readiness
-    wait_for_readiness(),
+    %% wait_for_readiness(),  % Commented out for testing
 
     %% Enter main loop
     receive
@@ -246,7 +246,7 @@ open_position(Signal, State) ->
             -1 -> "SELL"
         end,
     %% IB FX expects quantity in base currency units (e.g., 10_000 = 0.1 lot)
-    Quantity = 10000,  % Default: 0.1 lot
+    Quantity = 1000,  % Smaller size: 0.01 lot for testing
 
     %% Send trade signal to Python service
     TradeMessage =
@@ -332,6 +332,7 @@ python_port_loop(Port) ->
             ok;
         {send_message, Message} ->
             try
+                io:format("[Erlang->Python] send: ~p~n", [Message]),
                 Data = encode_json_simple(Message),
                 port_command(Port, Data),
                 python_port_loop(Port)

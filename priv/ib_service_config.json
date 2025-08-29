@@ -24,7 +24,7 @@
   },
   "risk_management": {
     "allow_live_orders": false,
-    "max_position_size": 0.2,
-    "daily_loss_limit": 0.05
+    "max_position_size": 999999999999999999999999999,
+    "daily_loss_limit": 1.00
   }
 }

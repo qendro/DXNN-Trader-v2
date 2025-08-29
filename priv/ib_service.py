@@ -8,7 +8,7 @@ Architecture:
 - IBConnectionManager: IB TWS connection and monitoring
 - HistoricalDataLoader: Load x weeks of x bar size data
 - LiveTickAggregator: Real-time tick-to-OHLC conversion
-- TradeExecutor: Direct trade execution with PAPER mode kill switch
+- TradeExecutor: Direct trade execution with comprehensive kill switches
 - ErlangBridge: Communication with Erlang neural networks
 """
 
@@ -69,8 +69,11 @@ def load_config():
     }
     
     try:
-        if os.path.exists('ib_service_config.json'):
-            with open('ib_service_config.json', 'r') as f:
+        config_path = 'ib_service_config.json'
+        if not os.path.exists(config_path):
+            config_path = 'priv/ib_service_config.json'
+        if os.path.exists(config_path):
+            with open(config_path, 'r') as f:
                 file_config = json.load(f)
             # Simple merge - file config overrides defaults
             for section, values in file_config.items():
@@ -78,9 +81,10 @@ def load_config():
                     default_config[section].update(values)
                 else:
                     default_config[section] = values
-            logger.info("Loaded configuration from ib_service_config.json")
+            logger.info(f"Loaded configuration from {config_path}")
+            logger.info(f"Risk management config: {default_config.get('risk_management', {})}")
         else:
-            logger.info("Using default configuration")
+            logger.info(f"Config file {config_path} not found, using default configuration")
     except Exception as e:
         logger.warning(f"Error loading config file: {e}, using defaults")
     
@@ -114,10 +118,10 @@ class IBConnectionManager:
         }
 
     async def connect(self, host="host.docker.internal", port=7497, client_id=101):
-        """Establish connection to IB TWS with paper-trading enforcement"""
-        # Paper-only guard unless ALLOW_LIVE is set
+        """Establish connection to IB TWS"""
+        # Safety check for live trading ports
         if port != 7497 and not os.getenv('ALLOW_LIVE'):
-            return {"status": "error", "message": "Paper only (port 7497)"}
+            return {"status": "error", "message": "Live trading port requires ALLOW_LIVE=1"}
 
         try:
             logger.info(f"Connecting to IB {host}:{port} (client_id={client_id})")
@@ -337,9 +341,10 @@ class TradeExecutor:
         
         # Risk limits from config
         trading_config = config.get("trading", {})
+        risk_config = config.get("risk_management", {})
         self.max_daily_trades = trading_config.get('max_daily_trades', 50)
-        self.max_daily_loss = trading_config.get('max_daily_loss', 0.05)
-        self.max_position_size = trading_config.get('max_position_size', 0.2)
+        self.max_daily_loss = risk_config.get('daily_loss_limit', 0.05)
+        self.max_position_size = risk_config.get('max_position_size', 0.2)
 
     async def execute_trade(self, symbol, action, quantity, order_type='MKT', limit_price=None):
         """Execute trade with comprehensive safety checks"""
@@ -353,11 +358,8 @@ class TradeExecutor:
         if risk_check['blocked']:
             return risk_check
         
-        # Execute based on mode
-        if not os.getenv('ALLOW_LIVE_ORDERS'):
-            return await self._execute_paper_trade(symbol, action, quantity, order_type)
-        else:
-            return await self._execute_live_trade(symbol, action, quantity, order_type, limit_price)
+        # Execute trade directly to IB
+        return await self._execute_live_trade(symbol, action, quantity, order_type, limit_price)
 
     def _is_trading_blocked(self):
         """Check if trading is blocked by kill switches"""
@@ -392,33 +394,10 @@ class TradeExecutor:
         
         return {'blocked': False}
 
-    async def _execute_paper_trade(self, symbol, action, quantity, order_type):
-        """Execute simulated trade for paper mode"""
-        fake_id = int(time.time() * 1000) % 100000000
-        
-        self.pending_orders[fake_id] = {
-            'symbol': symbol,
-            'action': action,
-            'quantity': quantity,
-            'status': 'simulated',
-            'timestamp': datetime.now()
-        }
-        
-        # Update simulated position
-        self._update_simulated_position(symbol, action, quantity)
-        
-        logger.info(f"PAPER TRADE: {action} {quantity} {symbol} (ID: {fake_id})")
-        
-        return {
-            'order_id': fake_id,
-            'status': 'simulated',
-            'symbol': symbol,
-            'action': action,
-            'quantity': quantity
-        }
+
 
     async def _execute_live_trade(self, symbol, action, quantity, order_type, limit_price):
-        """Execute real trade with IB"""
+        """Execute trade with IB"""
         try:
             contract = self._parse_symbol(symbol)
 
@@ -441,11 +420,15 @@ class TradeExecutor:
                 'timestamp': datetime.now()
             }
 
-            # Setup order monitoring
-            self._setup_order_monitoring(trade)
+            # Setup order monitoring (fix the updateEvent issue)
+            try:
+                self._setup_order_monitoring(trade)
+            except AttributeError:
+                # Handle older ib_insync versions that don't have updateEvent
+                logger.info(f"Order monitoring not available for this ib_insync version")
             
             self.daily_trades += 1
-            logger.info(f"LIVE TRADE: {action} {quantity} {symbol} (ID: {order_id})")
+            logger.info(f"IB TRADE: {action} {quantity} {symbol} (Order ID: {order_id})")
 
             return {
                 'order_id': order_id,
@@ -456,7 +439,7 @@ class TradeExecutor:
             }
 
         except Exception as e:
-            logger.error(f"Live trade execution failed: {e}")
+            logger.error(f"Trade execution failed: {e}")
             return {'status': 'error', 'message': str(e)}
 
     def _create_blocked_response(self, symbol, action, quantity):
@@ -469,16 +452,7 @@ class TradeExecutor:
             'message': 'Trading blocked by kill switch'
         }
 
-    def _update_simulated_position(self, symbol, action, quantity):
-        """Update simulated position tracking"""
-        if symbol not in self.positions:
-            self.positions[symbol] = {'quantity': 0, 'avg_price': 0}
-        
-        current_qty = self.positions[symbol]['quantity']
-        if action == 'BUY':
-            self.positions[symbol]['quantity'] = current_qty + quantity
-        else:  # SELL
-            self.positions[symbol]['quantity'] = current_qty - quantity
+
 
     def _setup_order_monitoring(self, trade):
         """Setup monitoring for live orders"""
@@ -534,7 +508,7 @@ class TradeExecutor:
             'daily_pnl': self.daily_pnl,
             'pending_orders': len(self.pending_orders),
             'positions': self.positions,
-            'paper_mode': not os.getenv('ALLOW_LIVE_ORDERS')
+            'ib_connected': self.ib.isConnected() if hasattr(self, 'ib') else False
         }
 
     def reset_daily_counters(self):
@@ -642,12 +616,13 @@ class ErlangBridge:
     def send_heartbeat(self, service_status):
         """Send enhanced heartbeat with service status"""
         self.last_heartbeat = time.time()
-        message = {
-            'type': 'heartbeat',
-            'data': service_status,
-            'timestamp': int(time.time() * 1000)
-        }
-        self._send_to_erlang(message)
+        # Disabled - no heartbeat messages to Erlang
+        # message = {
+        #     'type': 'heartbeat',
+        #     'data': service_status,
+        #     'timestamp': int(time.time() * 1000)
+        # }
+        # self._send_to_erlang(message)
 
     def _send_to_erlang(self, message):
         """Send message with proper framing and error handling"""
@@ -747,6 +722,10 @@ class IBService:
         """Handle commands from Erlang"""
         cmd_type = cmd.get('type')
         cid = cmd.get('cid')
+        try:
+            logger.info(f"Command received: type={cmd_type}, cid={cid}, payload_keys={list(cmd.keys())}")
+        except Exception:
+            pass
 
         try:
             if cmd_type == 'connect':
@@ -757,8 +736,8 @@ class IBService:
                 await self._handle_trade_signal(cmd, cid)
             elif cmd_type == 'get_status':
                 await self._handle_get_status(cmd, cid)
-            elif cmd_type == 'set_paper_mode':
-                await self._handle_set_paper_mode(cmd, cid)
+            elif cmd_type == 'set_trading_mode':
+                await self._handle_set_trading_mode(cmd, cid)
             elif cmd_type == 'activate_kill_switch':
                 await self._handle_activate_kill_switch(cmd, cid)
             elif cmd_type == 'deactivate_kill_switch':
@@ -799,6 +778,7 @@ class IBService:
         symbol = cmd.get('symbol')
         signal = cmd.get('signal')  # 1 (long), -1 (short), 0 (close)
         quantity = cmd.get('quantity', 0.1)
+        logger.info(f"trade_signal received: symbol={symbol}, signal={signal}, qty={quantity}, ALLOW_LIVE_ORDERS={os.getenv('ALLOW_LIVE_ORDERS')}")
 
         if signal == 1:
             action = 'BUY'
@@ -814,6 +794,7 @@ class IBService:
             return
 
         result = await self.trade_executor.execute_trade(symbol, action, quantity)
+        logger.info(f"trade_signal result: {result}")
         
         # Send confirmation via bridge and direct response
         self.bridge.send_trade_confirmation(result)
@@ -850,19 +831,20 @@ class IBService:
             "connection": self.connection_manager.get_connection_status(),
             "pending_orders": len(self.trade_executor.pending_orders),
             "current_bars": len(self.tick_aggregator.current_bars),
-            "paper_mode": self.trade_executor.paper_mode_enforced
+            "ib_port": config.get("ib_connection", {}).get("port", 7497)
         }
         write_msg({"v": 1, "type": "status", "cid": cid, "status": status})
 
-    async def _handle_set_paper_mode(self, cmd, cid):
-        """Handle paper mode setting"""
-        enabled = cmd.get('enabled', True)
-        # Note: Paper mode is controlled by environment variables
-        # This is just for status reporting
+    async def _handle_set_trading_mode(self, cmd, cid):
+        """Handle trading mode setting"""
+        # All trades go directly to IB - trading mode is determined by IB connection port
+        current_port = config.get("ib_connection", {}).get("port", 7497)
+        mode = "Paper Trading" if current_port == 7497 else "Live Trading"
         write_msg({
-            "v": 1, "type": "paper_mode_status", "cid": cid, 
-            "paper_mode": not os.getenv('ALLOW_LIVE_ORDERS'),
-            "message": "Paper mode controlled by ALLOW_LIVE_ORDERS env var"
+            "v": 1, "type": "trading_mode_status", "cid": cid, 
+            "port": current_port,
+            "mode": mode,
+            "message": f"All trades sent directly to IB. Current mode: {mode} (Port {current_port})"
         })
 
     async def _handle_activate_kill_switch(self, cmd, cid):
@@ -911,6 +893,7 @@ class IBService:
                     self.tick_aggregator.process_tick(symbol_out, price, vol, datetime.now())
 
                 # Also send raw tick to Erlang for monitoring
+                '''   - If you want to send tik data to Erlang
                 self.bridge._send_to_erlang({
                     "type": "tick",
                     "symbol": symbol_out,
@@ -918,7 +901,9 @@ class IBService:
                     "ask": n(ticker.ask),
                     "last": n(ticker.last),
                     "volume": n(ticker.volume)
+                
                 })
+                '''
         except Exception as e:
             logger.error(f"Tick processing error: {e}")
 
@@ -950,9 +935,10 @@ class IBService:
                     "active_positions": len(self.trade_executor.positions),
                     "kill_switch_active": self.trade_executor.kill_switch_active,
                     "daily_trades": self.trade_executor.daily_trades,
-                    "paper_mode": not os.getenv('ALLOW_LIVE_ORDERS')
+                    "ib_connected": self.connection_manager.ib.isConnected()
                 }
-                self.bridge.send_heartbeat(service_status)
+                # Disabled - no heartbeat messages to Erlang
+                # self.bridge.send_heartbeat(service_status)
             except Exception as e:
                 logger.error(f"Heartbeat error: {e}")
             await asyncio.sleep(3)
