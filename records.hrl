@@ -263,7 +263,8 @@
     previous_pc = 0,       % Previous percentage change
     account_balance = 10000, % Starting balance
     unrealized_pnl = 0,
-    realized_pnl = 0
+    realized_pnl = 0,
+    position_qty = undefined
 }).
 
 %% Risk management state record

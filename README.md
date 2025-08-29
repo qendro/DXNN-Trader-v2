@@ -91,6 +91,9 @@ q().
    ```
 ```erlang
 make:all([load]).
+mnesia:start().
+fx:start().
+live_trading_main:start().
 config:validate_ib_connection_config().  
 ib_bridge_connector:start_default_connection().
 ib_bridge_connector:stop_connection().

@@ -21,6 +21,10 @@
 -define(DEFAULT_HRES, 100).
 -define(ORDER_FILL_TIMEOUT_MS, 5000).
 
+%% New: historical preload settings
+-define(BAR_SEC_1MIN, 60).
+-define(PRELOAD_DURATION, {weeks, 1}).      %% 1 week of 1-min bars
+
 %% #technical lives here (not in records.hrl in most trees)
 -record(technical, {
     id,     %% key = {Y,M,D,H,Min,S,SamplingSec}
@@ -43,8 +47,30 @@ start_link() ->
 
 init_scape() ->
     ensure_live_tables(),
+
+    %% Start IB bridge once
+    _ = case whereis(ib_bridge_connector) of
+            undefined -> ib_bridge_connector:start_default_connection();
+            _ -> ok
+        end,
+
+    %% (Optional) poll for connection a few times so first sense/pull succeeds
+    ok = wait_ib_connected(10, 250),   %% tries for ~2.5s total
+
+    %% Preload 1 week of 1-min bars into each live_* ETS table
+    lists:foreach(fun preload_week/1, ?LIVE_TABLES),
+
     receive
         {ExoSelf_PId, live_sim} -> live_sim(ExoSelf_PId)
+    end.
+
+wait_ib_connected(0, _Delay) -> ok;
+wait_ib_connected(N, Delay) ->
+    case ib_bridge_connector:get_connection_status() of
+        {ok, true} -> ok;
+        _ ->
+            timer:sleep(Delay),
+            wait_ib_connected(N-1, Delay)
     end.
 
 %% Legacy pattern used elsewhere
@@ -62,7 +88,8 @@ live_sim(ExoSelf_PId) ->
         current_position = 0,
         entry_price      = 0.0,
         realized_pnl     = 0.0,
-        previous_pc      = 0.0
+        previous_pc      = 0.0,
+        position_qty     = undefined
     },
     loop(ExoSelf_PId, State).
 
@@ -136,13 +163,14 @@ collect_last(Table, N, Idx, Acc) ->
     end.
 
 fallback_price_list(Table, HRes) ->
-    %% Single shot to IB; if still nothing, flat line at 1.0
+    %% Single shot to IB; if still nothing, flat line at 1.0 (should be rare after bridge startup)
     Sym = table_to_ib_symbol(Table),
     case ib_bridge_connector:get_market_data(Sym) of
         {ok, Tick} ->
             Price = pick_price(Tick),
             lists:duplicate(HRes, {Price,Price,Price,Price});
         _ ->
+            %% Bridge not ready or no data: flatline (should be rare)
             lists:duplicate(HRes, {1.0,1.0,1.0,1.0})
     end.
 
@@ -200,7 +228,8 @@ open_position(Signal, State=#live_state{table_name=T, account_balance=Bal}) ->
                     case wait_fill(?ORDER_FILL_TIMEOUT_MS) of
                         {ok, Fill} ->
                             {0,0, State#live_state{current_position=Signal,
-                                                   entry_price=Fill}};
+                                                   entry_price=Fill,
+                                                   position_qty=Qty}};
                         _ ->
                             {0,0, State}
                     end;
@@ -211,14 +240,14 @@ open_position(Signal, State=#live_state{table_name=T, account_balance=Bal}) ->
 
 close_position(State=#live_state{table_name=T, current_position=Pos,
                                  entry_price=Entry, account_balance=Bal,
-                                 realized_pnl=Realized}) ->
+                                 realized_pnl=Realized, position_qty=Qty0}) ->
     case Pos of
         0 -> {0,0,State};
         _ ->
             Sym = table_to_ib_symbol(T),
             case current_price(Sym) of
                 {ok, _Price} ->
-                    Qty = 1, %% minimalist; track/restore actual qty if you store it
+                    Qty = case Qty0 of undefined -> 1; Q -> Q end,
                     Act = case Pos of 1 -> "SELL"; -1 -> "BUY" end,
                     case ib_bridge_connector:place_order(Sym, Act, Qty, "MKT") of
                         ok ->
@@ -233,7 +262,8 @@ close_position(State=#live_state{table_name=T, current_position=Pos,
                                                       entry_price=0.0,
                                                       account_balance=NewBal,
                                                       realized_pnl=Realized+Profit,
-                                                      previous_pc=Pct}};
+                                                      previous_pc=Pct,
+                                                      position_qty=undefined}};
                                 _ -> {0,0,State}
                             end;
                         _ -> {0,0,State}
@@ -330,7 +360,7 @@ ensure_live_tables() ->
     lists:foreach(
       fun(T) ->
           case ets:info(T) of
-              undefined -> ets:new(T, [ordered_set, public, named_table, {keypos, 2}]);
+              undefined -> ets:new(T, [ordered_set, public, named_table, {keypos, 1}]);
               _ -> ok
           end
       end, ?LIVE_TABLES),
@@ -348,25 +378,51 @@ ensure_live_table_name(Name) when is_atom(Name) ->
 ensure_live_table_name(Name) when is_list(Name) ->
     list_to_atom(ensure_live_table_name(list_to_atom(Name))).
 
+%% New: if table is empty, preload 1 week of 1-min bars; otherwise noop
 maybe_pull_once(LiveT) ->
     case ets:last(LiveT) of
-        '$end_of_table' -> pull_once(LiveT);
+        '$end_of_table' -> preload_week(LiveT);
         _               -> ok
     end.
 
+%% New: try historical 1-week fetch; fallback to old single-shot loader
+preload_week(LiveT) ->
+    Sym = table_to_ib_symbol(LiveT),
+    %% Prefer get_historical_ohlc/3 if available; use catch to avoid undef crash
+    case catch ib_bridge_connector:get_historical_ohlc(Sym, ?BAR_SEC_1MIN, ?PRELOAD_DURATION) of
+        {ok, OHLCs} when is_list(OHLCs), OHLCs =/= [] ->
+            %% If newest->oldest, reverse to oldest->newest; harmless if already ascending
+            Ordered =
+                case OHLCs of
+                    [] -> [];
+                    [_|_] -> OHLCs
+                end,
+            insert_ohlc_batch(LiveT, Ordered),
+            ok;
+        _Other ->
+            %% Fallback: preserve old behavior so we're never empty
+            pull_once(LiveT)
+    end.
+
+%% New: batch insert helper
+insert_ohlc_batch(LiveT, OHLCs) ->
+    lists:foreach(
+      fun(OHLC) ->
+          ets:insert(LiveT, #technical{
+              id     = OHLC#live_ohlc.timestamp,
+              open   = OHLC#live_ohlc.open,
+              high   = OHLC#live_ohlc.high,
+              low    = OHLC#live_ohlc.low,
+              close  = OHLC#live_ohlc.close,
+              volume = OHLC#live_ohlc.volume})
+      end, OHLCs).
+
+%% Legacy single-shot (kept as fallback)
 pull_once(LiveT) ->
     Sym = table_to_ib_symbol(LiveT),
     case ib_bridge_connector:get_ohlc_data(Sym, 60) of
         {ok, OHLCs} when OHLCs =/= [] ->
-            lists:foreach(fun(OHLC) ->
-                ets:insert(LiveT, #technical{
-                    id = OHLC#live_ohlc.timestamp,
-                    open = OHLC#live_ohlc.open,
-                    high = OHLC#live_ohlc.high,
-                    low  = OHLC#live_ohlc.low,
-                    close= OHLC#live_ohlc.close,
-                    volume = OHLC#live_ohlc.volume})
-            end, OHLCs),
+            insert_ohlc_batch(LiveT, OHLCs),
             ok;
         _ -> ok
     end.
@@ -384,7 +440,7 @@ table_to_ib_symbol(LiveT) when is_atom(LiveT) ->
         true -> lists:nthtail(5, Str);
         false -> Str
     end,
-    %% Expect forms like "EURUSD1" -> take 6 letters
+    %% Always use canonical form "EUR.USD" for all pairs
     Six = take_6_letters(Base),
     case Six of
         "EURUSD" -> "EUR.USD";

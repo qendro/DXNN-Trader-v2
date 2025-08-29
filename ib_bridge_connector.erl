@@ -313,12 +313,11 @@ handle_call({place_order, Symbol, Action, Quantity, OrderType}, _From, State) ->
 handle_call(get_account_info, _From, State) ->
     {reply, {ok, #{account => "paper_account", status => "connected"}}, State};
 
+
 handle_call(get_pending_orders, _From, State) ->
-    {reply, {ok, []}, State}.
-
+    {reply, {ok, []}, State};
 handle_call(get_order_confirmations, _From, State) ->
-    {reply, {ok, []}, State}.
-
+    {reply, {ok, []}, State};
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State}.
 
