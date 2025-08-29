@@ -37,9 +37,9 @@ internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dime
 %% === Evolution Parameters ===
 specie_size_limit() -> 1.                    % Options: 1-100 (max agents per species)
 init_specie_size() -> 1.                     % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 100.                    % Options: 10-100000 (max evaluations per run)
+evaluations_limit() -> 10.                    % Options: 10-100000 (max evaluations per run)
 survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
-tot_runs() -> 100.                             % Options: 1-100 (number of benchmark runs)
+tot_runs() -> 1.                             % Options: 1-100 (number of benchmark runs)
 
 %% === Neural Network Parameters ===
 morphology() -> forex_trader.             % Options: forex_trader, forex_trader_1m

@@ -1,34 +1,22 @@
 #Avg Fitness Vs Evaluations, Morphology:forex_trader
-500 0.0 0.0
-1000 25.54581426666662 7.295588017761463
-1500 284.6599242999974 15.322219544733654
+500 300.0 0.0
 
 
 #Avg Neurons Vs Evaluations, Morphology:forex_trader
 500 1.0 0.0
-1000 1.0 0.0
-1500 1.0 0.0
 
 
 #Avg Diversity Vs Evaluations, Morphology:forex_trader
-500 4.0 0.0
-1000 4.0 0.0
-1500 4.0 0.0
+500 1.0 0.0
 
 
 #Avg. Max Fitness Vs Evaluations, Morphology:forex_trader
-500 0
-1000 353.83175999999116
-1500 514.6274399999777
+500 300
 
 
 #Avg. Min Fitness Vs Evaluations, Morphology:forex_trader
-500 0
-1000 0
-1500 0
+500 300
 
 
 #Specie-Population Turnover Vs Evaluations, Morphology:forex_trader
-500 500.0
-1000 500.0
-1500 500.0
+500 14.0

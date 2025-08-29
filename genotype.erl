@@ -257,16 +257,7 @@ update_fingerprint(Agent_Id)->
 	GeneralizedActuators = [(read({actuator,A_Id}))#actuator{id=undefined,cx_id=undefined,fanin_ids=[]} || A_Id<-Cx#cortex.actuator_ids],
 	GeneralizedPattern = [{LayerIndex,length(LNIds)}||{LayerIndex,LNIds}<-A#agent.pattern],
 	GeneralizedEvoHist = generalize_EvoHist(A#agent.evo_hist,[]),
-	N_Ids = Cx#cortex.neuron_ids,
-	{Tot_Neuron_ILs,Tot_Neuron_OLs,Tot_Neuron_ROs,AF_Distribution} = get_NodeSummary(N_Ids),
-	Type = A#agent.encoding_type,
-	TopologySummary = #topology_summary{
-		type = Type,
-		tot_neurons = length(N_Ids),
-		tot_n_ils = Tot_Neuron_ILs,
-		tot_n_ols = Tot_Neuron_OLs,
-		tot_n_ros = Tot_Neuron_ROs,
-		af_distribution = AF_Distribution},
+	TopologySummary = update_NNTopologySummary(Agent_Id),
 	Fingerprint = {GeneralizedPattern,GeneralizedEvoHist,GeneralizedSensors,GeneralizedActuators,TopologySummary},
 	write(A#agent{fingerprint=Fingerprint}).
 %update_fingerprint/1 calculates the fingerprint of the agent, where the fingerprint is just a tuple of the various general features of the NN based system, a list of features that play some role in distinguishing its genotype's general properties from those of other NN systems. The fingerprint here is composed of the generalized pattern (pattern minus the unique ids), generalized evolutionary history (evolutionary history minus the unique ids of the elements), a generalized sensor set, and a generalized actuator set.-record(topology_summary,{type,tot_neurons,tot_n_ils,tot_n_ols,tot_n_ros,af_distribution}).
@@ -284,9 +275,8 @@ update_fingerprint(Agent_Id)->
 %generalize_EvoHist/2 generalizes the evolutionary history tuples by removing the unique element ids. Two neurons which are using exactly the same activation function, located exactly in the same layer, and using exactly the same weights will still have different unique ids, thus these ids must be removed to produce a more general set of tuples. There are 3 types of tuples in evo_hist list, with 3, 2 and 1 element ids. Once the evolutionary history list is generalized, it is returned to the caller.
 
 update_NNTopologySummary(Agent_Id)->
-	A = mnesia:read({agent,Agent_Id}),
-	Cx_Id = A#agent.cx_id,
-	Cx = mnesia:read({cortex,Cx_Id}),
+	A = read({agent,Agent_Id}),
+	Cx = read({cortex,A#agent.cx_id}),
 	N_Ids = Cx#cortex.neuron_ids,
 	{Tot_Neuron_ILs,Tot_Neuron_OLs,Tot_Neuron_ROs,AF_Distribution} = get_NodeSummary(N_Ids),
 	Type = A#agent.encoding_type,

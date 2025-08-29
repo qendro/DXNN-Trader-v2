@@ -51,10 +51,12 @@ fx_PCI(Exoself_Id,VL,Parameters,Scape)->
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_end_index(),config:benchmark_end_index()};
 		live_trading ->
 			%Live trading mode - get recent market data
+			%io:format("~n[Live Trading] Exoself ~p requesting ~p with HRes=~p VRes=~p~n", [Exoself_Id, config:primary_currency_pair(), HRes, VRes]),
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],live_data,live_data}
 	end,
 	receive 
 		{_From,Result}->
+			io:format("[Live Trading][PCI] Got Result: ~p~n", [Result]),
 			Result
 	end.
 
@@ -71,10 +73,12 @@ fx_PLI(Exoself_Id,VL,Parameters,Scape)->
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_end_index(),config:benchmark_end_index()};
 		live_trading ->
 			%Live trading mode - get recent market data
+			%io:format("~n[Live Trading][PLI] Exoself=~p Pair=~p Type=~p HRes=~p~n", [Exoself_Id, config:primary_currency_pair(), Type, HRes]),
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],live_data,live_data}
 	end,
 	receive 
 		{_From,Result}->
+			io:format("[Live Trading][PLI] Got Result: ~p~n", [Result]),
 			normalize(Result)
 	end.
 	

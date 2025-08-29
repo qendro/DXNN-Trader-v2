@@ -43,6 +43,7 @@ pts(ExoSelf_PId,Result,_Scape)->
 % 1 → Long (buy).
 fx_Trade(ExoSelf_PId,Output,Parameters,Scape)->
 	[TradeSignal] = Output,
+	io:format("[TRADE] ExoSelf=~p Pair=~p Signal=~p~n", [ExoSelf_PId, config:primary_currency_pair(), TradeSignal]),
 	Scape ! {self(),trade,config:primary_currency_pair(),functions:trinary(TradeSignal)},
 	receive 
 		{Scape,Fitness,HaltFlag}->
