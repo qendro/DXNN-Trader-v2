@@ -17,6 +17,7 @@ docker run -it --rm --network host -v ${PWD}:/app -w /app erlang-dev
 ``` erlang
 # Inside container:
 make:all().
+make:all([load]).
 mnesia:create_schema([node()]).
 mnesia:start().
 fx:init().
