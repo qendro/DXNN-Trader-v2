@@ -16,7 +16,7 @@ buy_money_fixed() -> 100.                    % Options: any positive number (fix
 min_profit_threshold() -> 0.000150.          % Options: 0.00001-0.01 (minimum profit in pips)
 
 %% === Data Parameters ===
-primary_currency_pair() -> 'EUR.USD1'.         % Options: 'EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60'
+primary_currency_pair() -> 'EURUSD1'.         % Options: 'EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60'
 data_start_index() -> 1000.                  % Options: 1-N (starting row for training data)
 data_end_index() -> 200.                     % Options: data_start_index+1 to N (ending row for training)
 benchmark_end_index() -> last.               % Options: last, or specific number (ending row for benchmark)

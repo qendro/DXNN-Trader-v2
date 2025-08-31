@@ -1,4 +1,4 @@
-
+%test
 -module(sensor).
 -compile(export_all).
 -include("records.hrl").
