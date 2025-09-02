@@ -1,6 +1,8 @@
 TODO List
 
 - Clean up old live scape code from fx.erl and maybe benchmarker
+- Modify fx.erl to execute on different currency pairs and timeframes
+- Modify fx.erl to accept broader .txt file
 - Change ETS Table in Live Trader to match FX.erl
 - make fx.erl ETS tables configurable.
     - Right now its hardcoded to EURUSD1

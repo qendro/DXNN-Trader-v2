@@ -54,6 +54,33 @@ agent_encoding_types() -> [substrate].          % Options: neural, substrate
 population_evo_alg_f() -> generational.      % Options: generational, steady_state
 connection_architecture() -> recurrent.    % Options: feedforward, recurrent
 
+%% === Additional Neural Network Parameters ===
+substrate_plasticities() -> [none].          % Options: none, hebbian, ojas, self_modulation
+substrate_linkforms() -> [l2l_feedforward].  % Options: l2l_feedforward, jordan_recurrent, fully_connected
+neural_aggregation_functions() -> [dot_product]. % Options: dot_product, mult_product, diff
+tuning_selection_functions() -> [dynamic_random]. % Options: all, all_random, recent, recent_random, lastgen, lastgen_random
+heredity_types() -> [darwinian].             % Options: darwinian, lamarckian
+tot_topological_mutations_functions() -> [{ncount_exponential,0.5}]. % Options: {ncount_exponential,0.5}, {ncount_linear,1}
+population_fitness_postprocessor_f() -> size_proportional. % Options: none, size_proportional
+population_selection_f() -> competition.     % Options: competition, top3
+
+%% === Mutation Operators Configuration ===
+mutation_operators() -> [
+    {mutate_weights,1},
+    {add_bias,1},
+    {remove_bias,1},
+    {mutate_af,1},
+    {add_outlink,40},
+    {add_inlink,40},
+    {add_neuron,40},
+    {outsplice,4},
+    {add_sensor,10},
+    {add_actuator,1},
+    {mutate_plasticity_parameters,1},
+    {add_cpp,1},
+    {add_cep,1}
+]. % Options: adjust weights and probabilities as needed
+
 %% === System Configuration ===
 fx_tables_directory() -> "fx_tables/".  % Options: any valid directory path
 source_directory() -> "fx_tables/".     % Options: any valid directory path  

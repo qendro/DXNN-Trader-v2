@@ -33,6 +33,7 @@
 # m.run_eurusd_live_1min_to_txt('eurusd_1min_live.txt')
 # m.stream_eurusd_ticks_live()
 
+# m.fetch_fx_to_txt_chunked('EURUSD', '10 D', '1 sec', filename='eurusd_1s_10d.txt')
 
 
 from datetime import datetime, timedelta, timezone
@@ -50,17 +51,34 @@ def connect(port=7497, clientId=1):
 
 def fetch_last_5min_1min():
     ib.qualifyContracts(Forex('EURUSD'))
-    bars = ib.reqHistoricalData(Forex('EURUSD'), endDateTime='', durationStr='300 S', barSizeSetting='1 min', whatToShow='MIDPOINT', useRTH=False, keepUpToDate=False)
+    bars = ib.reqHistoricalData(
+        Forex('EURUSD'),
+        endDateTime=datetime.now(timezone.utc),
+        durationStr='300 S',
+        barSizeSetting='1 min',
+        whatToShow='MIDPOINT',
+        useRTH=False,
+        keepUpToDate=False
+    )
     return bars
 
 def poll_every_minute():
     try:
         while True:
             ib.qualifyContracts(Forex('EURUSD'))
-            bars = ib.reqHistoricalData(Forex('EURUSD'), endDateTime='', durationStr='5 M', barSizeSetting='1 min', whatToShow='MIDPOINT', useRTH=False, keepUpToDate=False)
+            bars = ib.reqHistoricalData(
+                Forex('EURUSD'),
+                endDateTime=datetime.now(timezone.utc),
+                durationStr='5 M',
+                barSizeSetting='1 min',
+                whatToShow='MIDPOINT',
+                useRTH=False,
+                keepUpToDate=False
+            )
             if bars:
                 b = bars[-1]
-                print(f"{b.date} O={b.open} H={b.high} L={b.low} C={b.close} V={b.volume}")
+                dt_utc = b.date.astimezone(timezone.utc) if b.date.tzinfo else b.date.replace(tzinfo=timezone.utc)
+                print(f"{dt_utc} O={b.open} H={b.high} L={b.low} C={b.close} V={b.volume}")
             else:
                 print("No bars returned.")
             ib.sleep(60)
@@ -69,11 +87,20 @@ def poll_every_minute():
 
 def fetch_last_1day_1min():
     ib.qualifyContracts(Forex('EURUSD'))
-    bars = ib.reqHistoricalData(Forex('EURUSD'), endDateTime='', durationStr='1 D', barSizeSetting='1 min', whatToShow='MIDPOINT', useRTH=False, keepUpToDate=False)
+    bars = ib.reqHistoricalData(
+        Forex('EURUSD'),
+        endDateTime=datetime.now(timezone.utc),
+        durationStr='1 D',
+        barSizeSetting='1 min',
+        whatToShow='MIDPOINT',
+        useRTH=False,
+        keepUpToDate=False
+    )
     if bars:
         print("=== EURUSD 1-minute bars for last 1 day [MIDPOINT] ===")
         for b in bars:
-            print(f"{b.date} O={b.open} H={b.high} L={b.low} C={b.close} V={b.volume}")
+            dt_utc = b.date.astimezone(timezone.utc) if b.date.tzinfo else b.date.replace(tzinfo=timezone.utc)
+            print(f"{dt_utc} O={b.open} H={b.high} L={b.low} C={b.close} V={b.volume}")
     else:
         print("No bars returned.")
 
@@ -82,24 +109,42 @@ def fetch_fx(symbol='EURUSD', duration='1 D', bar_size='1 min', feed='MIDPOINT')
     # ⏳ Durations: "3600 S","1 D","5 D","1 W","1 M","3 M","1 Y"
     # 📊 Bar sizes: "1 sec","5 secs","15 secs","30 secs","1 min","2 mins","5 mins","15 mins","30 mins","1 hour","1 day"
     ib.qualifyContracts(Forex(symbol))
-    bars = ib.reqHistoricalData(Forex(symbol), endDateTime='', durationStr=duration, barSizeSetting=bar_size, whatToShow=feed, useRTH=False, keepUpToDate=False)
+    bars = ib.reqHistoricalData(
+        Forex(symbol),
+        endDateTime=datetime.now(timezone.utc),
+        durationStr=duration,
+        barSizeSetting=bar_size,
+        whatToShow=feed,
+        useRTH=False,
+        keepUpToDate=False
+    )
     if bars:
         print(f"=== {symbol} {bar_size} bars for last {duration} [{feed}] ===")
         for b in bars:
-            print(f"{b.date} O={b.open} H={b.high} L={b.low} C={b.close} V={b.volume}")
+            dt_utc = b.date.astimezone(timezone.utc) if b.date.tzinfo else b.date.replace(tzinfo=timezone.utc)
+            print(f"{dt_utc} O={b.open} H={b.high} L={b.low} C={b.close} V={b.volume}")
     else:
         print(f"No bars returned for {symbol} [{feed}].")
 
 def fetch_fx_to_txt(symbol='EURUSD', duration='1 D', bar_size='1 min', feed='MIDPOINT', filename='fx_data.txt'):
     ib.qualifyContracts(Forex(symbol))
-    bars = ib.reqHistoricalData(Forex(symbol), endDateTime='', durationStr=duration, barSizeSetting=bar_size, whatToShow=feed, useRTH=False, keepUpToDate=False)
+    bars = ib.reqHistoricalData(
+        Forex(symbol),
+        endDateTime=datetime.now(timezone.utc),
+        durationStr=duration,
+        barSizeSetting=bar_size,
+        whatToShow=feed,
+        useRTH=False,
+        keepUpToDate=False
+    )
     if not bars:
         print(f"No bars returned for {symbol} [{feed}]."); return
     with open(filename, 'w') as f:
         f.write(f"{symbol} {bar_size} bars for last {duration} [{feed}]\n")
         f.write("Date,Open,High,Low,Close,Volume\n")
         for b in bars:
-            f.write(f"{b.date},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
+            dt_utc = b.date.astimezone(timezone.utc) if b.date.tzinfo else b.date.replace(tzinfo=timezone.utc)
+            f.write(f"{dt_utc.strftime('%Y-%m-%d %H:%M:%S')},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
     print(f"Saved {len(bars)} bars for {symbol} to {filename}")
 
 def fetch_fx_to_txt_1w_1min(symbol='EURUSD',
@@ -124,14 +169,14 @@ def fetch_fx_to_txt_1w_1min(symbol='EURUSD',
     contract = Forex(symbol)
     ib.qualifyContracts(contract)
 
-    end_dt = ''            # '' = now on first call
+    end_dt = datetime.now(timezone.utc)  # explicit UTC now on first call
     seen = set()           # dedupe by datetime
     rows = []
 
     def req_once(endDateTime):
         return ib.reqHistoricalData(
             contract=contract,
-            endDateTime=endDateTime,   # '' or 'YYYYMMDD HH:MM:SS'
+            endDateTime=endDateTime,   # aware UTC datetime
             durationStr='1 W',
             barSizeSetting='1 min',
             whatToShow=whatToShow,
@@ -139,15 +184,26 @@ def fetch_fx_to_txt_1w_1min(symbol='EURUSD',
             keepUpToDate=False
         )
 
+    from collections import deque
+    recent = deque(maxlen=2)
+
+    def throttle():
+        if len(recent) < 2:
+            return
+        now = datetime.now(timezone.utc)
+        delta = (now - recent[0]).total_seconds()
+        if delta < 60:
+            ib.sleep(60 - delta + 0.05)
+
     while True:
         try:
+            throttle()
+            sent_at = datetime.now(timezone.utc)
             bars = req_once(end_dt)
+            recent.append(sent_at)
         except Exception as e:
             print(f"Request failed, stopping: {e}")
             break
-
-        # Pacing: ensure <= 2 req/min (sleep after each request)
-        ib.sleep(31)
 
         if not bars:
             print("No more bars returned, stopping.")
@@ -165,7 +221,7 @@ def fetch_fx_to_txt_1w_1min(symbol='EURUSD',
             break
 
         # step back one second from oldest bar to avoid overlap gaps
-        end_dt = (oldest_dt - timedelta(seconds=1)).strftime('%Y%m%d %H:%M:%S')
+        end_dt = oldest_dt - timedelta(seconds=1)
 
     # write file
     rows.sort(key=lambda x: x.date)
@@ -177,9 +233,181 @@ def fetch_fx_to_txt_1w_1min(symbol='EURUSD',
         f.write(f"{symbol} 1-min bars (1 W chunks) over last {total_duration} [{whatToShow}]\n")
         f.write("Date,Open,High,Low,Close,Volume\n")
         for b in rows:
-            f.write(f"{b.date},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
+            dt_utc = b.date.astimezone(timezone.utc) if b.date.tzinfo else b.date.replace(tzinfo=timezone.utc)
+            f.write(f"{dt_utc.strftime('%Y-%m-%d %H:%M:%S')},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
 
     print(f"Saved {len(rows)} bars for {symbol} to {filename}")
+
+def fetch_fx_to_txt_chunked(symbol: str,
+                            duration: str,
+                            bar_size: str,
+                            whatToShow: str = 'MIDPOINT',
+                            filename: str = 'fx_chunked.txt') -> None:
+    """
+    Fetch FX bars and append to `filename`, chunking by bar size with fallbacks.
+    - bar_size: '1 sec' → chunks '2 D' (fallback '1 D'); '1 min' → '1 W' (fallback '3 D'); '1 day' → '1 Y' (fallback '6 M')
+    - duration: 'N U' where U ∈ {D,W,M,Y}; rounds up chunk math implicitly by going to now.
+    - Resumes from last timestamp in file if it exists; writes incrementally.
+    - Pacing: max 2 requests per 60 seconds (sliding window).
+    Output rows: UTC 'YYYY-MM-DD HH:MM:SS',Open,High,Low,Close,Volume
+    """
+    from collections import deque
+
+    # Validate + normalize bar size to IB tokens
+    user_bar = bar_size.strip().lower()
+    if user_bar == '1 sec':
+        ib_bar = '1 secs'   # IB expects plural 'secs'
+    elif user_bar == '1 min':
+        ib_bar = '1 min'
+    elif user_bar == '1 day':
+        ib_bar = '1 day'
+    else:
+        raise ValueError("bar_size must be one of: '1 sec', '1 min', '1 day'")
+
+    # Parse duration like 'N U'
+    try:
+        n_str, unit = duration.strip().split()
+        n = int(n_str)
+        unit = unit.upper()
+        if unit not in ('D', 'W', 'M', 'Y'):
+            raise ValueError
+    except Exception:
+        raise ValueError("duration must be like '10 D', '3 W', '2 M', or '1 Y'")
+
+    # Convert requested duration to a timedelta (simple approximations)
+    days_per_unit = {'D': 1, 'W': 7, 'M': 30, 'Y': 365}
+    total_days = n * days_per_unit[unit]
+
+    # Chunk mapping and fallback per bar size
+    if bar_size == '1 sec':
+        primary_chunk, fallback_chunk = ('2 D', '1 D')
+        primary_td, fallback_td = (timedelta(days=2), timedelta(days=1))
+    elif bar_size == '1 min':
+        primary_chunk, fallback_chunk = ('1 W', '3 D')
+        primary_td, fallback_td = (timedelta(days=7), timedelta(days=3))
+    else:  # '1 day'
+        primary_chunk, fallback_chunk = ('1 Y', '6 M')
+        primary_td, fallback_td = (timedelta(days=365), timedelta(days=180))
+
+    # Prepare contract
+    contract = Forex(symbol)
+    ib.qualifyContracts(contract)
+
+    now_utc = datetime.now(timezone.utc)
+
+    # Determine resume point from file, if any
+    last_written_dt = None
+    new_file = not os.path.exists(filename)
+    if not new_file:
+        try:
+            with open(filename, 'r', encoding='utf-8') as rf:
+                last = None
+                for line in rf:
+                    line = line.strip()
+                    if line and line[0].isdigit() and ',' in line:
+                        last = line
+                if last:
+                    ts = last.split(',')[0].strip()
+                    try:
+                        last_written_dt = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        last_written_dt = None
+        except FileNotFoundError:
+            new_file = True
+
+    requested_start = now_utc - timedelta(days=total_days)
+    # Resume from last+1s if file exists; else from requested start
+    start_from = (last_written_dt + timedelta(seconds=1)) if last_written_dt else requested_start
+    if start_from > now_utc:
+        print('Up-to-date: nothing to fetch.')
+        return
+
+    # Prepare output file (append mode, add header if new)
+    f = open(filename, 'a', encoding='utf-8')
+    try:
+        if new_file:
+            f.write('Date,Open,High,Low,Close,Volume\n')
+            f.flush()
+
+        # Pacing: max 2 requests per 60 seconds
+        recent = deque(maxlen=2)
+
+        def throttle():
+            if len(recent) < 2:
+                return
+            now = datetime.now(timezone.utc)
+            delta = (now - recent[0]).total_seconds()
+            if delta < 60:
+                ib.sleep(60 - delta + 0.05)
+
+        chunk_str = primary_chunk
+        chunk_td = primary_td
+
+        def request(end_dt):
+            return ib.reqHistoricalData(
+                contract=contract,
+                endDateTime=end_dt,
+                durationStr=chunk_str,
+                barSizeSetting=ib_bar,
+                whatToShow=whatToShow,
+                useRTH=False,
+                keepUpToDate=False
+            )
+
+        cursor_end = min(start_from + chunk_td, now_utc)
+        while start_from <= now_utc:
+            throttle()
+            try:
+                bars = request(cursor_end)
+                recent.append(datetime.now(timezone.utc))
+            except Exception as e:
+                # Apply single-step fallback per mapping
+                if chunk_str == primary_chunk:
+                    print(f"Chunk '{chunk_str}' failed ({e}); falling back to '{fallback_chunk}'")
+                    chunk_str = fallback_chunk
+                    chunk_td = fallback_td
+                    cursor_end = min(start_from + chunk_td, now_utc)
+                    throttle()
+                    try:
+                        bars = request(cursor_end)
+                        recent.append(datetime.now(timezone.utc))
+                    except Exception as e2:
+                        print(f"Fallback '{chunk_str}' failed: {e2}")
+                        break
+                else:
+                    print(f"Request failed on '{chunk_str}': {e}")
+                    break
+
+            if not bars:
+                start_from = cursor_end
+                if start_from >= now_utc:
+                    break
+                cursor_end = min(start_from + chunk_td, now_utc)
+                continue
+
+            wrote_any = False
+            for b in bars:
+                dt = b.date
+                dt = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                if dt < start_from:
+                    continue
+                if last_written_dt and dt <= last_written_dt:
+                    continue
+                f.write(f"{dt.strftime('%Y-%m-%d %H:%M:%S')},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
+                wrote_any = True
+                last_written_dt = dt
+
+            if wrote_any:
+                f.flush()
+
+            start_from = cursor_end
+            if start_from >= now_utc:
+                break
+            cursor_end = min(start_from + chunk_td, now_utc)
+
+        print(f"Done. Wrote up to {last_written_dt.strftime('%Y-%m-%d %H:%M:%S') if last_written_dt else 'start'} UTC to {filename}.")
+    finally:
+        f.close()
 
 def fetch_fut_expiries_to_csv(symbol='MCL',
                               exchange='NYMEX',
@@ -221,7 +449,7 @@ def fetch_fut_expiries_to_csv(symbol='MCL',
         if not dt:
             continue
         if dt >= cutoff:
-            rows.append((cd.contract.localSymbol, s, dt.isoformat()))
+            rows.append((cd.contract.localSymbol, s, dt.strftime('%Y-%m-%d %H:%M:%S')))
 
     # --- sort by expiry date ---
     rows.sort(key=lambda x: x[2])
@@ -272,7 +500,7 @@ def save_past_expiries_csv(symbol='MCL', exchange='NYMEX',
                 cd.contract.localSymbol or '',
                 s[:6],
                 s,
-                dt.isoformat(),
+                dt.strftime('%Y-%m-%d %H:%M:%S'),
                 cd.contract.conId
             ))
 
@@ -314,7 +542,7 @@ def fetch_fut_to_txt_1w_1min(symbol='QM',
     contract = ContFuture(symbol=symbol, exchange=exchange)
     ib.qualifyContracts(contract)
 
-    end_dt = ''                 # '' => now (first call)
+    end_dt = datetime.now(timezone.utc)  # explicit UTC now (first call)
     prev_oldest = None
     did_jump_back = False
 
@@ -325,7 +553,7 @@ def fetch_fut_to_txt_1w_1min(symbol='QM',
     def req_once(endDateTime):
         return ib.reqHistoricalData(
             contract=contract,
-            endDateTime=endDateTime,     # '' or 'YYYYMMDD HH:MM:SS'
+            endDateTime=endDateTime,     # aware UTC datetime
             durationStr='1 W',
             barSizeSetting='1 min',
             whatToShow=whatToShow,
@@ -333,11 +561,24 @@ def fetch_fut_to_txt_1w_1min(symbol='QM',
             keepUpToDate=False
         )
 
+    from collections import deque
+    recent = deque(maxlen=2)
+
+    def throttle():
+        if len(recent) < 2:
+            return
+        now = datetime.now(timezone.utc)
+        delta = (now - recent[0]).total_seconds()
+        if delta < 60:
+            ib.sleep(60 - delta + 0.05)
+
     while True:
+        throttle()
+        sent_at = datetime.now(timezone.utc)
         bars = req_once(end_dt)
+        recent.append(sent_at)
         fetched += 1
         print(f"success [{fetched}]: end_dt='{end_dt}'")
-        ib.sleep(31)  # <= 2 req/min
 
         if not bars:
             print("No more bars returned, stopping.")
@@ -358,7 +599,7 @@ def fetch_fut_to_txt_1w_1min(symbol='QM',
         # no-progress guard: if oldest didn't move strictly older, force a jump, else stop
         if prev_oldest is not None and oldest_dt >= prev_oldest:
             if not did_jump_back:
-                forced = (prev_oldest - timedelta(days=8)).strftime('%Y%m%d %H:%M:%S')
+                forced = (prev_oldest - timedelta(days=8))
                 print(f"No progress (oldest {oldest_dt}); forcing jump to {forced}")
                 end_dt = forced
                 did_jump_back = True
@@ -371,7 +612,7 @@ def fetch_fut_to_txt_1w_1min(symbol='QM',
         did_jump_back = False
 
         # normal step: 1s before oldest bar
-        end_dt = (oldest_dt - timedelta(seconds=1)).strftime('%Y%m%d %H:%M:%S')
+        end_dt = oldest_dt - timedelta(seconds=1)
 
     rows.sort(key=lambda x: x.date)
     if not rows:
@@ -382,7 +623,8 @@ def fetch_fut_to_txt_1w_1min(symbol='QM',
         f.write(f"{symbol} (continuous) 1-min bars, 1W chunks, last {total_duration} [{whatToShow}]\n")
         f.write("Date,Open,High,Low,Close,Volume\n")
         for b in rows:
-            f.write(f"{b.date},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
+            dt_utc = b.date.astimezone(timezone.utc) if b.date.tzinfo else b.date.replace(tzinfo=timezone.utc)
+            f.write(f"{dt_utc.strftime('%Y-%m-%d %H:%M:%S')},{b.open},{b.high},{b.low},{b.close},{b.volume}\n")
 
     print(f"Saved {len(rows)} bars for {symbol} (continuous) to {filename}")
 
@@ -411,7 +653,12 @@ def run_eurusd_live_1min_to_txt(filename='eurusd_1min_live.txt'):
     num_ticks = 0
 
     def minute_floor(dt: datetime) -> datetime:
-        return dt.replace(second=0, microsecond=0, tzinfo=timezone.utc)
+        # Normalize to UTC and floor to minute
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.replace(second=0, microsecond=0)
 
     print("Streaming EURUSD… (Ctrl+C to stop)")
     try:
@@ -430,12 +677,12 @@ def run_eurusd_live_1min_to_txt(filename='eurusd_1min_live.txt'):
                 if cur_minute is not None:
                     # append a snapshot with last known c if any
                     snap_close = c if c is not None else ''
-                    f.write(f"{cur_minute.isoformat()},{o or ''},{h or ''},{l or ''},{snap_close},{num_ticks},0\n")
+                    f.write(f"{cur_minute.strftime('%Y-%m-%d %H:%M:%S')},{o or ''},{h or ''},{l or ''},{snap_close},{num_ticks},0\n")
                     f.flush()
                 continue
 
             mid = (bid + ask) / 2.0
-            minute_ts = minute_floor(t if t.tzinfo else t.replace(tzinfo=timezone.utc))
+            minute_ts = minute_floor(t)
 
             # if first bar or minute rollover
             if cur_minute is None:
@@ -444,7 +691,7 @@ def run_eurusd_live_1min_to_txt(filename='eurusd_1min_live.txt'):
                 num_ticks = 1
             elif minute_ts != cur_minute:
                 # finalize the previous minute: write one last snapshot with Completed=1
-                f.write(f"{cur_minute.isoformat()},{o},{h},{l},{c},{num_ticks},1\n")
+                f.write(f"{cur_minute.strftime('%Y-%m-%d %H:%M:%S')},{o},{h},{l},{c},{num_ticks},1\n")
                 f.flush()
 
                 # start new minute
@@ -459,13 +706,13 @@ def run_eurusd_live_1min_to_txt(filename='eurusd_1min_live.txt'):
                 num_ticks += 1
 
             # Append a snapshot EVERY SECOND (Completed=0 while minute is open)
-            f.write(f"{cur_minute.isoformat()},{o},{h},{l},{c},{num_ticks},0\n")
+            f.write(f"{cur_minute.strftime('%Y-%m-%d %H:%M:%S')},{o},{h},{l},{c},{num_ticks},0\n")
             f.flush()
 
     except KeyboardInterrupt:
         # On exit, finalize the open bar if we have one
         if cur_minute is not None and o is not None:
-            f.write(f"{cur_minute.isoformat()},{o},{h},{l},{c},{num_ticks},1\n")
+            f.write(f"{cur_minute.strftime('%Y-%m-%d %H:%M:%S')},{o},{h},{l},{c},{num_ticks},1\n")
             f.flush()
         print("\nStopped.")
     finally:
@@ -590,6 +837,7 @@ def stream_eurusd_ticks_live():
     def on_update(tk):
         bid, ask = tk.bid, tk.ask
         t = tk.time or datetime.now(timezone.utc)
+        t = t.astimezone(timezone.utc) if t.tzinfo else t.replace(tzinfo=timezone.utc)
         if bid is not None and ask is not None:
             mid = (bid + ask) / 2.0
             print(f"{t:%Y-%m-%d %H:%M:%S}  Bid={bid:.5f}  Ask={ask:.5f}  Mid={mid:.5f}")

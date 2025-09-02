@@ -1,10 +1,10 @@
-# ETS Implementation Steps: Align live_scape_new with fx.erl Table Format
+# ETS Implementation Steps: Align live_scape with fx.erl Table Format
 
 ## Objective
-Modify only `live_scape_new.erl` and `ib_service.py` to create per-symbol ETS tables using `#technical` records, matching fx.erl's table structure. This enables future fx.erl modifications to read from live tables without changing any other modules.
+Modify only `live_scape.erl` and `ib_service.py` to create per-symbol ETS tables using `#technical` records, matching fx.erl's table structure. This enables future fx.erl modifications to read from live tables without changing any other modules.
 
 ## Scope Limitations
-- **ONLY modify:** `live_scape_new.erl` and `ib_service.py`
+- **ONLY modify:** `live_scape.erl` and `ib_service.py`
 - **NO persistence** - pure in-memory ETS tables
 - **NO optional features** - minimal implementation only
 - **NO backward compatibility** - clean, simple implementation
@@ -22,7 +22,7 @@ Modify only `live_scape_new.erl` and `ib_service.py` to create per-symbol ETS ta
 - Update `HistoricalDataLoader.load_weeks_of_data()` to include `tf_s` based on `bar_size` parameter
 - Add helper function to convert bar_size strings ("1 min", "5 min") to seconds (60, 300)
 
-**Expected message format after changes:**
+**Expected message format after changes (UTC normalized):**
 ```json
 {
   "type": "ohlc_bar",
@@ -46,19 +46,30 @@ Modify only `live_scape_new.erl` and `ib_service.py` to create per-symbol ETS ta
 - Update historical data loader to derive timeframe from bar_size parameter
 - Ensure all OHLC messages include `tf_s` field
 
+### 1.3 Normalize All Timestamps to UTC (with `Z`)
+Align Python outputs to strict ISO‑8601 UTC so Erlang receives consistent keys and `iso_to_technical_id/2` can assume UTC.
+
+- Historical bars: convert `bar.date` to UTC and emit `Z`.
+  - `'t_open': bar.date.astimezone(timezone.utc).isoformat().replace('+00:00','Z')`
+- Live aggregation: use UTC for tick timestamps and emit `Z` on completed bars.
+  - Parse strings/epoch as UTC; use `datetime.now(timezone.utc)` when generating timestamps.
+  - `'t_open': completed_bar['start_time'].astimezone(timezone.utc).isoformat().replace('+00:00','Z')`
+- Optional: use UTC for internal timestamps (order tracking) for consistency.
+- See `docs/UTC_Normalization.md` for rationale and validation.
+
 ---
 
-## Step 2: Modify live_scape_new.erl
+## Step 2: Modify live_scape.erl
 
 ### 2.1 Add Symbol-to-Table Conversion Functions
-**File:** `live_scape_new.erl`
+**File:** `live_scape.erl`
 
 **New functions to add:**
 ```erlang
 % Convert "EUR.USD" + 60 seconds -> 'EURUSD1'
 symbol_to_table(SymbolBin, SamplingRateSec) -> TableAtom
 
-% Convert ISO timestamp to fx.erl tuple format
+% Convert ISO timestamp (UTC 'Z') to fx.erl tuple format
 iso_to_technical_id(ISOString, SamplingRateSec) -> {Y,Mo,D,H,Mi,S,SamplingRateSec}
 
 % Ensure per-symbol table exists
@@ -71,7 +82,7 @@ ensure_symbol_table(TableAtom) -> ok
 **New behavior:**
 - Extract `tf_s` from incoming message (default to 60 if missing)
 - Convert symbol using `symbol_to_table/2`
-- Convert ISO timestamp using `iso_to_technical_id/2`
+- Convert UTC ISO timestamp (`...Z`) using `iso_to_technical_id/2`
 - Create `#technical` record instead of `#ohlc_bar`
 - Insert into per-symbol table instead of `ohlc_data`
 
@@ -143,14 +154,19 @@ prev_technical(TableName, Key) -> Key | '$end_of_table'
 ### 4.1 Unit Tests
 - `symbol_to_table("EUR.USD", 60)` → `'EURUSD1'`
 - `symbol_to_table("GBP.USD", 300)` → `'GBPUSD5'`
-- ISO timestamp parsing produces correct tuple format
+- ISO timestamp parsing (UTC `Z`) produces correct tuple format
 - Table creation works for multiple symbols
 
 ### 4.2 Integration Tests
-- Python sends OHLC with `tf_s`, Erlang creates correct table
+- Python sends OHLC with `tf_s` and UTC `t_open` ending with `Z`, Erlang creates correct table
 - Multiple symbols create separate tables
 - Sensor requests work with new `#technical` format
 - ETS navigation functions work correctly
+
+### 4.3 UTC Normalization Tests
+- Historical and live bars carry `t_open` ending with `Z`.
+- Minute boundaries are computed in UTC (no local offset drift).
+- Mixed sources (historical + live) for the same minute align to the same ETS key.
 
 ### 4.3 Format Tests
 - Table structure matches fx.erl `#technical` format exactly
@@ -177,6 +193,7 @@ prev_technical(TableName, Key) -> Key | '$end_of_table'
 - fx.erl can be modified to read from live tables using existing functions
 - Table names and record formats will match exactly
 - Seamless transition between historical and live data
+- UTC-based keys ensure no timezone mismatches between live and historical paths
 
 ---
 

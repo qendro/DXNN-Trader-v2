@@ -20,7 +20,7 @@ import time
 import logging
 import os
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from ib_insync import IB, Forex, MarketOrder, LimitOrder, util
 
 # Enable asyncio mode for ib_insync (if available)
@@ -210,7 +210,7 @@ class HistoricalDataLoader:
             for bar in bars:
                 ohlc_bar = {
                     'symbol': symbol,
-                    't_open': bar.date.isoformat(),
+                    't_open': (bar.date.replace(tzinfo=timezone.utc) if getattr(bar.date, 'tzinfo', None) is None else bar.date.astimezone(timezone.utc)).isoformat().replace('+00:00', 'Z'),
                     'o': float(bar.open),
                     'h': float(bar.high),
                     'l': float(bar.low),
@@ -278,7 +278,7 @@ class LiveTickAggregator:
                 # Send completed bar to Erlang
                 self.bridge.send_ohlc_bar({
                     'symbol': symbol,
-                    't_open': completed_bar['start_time'].isoformat(),
+                    't_open': completed_bar['start_time'].astimezone(timezone.utc).isoformat().replace('+00:00', 'Z'),
                     'o': completed_bar['o'],
                     'h': completed_bar['h'],
                     'l': completed_bar['l'],
@@ -298,13 +298,22 @@ class LiveTickAggregator:
                 current_bar['tick_count'] += 1
 
     def _get_bar_start_time(self, timestamp):
-        """Get the start time for the 1-minute bar containing this timestamp"""
+        """Get the start time for the 1-minute bar containing this timestamp (UTC)"""
         if isinstance(timestamp, str):
-            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            # Accept ISO string with 'Z' or offset, normalize to UTC
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            timestamp = dt.astimezone(timezone.utc)
         elif isinstance(timestamp, (int, float)):
-            timestamp = datetime.fromtimestamp(timestamp)
+            # Epoch seconds -> UTC
+            timestamp = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        else:
+            # datetime: ensure timezone-aware UTC
+            if getattr(timestamp, 'tzinfo', None) is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            else:
+                timestamp = timestamp.astimezone(timezone.utc)
 
-        # Round down to minute boundary
+        # Round down to minute boundary (UTC)
         return timestamp.replace(second=0, microsecond=0)
 
     def _finalize_bar(self, symbol, bar):
@@ -417,7 +426,7 @@ class TradeExecutor:
                 'action': action,
                 'quantity': quantity,
                 'status': 'pending',
-                'timestamp': datetime.now()
+                'timestamp': datetime.now(timezone.utc)
             }
 
             # Setup order monitoring (fix the updateEvent issue)
@@ -890,7 +899,7 @@ class IBService:
                 if isinstance(price, (int, float)) and math.isfinite(price):
                     vol = ticker.volume
                     vol = vol if isinstance(vol, (int, float)) and math.isfinite(vol) and vol > 0 else 0
-                    self.tick_aggregator.process_tick(symbol_out, price, vol, datetime.now())
+                    self.tick_aggregator.process_tick(symbol_out, price, vol, datetime.now(timezone.utc))
 
                 # Also send raw tick to Erlang for monitoring
                 '''   - If you want to send tik data to Erlang

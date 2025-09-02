@@ -2,7 +2,7 @@
 %% Complete data path in one module: port/socket, decode/encode, acks, ETS insert, sense/2, trade signal out
 %% Python handles ALL IB operations, Erlang handles neural network coordination and ETS storage
 
--module(live_scape_new).
+-module(live_scape).
 
 -include("records.hrl").
 
@@ -16,22 +16,7 @@
 -define(OHLC_TABLES, [ohlc_data]).
 -define(DEFAULT_HRES, 100).
 
-%% Canonical OHLC record: {symbol, t_open, o, h, l, c, vol, source}
--record(ohlc_bar,
-        {key,        % {Symbol, TOpen} - ETS key
-         symbol,     % "EUR.USD"
-         t_open,     % ISO timestamp string
-         o,          % Open price (float)
-         h,          % High price (float)
-         l,          % Low price (float)
-         c,          % Close price (float)
-         vol,        % Volume (integer)
-         source}).      % "historical" | "live"
-%% Extended state for Python integration (use existing live_state from records.hrl)
--record(python_state, {
-    live_state = #live_state{},
-    python_port = undefined
-}).
+
 %% fx.erl compatibility record
 -record(state, {table_name, feature, index_start, index_end, index, price_list = []}).
 
@@ -41,7 +26,8 @@
 
 start_link() ->
     Pid = spawn_link(?MODULE, init_scape, []),
-    register(live_scape_new, Pid),
+    %% Register under the module name to ease future renames
+    register(?MODULE, Pid),
     {ok, Pid}.
 
 init_scape() ->
@@ -350,10 +336,17 @@ handle_python_message(Message) ->
     case Type of
         <<"ohlc_bar">> ->
             OhlcData = maps:get(<<"data">>, Message, #{}),
-            live_scape_new ! {python_data, OhlcData};
+            %% Route to the registered process safely using ?MODULE
+            case whereis(?MODULE) of
+                undefined -> ok;
+                Pid -> Pid ! {python_data, OhlcData}
+            end;
         <<"trade_confirmation">> ->
             TradeData = maps:get(<<"data">>, Message, #{}),
-            live_scape_new ! {python_trade_confirmation, TradeData};
+            case whereis(?MODULE) of
+                undefined -> ok;
+                Pid -> Pid ! {python_trade_confirmation, TradeData}
+            end;
         <<"heartbeat">> ->
             ok;
         _ ->

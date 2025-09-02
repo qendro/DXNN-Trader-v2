@@ -10,42 +10,26 @@
 -record(population,{id, polis_id, specie_ids=[], morphologies=[], innovation_factor, evo_alg_f, fitness_postprocessor_f, selection_f, trace=#trace{}}).
 -record(stat,{morphology,specie_id,avg_neurons,std_neurons,avg_fitness,std_fitness,max_fitness,min_fitness,gentest_fitness,avg_diversity,evaluations,time_stamp}).
 -record(topology_summary,{type,tot_neurons,tot_n_ils,tot_n_ols,tot_n_ros,af_distribution}).
--record(avatar,{id,sector,morphology,energy=0,health=0,food=0, age=0, kills=0, loc, direction, r, mass, objects=[], state,actuators,sensors}).
--record(object,{id,sector,type,color,loc,pivot,parameters=[]}).
 
 -record(constraint,{
 	morphology=config:morphology(), %forex_trader 
-	connection_architecture = recurrent, %recurrent|feedforward 
+	connection_architecture=config:connection_architecture(), %recurrent|feedforward 
 	neural_afs=config:neural_activation_functions(), %[tanh,cos,gaussian,absolute,sin,sqrt,sigmoid],
 	neural_pfns=config:neural_plasticity_functions(), %[none,hebbian_w,hebbian,ojas_w,ojas,self_modulationV1,self_modulationV2,self_modulationV2,self_modulationV3,self_modulationV4,self_modulationV5,self_modulationV6,neuromodulation]
-	substrate_plasticities=[none],
-	substrate_linkforms = [l2l_feedforward],%[l2l_feedfrward,jordan_recurrent,fully_connected]
-	neural_aggr_fs=[dot_product], %[dot_product, mult_product, diff]
-	tuning_selection_fs=[dynamic_random], %[all,all_random, recent,recent_random, lastgen,lastgen_random]
+	substrate_plasticities=config:substrate_plasticities(),
+	substrate_linkforms=config:substrate_linkforms(),%[l2l_feedfrward,jordan_recurrent,fully_connected]
+	neural_aggr_fs=config:neural_aggregation_functions(), %[dot_product, mult_product, diff]
+	tuning_selection_fs=config:tuning_selection_functions(), %[all,all_random, recent,recent_random, lastgen,lastgen_random]
 	tuning_duration_f=config:tuning_duration(), %[{const,20},{nsize_proportional,0.5},{nweight_proportional,0.5}...]
 	annealing_parameters=config:annealing_parameters(), %[1,0.9]
 	perturbation_ranges=config:perturbation_ranges(), %[0.5,1,2,3...]
-	agent_encoding_types= config:agent_encoding_types(), %[neural,substrate]
-	heredity_types = [darwinian], %[darwinian,lamarckian]
-	mutation_operators= [
-		{mutate_weights,1},
-		{add_bias,1},
-		{remove_bias,1},
-		{mutate_af,1},
-		{add_outlink,40},
-		{add_inlink,40},
-		{add_neuron,40},
-		{outsplice,4},
-		{add_sensor,10}, %qq was 1
-		{add_actuator,1},
-		{mutate_plasticity_parameters,1},
-		{add_cpp,1},
-		{add_cep,1}
-	], %[{mutate_weights,1}, {add_bias,1}, {remove_bias,1}, {mutate_af,1}, {add_outlink,1}, {remove_outLink,1}, {add_inlink,1}, {remove_inlink,1}, {add_sensorlink,1}, {add_actuatorlink,1}, {add_neuron,1}, {remove_neuron,1}, {outsplice,1}, {insplice,1}, {add_sensor,1}, {remove_sensor,1}, {add_actuator,1}, {remove_actuator,1},{mutate_plasticity_parameters,1}]
-	tot_topological_mutations_fs = [{ncount_exponential,0.5}], %[{ncount_exponential,0.5},{ncount_linear,1}]
-	population_evo_alg_f=generational, %[generational, steady_state]
-	population_fitness_postprocessor_f=size_proportional, %[none,nsize_proportional]
-	population_selection_f=competition %[competition,top3]
+	agent_encoding_types=config:agent_encoding_types(), %[neural,substrate]
+	heredity_types=config:heredity_types(), %[darwinian,lamarckian]
+	mutation_operators=config:mutation_operators(), %[{mutate_weights,1}, {add_bias,1}, {remove_bias,1}, {mutate_af,1}, {add_outlink,1}, {remove_outLink,1}, {add_inlink,1}, {remove_inlink,1}, {add_sensorlink,1}, {add_actuatorlink,1}, {add_neuron,1}, {remove_neuron,1}, {outsplice,1}, {insplice,1}, {add_sensor,1}, {remove_sensor,1}, {add_actuator,1}, {remove_actuator,1},{mutate_plasticity_parameters,1}]
+	tot_topological_mutations_fs=config:tot_topological_mutations_functions(), %[{ncount_exponential,0.5},{ncount_linear,1}]
+	population_evo_alg_f=config:population_evo_alg_f(), %[generational, steady_state]
+	population_fitness_postprocessor_f=config:population_fitness_postprocessor_f(), %[none,nsize_proportional]
+	population_selection_f=config:population_selection_f() %[competition,top3]
 }).
 -record(experiment,{
 	id,
@@ -205,52 +189,7 @@
 %%%scape
 %id= atom()|float()|{float()::Unique_Id,scape}|{atom()::ScapeName,scape}
 
-%% Live Trading Records
--record(ib_connection, {
-    socket,
-    client_id,
-    next_order_id = 1,
-    subscriptions = [],
-    account_info,
-    connected = false,
-    server_version,
-    connection_time
-}).
-
--record(market_tick, {
-    symbol,
-    timestamp,
-    bid,
-    ask,
-    last,
-    volume
-}).
-
-%% Live market data OHLC record
--record(live_ohlc, {
-    symbol,
-    timestamp,
-    open,
-    high,
-    low,
-    close,
-    volume,
-    tick_count = 0
-}).
-
-%% Performance tracking record
--record(performance_metrics, {
-    start_time,
-    total_trades = 0,
-    winning_trades = 0,
-    total_pnl = 0.0,
-    current_position = 0,
-    daily_pnl = 0.0,
-    max_drawdown = 0.0,
-    last_update
-}).
-
-%% Live scape state record
+%Live Scape State Record
 -record(live_state, {
     table_name,
     feature,
@@ -258,46 +197,31 @@
     index_end,
     index,
     price_list = [],
-    current_position = 0,  % -1=short, 0=none, 1=long
+    current_position = 0,
     entry_price = 0,
-    previous_pc = 0,       % Previous percentage change
-    account_balance = 10000, % Starting balance
+    previous_pc = 0,
+    account_balance = 10000,
     unrealized_pnl = 0,
     realized_pnl = 0,
     position_qty = undefined
 }).
 
-%% Risk management state record
--record(risk_state, {
-    daily_start_balance,
-    daily_pnl = 0.0,
-    daily_trades = 0,
-    max_drawdown = 0.0,
-    position_exposures = [],  % [{Symbol, Exposure, Timestamp}]
-    total_exposure = 0.0,
-    last_reset_date,
-    risk_violations = []      % [{Type, Timestamp, Details}]
+%% Canonical OHLC bar record for live trading
+-record(ohlc_bar, {
+    key,        % {Symbol, TOpen} - ETS key
+    symbol,     % "EUR.USD"
+    t_open,     % ISO timestamp string
+    o,          % Open price (float)
+    h,          % High price (float)
+    l,          % Low price (float)
+    c,          % Close price (float)
+    vol,        % Volume (integer)
+    source      % "historical" | "live"
 }).
 
-%% Position tracking record
--record(position_info, {
-    symbol,
-    side,           % long | short
-    quantity,
-    entry_price,
-    entry_time,
-    current_price,
-    unrealized_pnl = 0.0,
-    exposure_amount
-}).
-
-%% IB Bridge Connector state record
--record(bridge_state, {
-    port,
-    next_cid = 1,
-    connection_status = false,
-    last_heartbeat = 0,
-    python_pid = undefined,
-    market_tickers = #{}  % Map of Symbol -> #market_tick{}
+%% Python integration state record
+-record(python_state, {
+    live_state = #live_state{},
+    python_port = undefined
 }).
 

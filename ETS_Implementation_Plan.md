@@ -1,4 +1,4 @@
-# Plan: Align `live_scape_new` ETS Layout With `fx.erl` Per‑Symbol Tables
+# Plan: Align `live_scape` ETS Layout With `fx.erl` Per‑Symbol Tables
 
 ## Goals
 
@@ -37,7 +37,7 @@
   - Ensure table exists (lazy create on first insert).
   - `ets:insert(TableAtom, TechnicalRecord)` (idempotent by key).
 
-## Changes in `live_scape_new.erl`
+## Changes in `live_scape.erl`
 
 1) Table management
 - Add a helper to normalize symbol and timeframe and produce table atom:
@@ -96,9 +96,9 @@
 
 ## Time Formatting Options (Pick One)
 
-You have two reasonable places to reconcile time formats: change `live_scape_new` to match `fx.erl`’s key, or change `fx.erl` to accept ISO‑based keys/records. Recommendation: change `live_scape_new` (Option A) to match `#technical.id`; it keeps all historical code and benchmarks untouched.
+You have two reasonable places to reconcile time formats: change `live_scape` to match `fx.erl`’s key, or change `fx.erl` to accept ISO‑based keys/records. Recommendation: change `live_scape` (Option A) to match `#technical.id`; it keeps all historical code and benchmarks untouched.
 
-### Option A: Change `live_scape_new` to `fx` time key
+### Option A: Change `live_scape` to `fx` time key
 
 - What changes:
   - Convert ISO `t_open` → `{Y,Mo,D,H,Mi,S,SamplingRateSec}`.
@@ -108,7 +108,7 @@ You have two reasonable places to reconcile time formats: change `live_scape_new
   - Perfect alignment with `fx.erl`; sensors/benchmarks behave the same in live and historical.
   - Strong ordering semantics; avoids lexicographic pitfalls.
 - Cons:
-  - Requires a small conversion function and timeframe awareness in `live_scape_new`.
+  - Requires a small conversion function and timeframe awareness in `live_scape`.
 
 ### Option B: Change `fx.erl` to accept ISO string keys / `#ohlc_bar`
 
@@ -116,13 +116,12 @@ You have two reasonable places to reconcile time formats: change `live_scape_new
   - Switch `fx.erl` to read from a canonical table (e.g., `ohlc_data`) keyed by `{Symbol, TOpenISO}` or add a parsing path for `#ohlc_bar`.
   - Adjust sensors/consumers to pass a symbol/timeframe filter rather than a per‑table atom.
 - Pros:
-  - Minimal change to `live_scape_new` if you keep its current schema.
+  - Minimal change to `live_scape` if you keep its current schema.
 - Cons:
   - Touches a lot of historical/benchmark code paths; loses the elegant per‑table scoping (`ets:last/prev` naturally partitioned).
   - Requires prefix filters or a secondary index to avoid mixing symbols/timeframes.
 
 ### Recommendation
 
-- Adopt Option A: Change `live_scape_new` to emit `#technical` into per‑symbol tables (`'EURUSD1'`, etc.) with `#technical.id = {Y,Mo,D,H,Mi,S,SamplingRateSec}`.
+- Adopt Option A: Change `live_scape` to emit `#technical` into per‑symbol tables (`'EURUSD1'`, etc.) with `#technical.id = {Y,Mo,D,H,Mi,S,SamplingRateSec}`.
 - Optionally mirror into `ohlc_data` for debugging while migrating.
-
