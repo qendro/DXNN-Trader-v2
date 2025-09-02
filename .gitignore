@@ -57,11 +57,6 @@ eunit.coverdata
 ct_run.*/
 logs/
 
-# Documentation
-doc/
-docs/
-*.html
-edoc-info
 
 # Node.js (if using any JS tooling)
 node_modules/
@@ -83,7 +78,6 @@ ENV/
 .dockerignore
 
 # Data files that might be generated
-*.csv
 *.dat
 *.backup
 *.bak
