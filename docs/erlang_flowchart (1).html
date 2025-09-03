@@ -103,9 +103,34 @@
             border-radius: 15px;
             background: white;
             position: relative;
-            overflow: auto;
+            overflow: hidden;
             box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
         }
+        
+        /* Panning affordance */
+        #flowchart { cursor: grab; }
+        #flowchart.grabbing { cursor: grabbing; }
+        
+        /* Inner content wrapper that moves when panning */
+        #flowchartContent {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 2200px; /* updated dynamically */
+            height: 1400px; /* updated dynamically */
+            transform: translate(0px, 0px);
+            will-change: transform;
+        }
+        
+        /* Edit mode: show subtle grid and move cursor */
+        #flowchart.edit-mode {
+            background-image:
+              linear-gradient(to right, rgba(0,0,0,0.06) 1px, transparent 1px),
+              linear-gradient(to bottom, rgba(0,0,0,0.06) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+        
+        #flowchart.edit-mode .node { cursor: move; }
         
         .node {
             position: absolute;
@@ -247,6 +272,30 @@
             border-bottom: 2px solid #3498db;
             padding-bottom: 10px;
         }
+
+        .info-panel details summary {
+            cursor: pointer;
+            font-weight: 600;
+            color: #2c3e50;
+            margin: 8px 0;
+        }
+
+        .info-panel textarea {
+            width: 100%;
+            min-height: 80px;
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            resize: vertical;
+            font-family: inherit;
+            font-size: 13px;
+        }
+
+        .info-panel .info-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
         
         .legend {
             display: grid;
@@ -300,9 +349,12 @@
             <button class="btn btn-secondary" onclick="highlightPath('weight_tuning')">Weight Tuning</button>
             <button class="btn btn-primary" onclick="resetHighlight()">Reset View</button>
             <button class="btn btn-secondary" onclick="toggleInfo()">Info Panel</button>
+            <button class="btn btn-warning" id="editToggle" onclick="toggleEditMode()">Edit Mode: Off</button>
+            <button class="btn btn-success" id="saveLayoutBtn" style="display:none" onclick="saveLayout()">Save Layout</button>
+            <button class="btn btn-secondary" id="cancelEditBtn" style="display:none" onclick="cancelEdit()">Cancel</button>
         </div>
         
-        <div id="flowchart"></div>
+        <div id="flowchart"><div id="flowchartContent"></div></div>
         
         <div class="legend">
             <div class="legend-item">
@@ -608,8 +660,293 @@
             'EV_clone': 'Creates mutant agent copies through genotype cloning and applies genome mutations for next generation.'
         };
 
+        // Default extended docs for "More Info". These are editable and overrideable.
+        const defaultDocs = {
+            B_start: {
+                works: "benchmarker:start/1 builds a #pmp and #experiment record, persists it via genotype:write/1 and spawns benchmarker:prep/1 to initialize the run.",
+                learning: "Entry supervisor for runs; uses spawn/register, hands control to population_monitor through prep_PopState/2. Tune config:* to change constraints and runtime behavior."
+            },
+            B_getIC: {
+                works: "get_init_constraints/0 composes a list of #constraint from config:morphology(), connection_architecture(), plasticity, encoding, etc.; this drives genotype construction.",
+                learning: "Constraints define available AF/PF/aggregation/tuning functions and agent encoding (neural/substrate)."
+            },
+            B_prep: {
+                works: "prep/1 injects the benchmarker pid into the #pmp, calls population_monitor:prep_PopState/2 with constraints, then enters benchmarker:loop/2.",
+                learning: "Bridges benchmarker and population_monitor; the monitor takes over orchestration of agents."
+            },
+            B_loop: {
+                works: "loop/2 waits for population completion messages, accumulates trace stats, advances run index, either restarts a new generation or finalizes.",
+                learning: "Top-level orchestration: persists progress via genotype:write/1 and triggers report/2 at completion."
+            },
+            B_report: {
+                works: "report/2 writes trace data and computed graphs (avg fitness, neurons, diversity) to files in benchmarks/; uses prepare_Graphs/1 and write_Graphs/2.",
+                learning: "Ensure benchmarks/ exists and is writable; graphs are text outputs consumable by plotting tools."
+            },
+            B_complete: {
+                works: "Final step of the run after report; signals completion in the UI flow (benchmarker handles termination/cleanup).",
+                learning: "Completion is a conceptual node marking end-of-run after persistence and reporting."
+            },
+            DB_write: {
+                works: "genotype:write/1 persists records (#agent, #cortex, #specie, #population, #experiment, etc.) in Mnesia.",
+                learning: "Record shapes live in records.hrl; operations often happen inside mnesia:transaction/1 for atomicity."
+            },
+            DB_transaction: {
+                works: "mnesia:transaction/1 ensures atomic creation/deletion of population/species/agents during initialization and mutation.",
+                learning: "Prefer transactions when creating or mutating multiple related records."
+            },
+            PM_prep: {
+                works: "population_monitor:prep_PopState/2 builds an initial #state from #pmp and forwards to init_population/2.",
+                learning: "Encapsulates run parameters (limits, goals, algorithms) and benchmarker pid in the monitor state."
+            },
+            PM_initPop: {
+                works: "init_population/2 seeds or recreates the population (delete if exists), calling create_Population/3 inside a transaction, then starts the gen_server.",
+                learning: "Idempotent init: safe to re-run while developing; recreates population ‘test’."
+            },
+            PM_createPop: {
+                works: "create_Population/3 creates #specie per constraint, then writes a #population with algorithm choices from constraint.",
+                learning: "Population embeds selection, postprocessor and evo algorithm to use downstream."
+            },
+            PM_createSpecie: {
+                works: "create_specie/6 constructs N agents via genotype:construct_Agent/3 and writes the specie record, returning its id.",
+                learning: "Agent ids go into specie.agent_ids; fingerprint tracks origin/evolution metadata."
+            },
+            PM_start: {
+                works: "population_monitor:start/1 starts the gen_server with initial state; the registered name is 'monitor'.",
+                learning: "A standard OTP gen_server life-cycle; messages from exoself and benchmarker drive logic."
+            },
+            PM_init: {
+                works: "init/1 registers monitor, extracts agent ids, summons exoself for each, initializes evaluation counters, and logs iteration state.",
+                learning: "Initializes species counters in process dictionary for evaluation bookkeeping."
+            },
+            PM_extract: {
+                works: "extract_AgentIds/2 returns agent ids for a population/specie for subsequent exoself spawning.",
+                learning: "Used both at startup and after mutations when new generations are summoned."
+            },
+            PM_summon: {
+                works: "summon_agents/2 spawns exoself:start/2 for each agent and returns [{Agent_Id,Pid}].",
+                learning: "ExoSelf is the phenotype orchestrator; this function is the bridge from data to processes."
+            },
+            PM_handleEval: {
+                works: "handle_cast(evaluations, ...) accumulates per-step metrics (cycles, time) and updates totals; may influence early stopping.",
+                learning: "Lightweight telemetry for monitoring and termination decisions."
+            },
+            PM_handleTerm: {
+                works: "handle_cast(terminated, ...) handles agent completion; in generational mode, waits for all, then triggers mutate_population/4.",
+                learning: "Implements generation boundaries; steady_state path selects and replaces agents incrementally."
+            },
+            PM_mutatePop: {
+                works: "mutate_population/4 computes neural energy cost, postprocesses fitness, selects survivors (selection_algorithm), and spawns mutants (genome_mutator).",
+                learning: "Keeps specie size within limits; updates champion_ids and dead_pool summaries."
+            },
+            PM_endCond: {
+                works: "End condition check compares evaluations_limit, generation_limit, and fitness_goal to stop or continue.",
+                learning: "Termination is enforced at the monitor to centralize control of runs."
+            },
+            G_constructAgent: {
+                works: "genotype:construct_Agent/3 chooses encoding (neural/substrate), creates cortex via construct_Cortex/6, sets tuning functions and heredity, and writes #agent.",
+                learning: "Constraints drive random choices for AF/PF/aggregation/tuning; initial generation is 0."
+            },
+            G_constructCortex: {
+                works: "construct_Cortex/6 creates sensors, actuators, initial neuro layer, and (for substrate) substrate subgraph and densities; writes all to DB.",
+                learning: "Substrate path fans sensors to substrate and actuators from it; neural path wires sensors→neurons→actuators."
+            },
+            G_initSensors: {
+                works: "morphology:get_InitSensors/1 returns initial sensor specs (names, vector lengths, parameters).",
+                learning: "Different morphologies configure fx_PLI/PCI or internal sensors for the task."
+            },
+            G_initActuators: {
+                works: "morphology:get_InitActuators/1 returns initial actuator specs (names and parameters).",
+                learning: "Forex morphology wires to fx_Trade/4 actuator for buy/hold/sell decisions."
+            },
+            G_initialLayer: {
+                works: "construct_InitialNeuroLayer/7 generates first hidden layer connecting sensors to actuators; returns neuron ids.",
+                learning: "Also sets up initial sensor fanout and actuator fanin."
+            },
+            G_initialNeurons: {
+                works: "construct_InitialNeurons/6 iterates per actuator to connect neurons from sensors and to actuator outputs.",
+                learning: "Randomly chooses full or partial sensor connectivity per neuron."
+            },
+            G_constructNeuron: {
+                works: "construct_Neuron/6 builds #neuron with AF, PF, aggregation, weight blocks per input, and recursive output ids (RO).",
+                learning: "Weights initialized uniform(-0.5,0.5) and store PF-specific parameters for plasticity."
+            },
+            G_writeSA: {
+                works: "Writes sensor/actuator/cortex/substrate records to DB during construct_Cortex/6 steps.",
+                learning: "Mnesia stores full topology; later phenotype processes read from here."
+            },
+            G_updateFp: {
+                works: "update_fingerprint/1 stores agent’s topology summary and structural info for tracking evolution.",
+                learning: "Useful for run provenance and analytics."
+            },
+            E_start: {
+                works: "exoself:start/2 or /3 spawns the exoself process linked to population_monitor and op mode.",
+                learning: "ExoSelf is per-agent orchestrator for phenotype processes."
+            },
+            E_prep: {
+                works: "exoself:prep/3 reads #agent/#cortex, spawns scapes, cortex/sensor/neuron/actuator processes, optionally substrate, links everything, sets tuning parameters, and enters loop.",
+                learning: "Bridges genotype→phenotype; stores pids in a private ETS for quick lookup."
+            },
+            E_spawnScapes: {
+                works: "spawn_Scapes/3 starts fx:sim/1 for the agent; returns scape pids to wire sensors/actuators.",
+                learning: "Each agent runs isolated environment state and account."
+            },
+            E_spawnCortex: {
+                works: "cortex:gen/2 spawns a cortex process and returns its pid for synchronization control.",
+                learning: "Cortex drives the sense→think→act cycle via sync messages."
+            },
+            E_spawnSensors: {
+                works: "sensor:gen/2 spawns sensor processes according to genotype sensor ids.",
+                learning: "Sensors use fx_PLI/PCI and can query ‘internals’ for account state."
+            },
+            E_spawnNeurons: {
+                works: "neuron:gen/2 spawns neurons with AF/PF/aggregation behavior from genotype.",
+                learning: "Neurons keep current/backup weights for tuning/restore."
+            },
+            E_spawnActuators: {
+                works: "actuator:gen/2 spawns actuators that gather outputs and call fx_Trade/4 to trade.",
+                learning: "Actuators compute fitness and end flags returned to cortex."
+            },
+            E_linkCortex: {
+                works: "link_Cortex/2 connects cortex with sensors/neurons/actuators and stores pids; returns {SPids, NPids, APids}.",
+                learning: "Sets message topology used at runtime for sync and signal flow."
+            },
+            E_loop: {
+                works: "exoself:loop/2 coordinates evaluation cycles: backup on improvement, restore on regression, perturb selected neurons, and terminates on attempts or goal.",
+                learning: "Implements annealed hill-climbing over weights with Lamarckian/Darwinian heredity."
+            },
+            E_backup: {
+                works: "backup_genotype/2 collects tuned neuron weights and persists them back to genotype on best-so-far.",
+                learning: "Ensures best phenotype weights survive to the next evaluation or generation."
+            },
+            E_tuning: {
+                works: "tuning_selection:* picks subset of neurons and perturbation spreads; exoself sends weight_perturb to those neurons.",
+                learning: "Annealing parameters control spread; tuning_duration limits attempts."
+            },
+            E_termPhen: {
+                works: "terminate_phenotype/8 sends terminate/reset messages to all phenotype processes and unlinks substrate workers.",
+                learning: "Cleanup prevents leaky processes across evaluations."
+            },
+            C_prep: {
+                works: "cortex:prep/1 initializes timers, waits for state, triggers initial sensor sync, and enters loop.",
+                learning: "Seeds the first cycle by signaling sensors."
+            },
+            C_sync: {
+                works: "cortex:loop/9 alternates between collecting actuator syncs and re-triggering sensors until an end flag is raised.",
+                learning: "Stores two actuator lists (APIds/MAPIds) to cycle efficiently."
+            },
+            C_evalDone: {
+                works: "On end flag, cortex reports evaluation_completed with fitness/cycles/time and goes inactive until exoself reactivates or terminates.",
+                learning: "Evaluation window boundaries controlled by actuator end flags."
+            },
+            S_prep: {
+                works: "sensor:prep/1 binds opmode, scape pid, fanout list, and parameters.",
+                learning: "OpMode toggles benchmark vs training data windows."
+            },
+            S_loop: {
+                works: "On {Cx_Pid,sync}, sensor collects data via fx_PLI/PCI or internals and fans out the sensory vector to connected neurons.",
+                learning: "Normalization included for list sensor (unit-length)."
+            },
+            S_fx: {
+                works: "fx_PLI/4 returns recent closing price list; fx_PCI/4 returns downsampled plane-encoded chart features.",
+                learning: "Parameters include resolution and sensor type (list_sensor/graph_sensor)."
+            },
+            S_fanout: {
+                works: "Fanout happens in sensor loop and neuron:fanout/2 utilities, broadcasting vectors to downstream processes.",
+                learning: "Message passing preserves order consistent with genotype wiring."
+            },
+            N_prep: {
+                works: "neuron:prep/1 sets AF/PF, aggregation, input pid-weight blocks, output/RO lists, and enters main loop.",
+                learning: "Maintains both current and backup weight blocks for tuning."
+            },
+            N_loop: {
+                works: "Aggregates inputs via signal_aggregator:* (dot_product, etc.), applies AF, fans out to outputs; applies PF if enabled.",
+                learning: "Plasticity updates synapses using PF parameters and modulatory inputs."
+            },
+            N_signal: {
+                works: "signal_aggregator computes aggregation products from inputs and weight blocks (plus modulatory pathway if present).",
+                learning: "Supports several aggregation modes; dot_product is the default."
+            },
+            N_plasticity: {
+                works: "plasticity:* rules (hebbian/ojas/self_modulation/neuromodulation) update weights after each forward pass.",
+                learning: "Choose PFs via constraints; ‘none’ disables synaptic updates."
+            },
+            N_weightCtl: {
+                works: "Handles weight_backup/restore/perturb messages from exoself during tuning.",
+                learning: "Darwinian stores baseline vs Lamarckian stores current before perturbation."
+            },
+            A_prep: {
+                works: "actuator:prep/1 stores opmode, scape pid, parameters and fanin list.",
+                learning: "Collects neuron outputs in order, then acts."
+            },
+            A_loop: {
+                works: "Accumulates forward messages from all fanin pids, then calls actuator function and sends sync back to cortex.",
+                learning: "Resets accumulator each cycle using memory copy of fanin list."
+            },
+            A_trade: {
+                works: "fx_Trade/4 maps scalar output to trinary trade signal and calls scape trade; receives fitness and halt flag.",
+                learning: "Trinary: -1 short, 0 hold/close, 1 long; configured via config:primary_currency_pair()."
+            },
+            A_sync: {
+                works: "Sends {sync,Fitness,EndFlag} to cortex after each actuation.",
+                learning: "Cortex aggregates across actuators to decide if evaluation is done."
+            },
+            FX_sim: {
+                works: "fx:sim/1 runs the environment loop handling sense/trade messages, keeping price index and account state.",
+                learning: "Backed by Mnesia tables under fx_tables directory; configurable ranges in config."
+            },
+            FX_sense: {
+                works: "sense/2 dispatches to list_encoded/2 or plane_encoded/3; returns encoded windows and advances state.",
+                learning: "Downstream sensors normalize/forward the vector to neurons."
+            },
+            FX_trade: {
+                works: "make_trade/3 executes open/close/modify on #account and #order based on trinary action, updates realized/unrealized P&L.",
+                learning: "Includes spread, leverage and lot sizing from config; risk limits can terminate sim early."
+            },
+            FX_account: {
+                works: "update_account/2 updates balance/NAV/unrealized P&L after each time step using next price.",
+                learning: "Fitness is derived from account value progression."
+            },
+            EV_energy: {
+                works: "calculate_EnergyCost/1 estimates average per-neuron cost for energy-aware selection/mutation.",
+                learning: "Biases toward parsimonious networks when enabled."
+            },
+            EV_mutate: {
+                works: "mutation pipeline inside population_monitor:mutate_population/4 trims to specie_size_limit*survival_percentage and regenerates up to limit.",
+                learning: "Fitness postprocessor normalizes fitness; selection chooses parents; genome_mutator applies structural/param changes."
+            },
+            EV_genomeMut: {
+                works: "genome_mutator:mutate/1 performs topological and parameter mutations according to constraint.mutation_operators.",
+                learning: "Operators include add/remove neuron/connection and weight perturbations."
+            },
+            EV_fpp: {
+                works: "fitness_postprocessor:* (e.g. size_proportional) rescales fitness to normalize across architectures.",
+                learning: "Critical when comparing agents of different sizes."
+            },
+            EV_select: {
+                works: "selection_algorithm:* (competition/top3) chooses parents and returns new agent id set for next generation.",
+                learning: "Selection pressure controls exploration vs exploitation."
+            },
+            EV_clone: {
+                works: "population_monitor:create_MutantAgentCopy/1 clones winners and applies genome mutations; also can respawn winners directly.",
+                learning: "Champions cached in specie.champion_ids and dead_pool carries sorted histories."
+            }
+        };
+
         let selectedNode = null;
         let highlightedPath = [];
+        let editMode = false;
+        const gridSize = 20; // px grid
+        let dragState = null;
+        let editSnapshot = null;
+        const STORAGE_KEY = 'dxnn_erlang_flowchart_layout_v1';
+        const DOCS_KEY = 'dxnn_erlang_flowchart_docs_v1';
+        let nodeDocsStore = {};
+        // Panning state
+        let isPanning = false;
+        let panStartX = 0, panStartY = 0;
+        let panMoved = false;
+        let panX = 0, panY = 0; // current translate offsets
+        let panOriginX = 0, panOriginY = 0; // offsets at mousedown
 
         function createNode(nodeData) {
             const node = document.createElement('div');
@@ -620,27 +957,275 @@
             node.style.top = nodeData.y + 'px';
             
             node.addEventListener('click', () => selectNode(nodeData.id));
+
+            // Drag handling in edit mode with grid snapping
+            node.addEventListener('mousedown', (e) => {
+                if (!editMode) return;
+                e.preventDefault();
+                const flowchart = document.getElementById('flowchart');
+                const nodeRect = node.getBoundingClientRect();
+                const flowRect = flowchart.getBoundingClientRect();
+                dragState = {
+                    node,
+                    id: nodeData.id,
+                    // pointer offset within the node
+                    offsetX: e.clientX - nodeRect.left,
+                    offsetY: e.clientY - nodeRect.top
+                };
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp, { once: true });
+            });
             
             return node;
+        }
+
+        function onMouseMove(e) {
+            if (!dragState) return;
+            const flowchart = document.getElementById('flowchart');
+            const flowRect = flowchart.getBoundingClientRect();
+
+            // Convert pointer to content coordinates (invert pan transform)
+            let x = e.clientX - flowRect.left - panX - dragState.offsetX;
+            let y = e.clientY - flowRect.top - panY - dragState.offsetY;
+
+            // Snap to grid
+            x = Math.round(x / gridSize) * gridSize;
+            y = Math.round(y / gridSize) * gridSize;
+
+            // Constrain to container
+            x = Math.max(0, x);
+            y = Math.max(0, y);
+
+            dragState.node.style.left = x + 'px';
+            dragState.node.style.top = y + 'px';
+
+            // Update model
+            const modelNode = nodes.find(n => n.id === dragState.id);
+            if (modelNode) { modelNode.x = x; modelNode.y = y; }
+
+            // Refresh edges
+            updateAllEdges();
+            resizeContent();
+        }
+
+        function onMouseUp() {
+            document.removeEventListener('mousemove', onMouseMove);
+            dragState = null;
+        }
+
+        // Background panning handlers
+        function onBackgroundMouseDown(e) {
+            const flowchart = document.getElementById('flowchart');
+            const isInteractive = e.target.closest('.node, .edge, .arrow');
+            if (isInteractive) return; // only on whitespace
+            isPanning = true;
+            panMoved = false;
+            panStartX = e.clientX;
+            panStartY = e.clientY;
+            panOriginX = panX;
+            panOriginY = panY;
+            flowchart.classList.add('grabbing');
+            document.addEventListener('mousemove', onBackgroundMouseMove);
+            document.addEventListener('mouseup', onBackgroundMouseUp, { once: true });
+            e.preventDefault();
+        }
+
+        function onBackgroundMouseMove(e) {
+            if (!isPanning) return;
+            const dx = e.clientX - panStartX;
+            const dy = e.clientY - panStartY;
+            if (Math.abs(dx) + Math.abs(dy) > 2) panMoved = true;
+            panX = panOriginX + dx;
+            panY = panOriginY + dy;
+            const content = document.getElementById('flowchartContent');
+            if (content) content.style.transform = `translate(${panX}px, ${panY}px)`;
+        }
+
+        function onBackgroundMouseUp(e) {
+            const flowchart = document.getElementById('flowchart');
+            document.removeEventListener('mousemove', onBackgroundMouseMove);
+            isPanning = false;
+            flowchart.classList.remove('grabbing');
+            // If it was just a click (no pan), reset highlights
+            const isInteractive = e.target.closest && e.target.closest('.node, .edge, .arrow');
+            if (!panMoved && !isInteractive) {
+                resetHighlight();
+            }
+        }
+
+        function getConnectorPoints(fromId, toId) {
+            const fromEl = document.getElementById(fromId);
+            const toEl = document.getElementById(toId);
+            if (!fromEl || !toEl) return null;
+
+            const fr = { x: fromEl.offsetLeft, y: fromEl.offsetTop, w: fromEl.offsetWidth, h: fromEl.offsetHeight };
+            const tr = { x: toEl.offsetLeft, y: toEl.offsetTop, w: toEl.offsetWidth, h: toEl.offsetHeight };
+
+            const fcx = fr.x + fr.w / 2, fcy = fr.y + fr.h / 2;
+            const tcx = tr.x + tr.w / 2, tcy = tr.y + tr.h / 2;
+            let dx = tcx - fcx, dy = tcy - fcy;
+            if (dx === 0 && dy === 0) dy = 1;
+
+            let fromX, fromY, toX, toY;
+            if (Math.abs(dx) > Math.abs(dy)) {
+                // Horizontal connection: left/right midpoints
+                if (dx > 0) {
+                    fromX = fr.x + fr.w; fromY = fcy; // from right
+                    toX = tr.x;          toY = tcy; // to left
+                } else {
+                    fromX = fr.x;        fromY = fcy; // from left
+                    toX = tr.x + tr.w;   toY = tcy; // to right
+                }
+            } else {
+                // Vertical connection: top/bottom midpoints
+                if (dy > 0) {
+                    fromX = fcx;         fromY = fr.y + fr.h; // from bottom
+                    toX = tcx;           toY = tr.y; // to top
+                } else {
+                    fromX = fcx;         fromY = fr.y; // from top
+                    toX = tcx;           toY = tr.y + tr.h; // to bottom
+                }
+            }
+
+            return { fromX, fromY, toX, toY };
+        }
+
+        function updateAllEdges() {
+            const edgeEls = document.querySelectorAll('.edge');
+            edgeEls.forEach(edgeEl => {
+                const from = edgeEl.dataset.from;
+                const to = edgeEl.dataset.to;
+                const pts = getConnectorPoints(from, to);
+                if (!pts) return;
+                const { fromX, fromY, toX, toY } = pts;
+
+                const dx = toX - fromX;
+                const dy = toY - fromY;
+                const length = Math.sqrt(dx*dx + dy*dy);
+                const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
+                edgeEl.style.left = fromX + 'px';
+                edgeEl.style.top = fromY + 'px';
+                edgeEl.style.width = length + 'px';
+                edgeEl.style.transform = `rotate(${angle}deg)`;
+
+                const arrowEl = edgeEl.parentElement.querySelector('.arrow');
+                if (arrowEl) {
+                    arrowEl.style.left = (toX - 8) + 'px';
+                    arrowEl.style.top = (toY - 4) + 'px';
+                    arrowEl.style.transform = `rotate(${angle}deg)`;
+                }
+            });
+        }
+
+        function toggleEditMode() {
+            // If turning off and there are unsaved changes, confirm discard
+            if (editMode && editSnapshot && hasUnsavedChanges()) {
+                const discard = confirm('Discard unsaved layout changes?');
+                if (!discard) return;
+                revertToSnapshot();
+            }
+
+            editMode = !editMode;
+            const flowchart = document.getElementById('flowchart');
+            flowchart.classList.toggle('edit-mode', editMode);
+            const btn = document.getElementById('editToggle');
+            if (btn) btn.textContent = `Edit Mode: ${editMode ? 'On' : 'Off'}`;
+
+            // Show/Hide save and cancel controls
+            const saveBtn = document.getElementById('saveLayoutBtn');
+            const cancelBtn = document.getElementById('cancelEditBtn');
+            if (saveBtn) saveBtn.style.display = editMode ? '' : 'none';
+            if (cancelBtn) cancelBtn.style.display = editMode ? '' : 'none';
+
+            // Capture snapshot when entering edit mode
+            if (editMode) {
+                editSnapshot = nodes.map(n => ({ id: n.id, x: n.x, y: n.y }));
+            } else {
+                editSnapshot = null;
+            }
+        }
+
+        function hasUnsavedChanges() {
+            if (!editSnapshot) return false;
+            for (const snap of editSnapshot) {
+                const n = nodes.find(nn => nn.id === snap.id);
+                if (!n || n.x !== snap.x || n.y !== snap.y) return true;
+            }
+            return false;
+        }
+
+        function revertToSnapshot() {
+            if (!editSnapshot) return;
+            const flowchart = document.getElementById('flowchart');
+            for (const snap of editSnapshot) {
+                const n = nodes.find(nn => nn.id === snap.id);
+                if (!n) continue;
+                n.x = snap.x; n.y = snap.y;
+                const el = document.getElementById(n.id);
+                if (el) {
+                    el.style.left = n.x + 'px';
+                    el.style.top = n.y + 'px';
+                }
+            }
+            updateAllEdges();
+        }
+
+        function saveLayout() {
+            const positions = {};
+            nodes.forEach(n => { positions[n.id] = { x: n.x, y: n.y, group: n.group, text: n.text }; });
+            try {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify({ positions }));
+                alert('Layout saved');
+            } catch (e) {
+                console.error('Failed to save layout', e);
+                alert('Failed to save layout');
+                return;
+            }
+            // Exit edit mode after save
+            editSnapshot = null;
+            toggleEditMode();
+        }
+
+        function cancelEdit() {
+            revertToSnapshot();
+            toggleEditMode();
+        }
+
+        function applySavedPositions() {
+            try {
+                const raw = localStorage.getItem(STORAGE_KEY);
+                if (!raw) return;
+                const data = JSON.parse(raw);
+                if (!data || !data.positions) return;
+                for (const n of nodes) {
+                    const pos = data.positions[n.id];
+                    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+                        n.x = pos.x; n.y = pos.y;
+                    }
+                }
+            } catch (e) {
+                console.warn('No saved layout or parse error', e);
+            }
         }
 
         function createEdge(edgeData) {
             const fromNode = nodes.find(n => n.id === edgeData.from);
             const toNode = nodes.find(n => n.id === edgeData.to);
-            
             if (!fromNode || !toNode) return null;
-            
+
             const container = document.createElement('div');
             container.style.position = 'absolute';
-            
-            const fromX = fromNode.x + 75;
-            const fromY = fromNode.y + 20;
-            const toX = toNode.x + 75;
-            const toY = toNode.y + 20;
-            
-            const length = Math.sqrt(Math.pow(toX - fromX, 2) + Math.pow(toY - fromY, 2));
-            const angle = Math.atan2(toY - fromY, toX - fromX) * 180 / Math.PI;
-            
+
+            const pts = getConnectorPoints(edgeData.from, edgeData.to);
+            if (!pts) return null;
+            const { fromX, fromY, toX, toY } = pts;
+
+            const dx = toX - fromX;
+            const dy = toY - fromY;
+            const length = Math.sqrt(dx*dx + dy*dy);
+            const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
             const edge = document.createElement('div');
             edge.className = 'edge';
             edge.dataset.from = edgeData.from;
@@ -649,16 +1234,19 @@
             edge.style.top = fromY + 'px';
             edge.style.width = length + 'px';
             edge.style.transform = `rotate(${angle}deg)`;
-            
+
             const arrow = document.createElement('div');
             arrow.className = 'arrow';
             arrow.style.left = (toX - 8) + 'px';
             arrow.style.top = (toY - 4) + 'px';
             arrow.style.transform = `rotate(${angle}deg)`;
-            
+
+            edge.addEventListener('click', () => selectEdge(edgeData.from, edgeData.to));
+            arrow.addEventListener('click', () => selectEdge(edgeData.from, edgeData.to));
+
             container.appendChild(edge);
             container.appendChild(arrow);
-            
+
             return container;
         }
 
@@ -690,20 +1278,16 @@
             for (let i = 0; i < pathToNode.length - 1; i++) {
                 const from = pathToNode[i];
                 const to = pathToNode[i + 1];
-                
-                const edge = document.querySelector(`.edge[data-from="${from}"][data-to="${to}"]`);
-                if (edge) {
-                    edge.classList.remove('grayed-out');
-                    edge.classList.add('highlighted');
-                }
-                
-                const arrows = document.querySelectorAll('.arrow');
-                arrows.forEach(arrow => {
-                    if (edge && isArrowForEdge(arrow, edge)) {
-                        arrow.classList.remove('grayed-out');
-                        arrow.classList.add('highlighted');
+                const edgeEl = document.querySelector(`.edge[data-from="${from}"][data-to="${to}"]`);
+                if (edgeEl) {
+                    edgeEl.classList.remove('grayed-out');
+                    edgeEl.classList.add('highlighted');
+                    const arrowEl = edgeEl.parentElement.querySelector('.arrow');
+                    if (arrowEl) {
+                        arrowEl.classList.remove('grayed-out');
+                        arrowEl.classList.add('highlighted');
                     }
-                });
+                }
             }
             
             selectedNode = nodeId;
@@ -748,33 +1332,125 @@
             return [targetNodeId];
         }
 
-        function isArrowForEdge(arrow, edge) {
-            const fromNode = nodes.find(n => n.id === edge.dataset.from);
-            const toNode = nodes.find(n => n.id === edge.dataset.to);
-            
-            if (!fromNode || !toNode) return false;
-            
-            const toX = toNode.x + 75;
-            const toY = toNode.y + 20;
-            
-            const arrowX = parseFloat(arrow.style.left);
-            const arrowY = parseFloat(arrow.style.top);
-            
-            return Math.abs(arrowX - (toX - 8)) < 5 && Math.abs(arrowY - (toY - 4)) < 5;
+        function selectEdge(from, to) {
+            resetHighlight();
+            document.querySelectorAll('.node').forEach(node => node.classList.add('grayed-out'));
+            document.querySelectorAll('.edge').forEach(edge => edge.classList.add('grayed-out'));
+            document.querySelectorAll('.arrow').forEach(arrow => arrow.classList.add('grayed-out'));
+
+            const edgeEl = document.querySelector(`.edge[data-from="${from}"][data-to="${to}"]`);
+            if (edgeEl) {
+                edgeEl.classList.remove('grayed-out');
+                edgeEl.classList.add('highlighted');
+                const arrowEl = edgeEl.parentElement.querySelector('.arrow');
+                if (arrowEl) {
+                    arrowEl.classList.remove('grayed-out');
+                    arrowEl.classList.add('highlighted');
+                }
+            }
+
+            const a = document.getElementById(from);
+            const b = document.getElementById(to);
+            if (a) { a.classList.remove('grayed-out'); a.classList.add('selected'); }
+            if (b) { b.classList.remove('grayed-out'); b.classList.add('selected'); }
+        }
+
+        function esc(s) { return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+        function loadDocs() {
+            try {
+                const raw = localStorage.getItem(DOCS_KEY);
+                const saved = raw ? JSON.parse(raw) : {};
+                // Merge saved over defaults so user edits win
+                nodeDocsStore = Object.assign({}, defaultDocs, saved);
+            } catch (e) {
+                nodeDocsStore = Object.assign({}, defaultDocs);
+            }
+        }
+
+        function getNodeDocs(nodeId) {
+            const d = nodeDocsStore[nodeId] || {};
+            return {
+                works: d.works || '',
+                learning: d.learning || ''
+            };
+        }
+
+        function persistDocs() {
+            try { localStorage.setItem(DOCS_KEY, JSON.stringify(nodeDocsStore)); } catch (e) { console.warn('Docs save failed', e); }
         }
 
         function updateInfoPanel(nodeId) {
             const node = nodes.find(n => n.id === nodeId);
             const detail = nodeDetails[nodeId];
+            const docs = getNodeDocs(nodeId);
+            const panel = document.getElementById('infoContent');
             
-            document.getElementById('infoContent').innerHTML = `
-                <h4>${node.text}</h4>
-                <p><strong>Module:</strong> ${node.group.replace('-', ' ').toUpperCase()}</p>
-                <p><strong>Description:</strong> ${detail}</p>
-                <p><strong>Function ID:</strong> ${nodeId}</p>
+            panel.innerHTML = `
+                <h4>${esc(node.text)}</h4>
+                <p><strong>Module:</strong> ${esc(node.group.replace('-', ' ').toUpperCase())}</p>
+                <p><strong>Description:</strong> ${esc(detail)}</p>
+                <p><strong>Function ID:</strong> ${esc(nodeId)}</p>
+                <details class="info-collapse">
+                  <summary>More Info</summary>
+                  <div class="info-section">
+                    <p><strong>How it works in your code</strong></p>
+                    <div class="info-text" id="docWorksView">${esc(docs.works) || '<em>Add notes...</em>'}</div>
+                  </div>
+                  <div class="info-section">
+                    <p><strong>Learning notes</strong></p>
+                    <div class="info-text" id="docLearnView">${esc(docs.learning) || '<em>Add notes...</em>'}</div>
+                  </div>
+                  <div class="info-actions">
+                    <button class="btn btn-primary" id="editDocsBtn">Edit Notes</button>
+                  </div>
+                </details>
             `;
             
+            const editBtn = document.getElementById('editDocsBtn');
+            if (editBtn) editBtn.addEventListener('click', () => enterDocsEdit(nodeId));
+            
             document.getElementById('infoPanel').classList.add('active');
+        }
+
+        function enterDocsEdit(nodeId) {
+            const node = nodes.find(n => n.id === nodeId);
+            const detail = nodeDetails[nodeId];
+            const docs = getNodeDocs(nodeId);
+            const panel = document.getElementById('infoContent');
+            panel.innerHTML = `
+                <h4>${esc(node.text)}</h4>
+                <p><strong>Module:</strong> ${esc(node.group.replace('-', ' ').toUpperCase())}</p>
+                <p><strong>Description:</strong> ${esc(detail)}</p>
+                <p><strong>Function ID:</strong> ${esc(nodeId)}</p>
+                <details class="info-collapse" open>
+                  <summary>More Info</summary>
+                  <div class="info-section">
+                    <p><strong>How it works in your code</strong></p>
+                    <textarea id="docWorksInput" placeholder="Add specifics about module interactions, processes, and key flows...">${esc(docs.works)}</textarea>
+                  </div>
+                  <div class="info-section">
+                    <p><strong>Learning notes</strong></p>
+                    <textarea id="docLearnInput" placeholder="Concepts, tips, and gotchas for this component...">${esc(docs.learning)}</textarea>
+                  </div>
+                  <div class="info-actions">
+                    <button class="btn btn-success" id="saveDocsBtn">Save</button>
+                    <button class="btn btn-secondary" id="cancelDocsBtn">Cancel</button>
+                  </div>
+                </details>
+            `;
+            const saveBtn = document.getElementById('saveDocsBtn');
+            const cancelBtn = document.getElementById('cancelDocsBtn');
+            if (saveBtn) saveBtn.addEventListener('click', () => saveNodeDocs(nodeId));
+            if (cancelBtn) cancelBtn.addEventListener('click', () => updateInfoPanel(nodeId));
+        }
+
+        function saveNodeDocs(nodeId) {
+            const works = document.getElementById('docWorksInput')?.value || '';
+            const learning = document.getElementById('docLearnInput')?.value || '';
+            nodeDocsStore[nodeId] = { works, learning };
+            persistDocs();
+            updateInfoPanel(nodeId);
         }
 
         function highlightPath(pathType) {
@@ -825,20 +1501,16 @@
             for (let i = 0; i < pathNodes.length - 1; i++) {
                 const from = pathNodes[i];
                 const to = pathNodes[i + 1];
-                
-                const edge = document.querySelector(`.edge[data-from="${from}"][data-to="${to}"]`);
-                if (edge) {
-                    edge.classList.remove('grayed-out');
-                    edge.classList.add('highlighted');
-                }
-                
-                const arrows = document.querySelectorAll('.arrow');
-                arrows.forEach(arrow => {
-                    if (edge && isArrowForEdge(arrow, edge)) {
-                        arrow.classList.remove('grayed-out');
-                        arrow.classList.add('highlighted');
+                const edgeEl = document.querySelector(`.edge[data-from="${from}"][data-to="${to}"]`);
+                if (edgeEl) {
+                    edgeEl.classList.remove('grayed-out');
+                    edgeEl.classList.add('highlighted');
+                    const arrowEl = edgeEl.parentElement.querySelector('.arrow');
+                    if (arrowEl) {
+                        arrowEl.classList.remove('grayed-out');
+                        arrowEl.classList.add('highlighted');
                     }
-                });
+                }
             }
         }
 
@@ -866,16 +1538,38 @@
 
         function initFlowchart() {
             const flowchart = document.getElementById('flowchart');
+            const content = document.getElementById('flowchartContent');
+            // Apply saved positions before creating DOM nodes
+            applySavedPositions();
+            // Load saved docs for info panel
+            loadDocs();
             
             nodes.forEach(nodeData => {
                 const node = createNode(nodeData);
-                flowchart.appendChild(node);
+                content.appendChild(node);
             });
             
             edges.forEach(edgeData => {
                 const edge = createEdge(edgeData);
-                if (edge) flowchart.appendChild(edge);
+                if (edge) content.appendChild(edge);
             });
+            
+            resizeContent();
+            
+            // Enable background panning and click-to-reset on whitespace
+            flowchart.addEventListener('mousedown', onBackgroundMouseDown);
+        }
+
+        function resizeContent() {
+            // Ensure content area fits all nodes
+            const content = document.getElementById('flowchartContent');
+            let maxX = 1000, maxY = 800;
+            nodes.forEach(n => {
+                maxX = Math.max(maxX, (n.x || 0) + 200);
+                maxY = Math.max(maxY, (n.y || 0) + 150);
+            });
+            content.style.width = maxX + 'px';
+            content.style.height = maxY + 'px';
         }
 
         window.addEventListener('load', initFlowchart);
