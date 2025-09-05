@@ -386,12 +386,13 @@ init_state(S,TableName,Feature,StartBL,EndBL)->
 			prev(TableName,ets:last(TableName),prev,EndBL)
 	end,
 	Index_Start = prev(TableName,ets:last(TableName),prev,StartBL),
+	log(io_lib:format("Table: ~p Start: ~p End: ~p~n",[TableName,Index_Start,Index_End])),
 	S#state{
 		table_name = TableName,
 		feature = Feature,
 		index_start = Index_Start,
 		index_end = Index_End,
-		index = Index_Start
+		index = Index_Start	
 	}.	
 
 
@@ -832,35 +833,46 @@ update_ForexDB(_TableName,_CurrencyPair,_SamplingRate,[])->
 	erase(new_id),
 	Key;
 
+
 update_ForexDB(TableName,CurrencyPair,SamplingRate,List)->
 %	io:format("TableName:~p CurrencyPair:~p SamplingRate:~p~n",[TableName,CurrencyPair,SamplingRate]),
-	{YearL,Remainder1} = split_with(46,List),		% . 46
-	{MonthL,Remainder2} = split_with(46,Remainder1),	% . 46
-	{DayL,Remainder3} = split_with(44,Remainder2),		% , 44
+	% Expected CSV format per line (new):
+	% YYYY-MM-DD<space>HH:MM:SS,Open,High,Low,Close,Volume
+	% Example: 2024-09-02 21:15:00,1.10727,1.107275,1.1072,1.10725,-1.0\r\n
+	% Parse date components
+	{YearL,Remainder1} = split_with(45,List),		% - 45
+	{MonthL,Remainder2} = split_with(45,Remainder1),	% - 45
+	{DayL,Remainder3} = split_with(32,Remainder2),		% " " 32
+
+	% Parse time components
 	{HourL,Remainder4} = split_with(58,Remainder3),		% : 58
-	{MinuteL,Remainder5} = split_with(44,Remainder4),	% , 44 (changed from :58 to ,44 for HH:MM format)
-	{OpenL,Remainder6} = split_with(44,Remainder5),		% , 44
-	{HighL,Remainder7} = split_with(44,Remainder6),		% , 44
-	{LowL,Remainder8} = split_with(44,Remainder7),		% , 44
-	{CloseL,Remainder9} = split_with(44,Remainder8),	% , 44
-	{VolumeL,Remainder10} = split_with(13,Remainder9),	%\r 13
-	[_|Remainder] = Remainder10,				%gets rid of (\n 10)
-%	io:format("CloseL:~p~n",[CloseL]),
-%	io:format("here~p~n",[{YearL,MonthL,DayL,HourL,MinuteL,OpenL,HighL,LowL,CloseL,VolumeL}]),
+	{MinuteL,Remainder5} = split_with(58,Remainder4),	% : 58
+	{SecondL,Remainder6} = split_with(44,Remainder5),	% , 44
+
+	% Parse OHLCV fields
+	{OpenL,Remainder7} = split_with(44,Remainder6),		% , 44
+	{HighL,Remainder8} = split_with(44,Remainder7),		% , 44
+	{LowL,Remainder9} = split_with(44,Remainder8),		% , 44
+	{CloseL,Remainder10} = split_with(44,Remainder9),	% , 44
+	{VolumeL,Remainder11} = split_with(13,Remainder10),	% \r 13
+	[_|Remainder] = Remainder11,				% gets rid of (\n 10)
+
+%	io:format("here~p~n",[{YearL,MonthL,DayL,HourL,MinuteL,SecondL,OpenL,HighL,LowL,CloseL,VolumeL}]),
 	Year = list_to_integer(YearL),
 	Month = list_to_integer(MonthL),
 	Day = list_to_integer(DayL),
 	Hour = list_to_integer(HourL),
 	Minute = list_to_integer(MinuteL),
-	%Second = list_to_integer(SecondL),
-	Second = 0,
+	Second = list_to_integer(SecondL),
 	Open = list_to_number(OpenL),
 	High = list_to_number(HighL),
 	Low = list_to_number(LowL),
 	Close = list_to_number(CloseL),
-	Volume = list_to_integer(VolumeL),
-	Id = {Year,Month,Day,Hour,Minute,0,SamplingRate},
-	case (Second == 0) and ((Open+High+Low+Close) < 1000) and ((Open+High+Low+Close) > -1000) of
+	Volume = list_to_number(VolumeL),
+
+	% Keep the key structure consistent: {Y,Mo,D,H,Mi,Sec,SamplingRate}
+	Id = {Year,Month,Day,Hour,Minute,Second,SamplingRate},
+	case ((Open+High+Low+Close) < 1000) and ((Open+High+Low+Close) > -1000) of
 		true ->
 			case member(TableName,Id) of
 				false ->%{key,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate},open,high,low,close,volume}).
@@ -911,3 +923,15 @@ list_to_number(List)->
 table_size(TableName)->
 	[_,_,_,{size,Size},_,_,_,_,_] = ets:info(TableName),
 	Size.	
+
+
+
+
+
+%%===============================LOG File=======================================
+%% This module handles logging for the FX processing system.
+
+log(Msg) ->
+    {ok, F} = file:open("logs/delete.log", [append]),
+    io:format(F, "~s~n", [Msg]),
+    file:close(F).

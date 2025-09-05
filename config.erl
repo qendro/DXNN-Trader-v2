@@ -24,7 +24,7 @@ market_props_start() -> 800.                 % Options: 1-N (market analysis sta
 market_props_end() -> 200.                   % Options: market_props_start+1 to N (market analysis end)
 
 %% === Sensor Configuration - Standard Forex Trader ===
-pli_resolutions() -> [5].                   % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc.
+pli_resolutions() -> [20].                   % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc.
 pci_horizontal_resolutions() -> [50].        % Options: [10], [20], [50], [10,20], [20,50], etc.
 pci_vertical_resolutions() -> [20].          % Options: [10], [15], [20], [10,15], [15,20], etc.
 
@@ -35,9 +35,9 @@ pci_1m_vertical_resolutions() -> [10,15].    % Options: [5], [10], [15], [5,10],
 internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dimensions: position, profit, time)
 
 %% === Evolution Parameters ===
-specie_size_limit() -> 1.                    % Options: 1-100 (max agents per species)
-init_specie_size() -> 1.                     % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 10.                    % Options: 10-100000 (max evaluations per run)
+specie_size_limit() -> 2.                    % Options: 1-100 (max agents per species)
+init_specie_size() -> 2.                     % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 1.                    % Options: 10-100000 (max evaluations per run)
 survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
 tot_runs() -> 1.                             % Options: 1-100 (number of benchmark runs)
 
@@ -85,4 +85,4 @@ mutation_operators() -> [
 fx_tables_directory() -> "fx_tables/".  % Options: any valid directory path
 source_directory() -> "fx_tables/".     % Options: any valid directory path  
 actuator_debug_tag() -> false.               % Options: true, false (enables trade-by-trade debug output)
-sensor_debug_tag() -> false.                 % Options: true, false (enables sensor debug output)
+sensor_debug_tag() -> true.                 % Options: true, false (enables sensor debug output)

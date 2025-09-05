@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive FX Trader Neural Network Model - TWEANN System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            min-height: 100vh;
+            overflow-x: auto;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .model-container {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .neural-network {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            min-height: 700px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .info-panel {
+            background: rgba(255,255,255,0.1);
+            border-radius: 15px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+            height: fit-content;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .layer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 25px 0;
+            position: relative;
+        }
+
+        .layer-title {
+            font-weight: bold;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+            color: #FFD700;
+            text-align: center;
+        }
+
+        .nodes-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .node {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+            font-weight: bold;
+            position: relative;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+        }
+
+        .sensor-node {
+            background: linear-gradient(135deg, #4CAF50, #45a049);
+            border: 3px solid #2E7D32;
+            box-shadow: 0 0 15px rgba(76, 175, 80, 0.3);
+        }
+
+        .processing-node {
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            border: 3px solid #1565C0;
+            box-shadow: 0 0 15px rgba(33, 150, 243, 0.3);
+        }
+
+        .output-node {
+            background: linear-gradient(135deg, #FF9800, #F57C00);
+            border: 3px solid #E65100;
+            box-shadow: 0 0 15px rgba(255, 152, 0, 0.3);
+        }
+
+        .actuator-node {
+            background: linear-gradient(135deg, #F44336, #D32F2F);
+            border: 3px solid #B71C1C;
+            box-shadow: 0 0 15px rgba(244, 67, 54, 0.3);
+        }
+
+        .substrate-node {
+            background: linear-gradient(135deg, #9C27B0, #7B1FA2);
+            border: 3px solid #4A148C;
+            box-shadow: 0 0 15px rgba(156, 39, 176, 0.3);
+        }
+
+        .recurrent-node {
+            background: linear-gradient(135deg, #795548, #5D4037);
+            border: 3px solid #3E2723;
+            box-shadow: 0 0 15px rgba(121, 85, 72, 0.3);
+        }
+
+        .node:hover {
+            transform: scale(1.15);
+            box-shadow: 0 0 25px rgba(255,255,255,0.4);
+            z-index: 10;
+        }
+
+        .node.active {
+            animation: pulse 1.5s infinite;
+            transform: scale(1.1);
+            box-shadow: 0 0 30px rgba(255,255,255,0.6);
+        }
+
+        .node.selected {
+            border-color: #FFD700;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.8);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1.1); }
+            50% { transform: scale(1.25); }
+            100% { transform: scale(1.1); }
+        }
+
+        .connection {
+            position: absolute;
+            height: 2px;
+            background: linear-gradient(90deg, rgba(255,255,255,0.6), rgba(255,255,255,0.2));
+            transform-origin: left center;
+            opacity: 0.5;
+            transition: all 0.3s ease;
+            z-index: 1;
+        }
+
+        .connection.active {
+            background: linear-gradient(90deg, #FFD700, #FFA500);
+            height: 4px;
+            opacity: 1;
+            box-shadow: 0 0 10px rgba(255,215,0,0.5);
+            animation: dataFlow 2s ease-in-out;
+        }
+
+        @keyframes dataFlow {
+            0% { background: linear-gradient(90deg, #FFD700, transparent); }
+            50% { background: linear-gradient(90deg, transparent, #FFD700, transparent); }
+            100% { background: linear-gradient(90deg, transparent, #FFD700); }
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+
+        .btn.active {
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            color: #333;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.5);
+        }
+
+        .info-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .info-section h3 {
+            color: #FFD700;
+            margin-bottom: 10px;
+            font-size: 1.1em;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .metric {
+            background: rgba(255,255,255,0.1);
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #B0BEC5;
+            margin-bottom: 5px;
+        }
+
+        .metric-value {
+            font-size: 1.4em;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+
+        .candlestick-chart {
+            width: 100%;
+            height: 200px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+            margin: 15px 0;
+            position: relative;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .candlestick {
+            position: absolute;
+            bottom: 20px;
+            width: 12px;
+            background: #4CAF50;
+            transition: all 0.3s ease;
+            border-radius: 1px;
+        }
+
+        .candlestick.red {
+            background: #F44336;
+        }
+
+        .candlestick.current {
+            box-shadow: 0 0 10px rgba(255, 215, 0, 0.8);
+            border: 1px solid #FFD700;
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255,255,255,0.1);
+            padding: 8px 12px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid rgba(255,255,255,0.3);
+        }
+
+        .architecture-selector {
+            margin-bottom: 20px;
+        }
+
+        .architecture-selector select {
+            background: rgba(255,255,255,0.1);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+            padding: 12px;
+            border-radius: 8px;
+            width: 100%;
+            font-size: 1em;
+        }
+
+        .architecture-selector select option {
+            background: #2a5298;
+            color: white;
+        }
+
+        .tooltip {
+            position: fixed;
+            background: rgba(0,0,0,0.95);
+            color: white;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.9em;
+            pointer-events: none;
+            z-index: 1000;
+            max-width: 300px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+        }
+
+        .substrate-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 3px;
+            margin: 10px 0;
+            justify-content: center;
+            max-width: 300px;
+        }
+
+        .substrate-cell {
+            width: 25px;
+            height: 25px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255,255,255,0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7em;
+        }
+
+        .substrate-cell.active {
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            color: #333;
+            font-weight: bold;
+            box-shadow: 0 0 8px rgba(255, 215, 0, 0.6);
+        }
+
+        .substrate-cell:hover {
+            transform: scale(1.1);
+            border-color: #FFD700;
+        }
+
+        .evolution-status {
+            background: rgba(255,255,255,0.05);
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+            border-left: 4px solid #4CAF50;
+        }
+
+        .generation-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .fitness-bar {
+            height: 10px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 5px;
+            overflow: hidden;
+            margin: 5px 0;
+        }
+
+        .fitness-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #F44336, #FF9800, #4CAF50);
+            transition: width 0.5s ease;
+            border-radius: 5px;
+        }
+
+        .network-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .stat-item {
+            background: rgba(255,255,255,0.1);
+            padding: 8px;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 0.9em;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            color: #FFD700;
+            font-size: 1.1em;
+        }
+
+        .trading-log {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.8em;
+            margin-top: 10px;
+        }
+
+        .log-entry {
+            margin: 2px 0;
+            padding: 2px 0;
+        }
+
+        .log-entry.profit {
+            color: #4CAF50;
+        }
+
+        .log-entry.loss {
+            color: #F44336;
+        }
+
+        .log-entry.info {
+            color: #2196F3;
+        }
+
+        @media (max-width: 1200px) {
+            .model-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .container {
+                padding: 15px;
+            }
+            
+            h1 {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Interactive FX Trader Neural Network Model - TWEANN System</h1>
+        
+        <div class="controls">
+            <button class="btn" id="startSimulation">Start Trading Simulation</button>
+            <button class="btn" id="showDataFlow">Show Data Flow</button>
+            <button class="btn" id="trainMode">Training Mode</button>
+            <button class="btn" id="testMode">Generalization Test</button>
+            <button class="btn" id="evolveBtn">Run Evolution</button>
+            <button class="btn" id="resetBtn">Reset System</button>
+        </div>
+
+        <div class="model-container">
+            <div class="neural-network" id="neuralNetwork">
+                <div class="architecture-selector">
+                    <select id="architectureSelect">
+                        <option value="pli">PLI - Price List Input (Direct Encoding)</option>
+                        <option value="pci">PCI - Price Chart Input (Substrate Encoding)</option>
+                        <option value="hybrid">Hybrid - Combined PLI + PCI</option>
+                    </select>
+                </div>
+
+                <!-- PLI Architecture -->
+                <div id="pliArchitecture" class="architecture">
+                    <div class="layer">
+                        <div class="layer-title">Input Sensors (PLI Architecture)</div>
+                        <div class="nodes-container">
+                            <div class="node sensor-node" data-info="fx_PLI" data-tooltip="Price List Input: Sliding window of historical closing prices (10-100 data points). Direct vector input to neural network.">PLI</div>
+                            <div class="node sensor-node" data-info="fx_Internals" data-tooltip="Account internals: Current position (Long/Short/None), entry price, percentage change since entry, available balance.">INT</div>
+                            <div class="node sensor-node" data-info="bias" data-tooltip="Bias neuron: Provides constant input of 1.0 to help with activation thresholds.">BIAS</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Hidden Processing Layer</div>
+                        <div class="nodes-container">
+                            <div class="node processing-node" data-info="hidden1" data-tooltip="Hidden neuron H1: Processes price patterns and trends using evolved weights and activation function.">H1</div>
+                            <div class="node processing-node" data-info="hidden2" data-tooltip="Hidden neuron H2: Secondary pattern detection with different weight configurations.">H2</div>
+                            <div class="node processing-node" data-info="hidden3" data-tooltip="Hidden neuron H3: Combines multiple signals for decision making.">H3</div>
+                            <div class="node processing-node" data-info="hidden4" data-tooltip="Hidden neuron H4: Final processing layer before output generation.">H4</div>
+                            <div class="node recurrent-node" data-info="recurrent" data-tooltip="Recurrent connection: Jordan-style feedback providing memory of previous decisions.">REC</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Output Decision Layer</div>
+                        <div class="nodes-container">
+                            <div class="node output-node" data-info="output" data-tooltip="Trading decision output: -1.0 (Short/Sell), 0.0 (Hold), +1.0 (Long/Buy). Uses hyperbolic tangent activation.">OUT</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Trade Actuator</div>
+                        <div class="nodes-container">
+                            <div class="node actuator-node" data-info="fx_Trade" data-tooltip="Trade execution actuator: Interfaces with forex simulator to execute buy/sell/hold decisions based on neural network output.">ACT</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- PCI Architecture -->
+                <div id="pciArchitecture" class="architecture" style="display: none;">
+                    <div class="layer">
+                        <div class="layer-title">Input Sensors (PCI Architecture)</div>
+                        <div class="nodes-container">
+                            <div class="node sensor-node" data-info="fx_PCI" data-tooltip="Price Chart Input: 2D candlestick chart converted to pixel matrix (e.g., 50x20 pixels). Captures geometric patterns like triangles, head-and-shoulders, etc.">PCI</div>
+                            <div class="node sensor-node" data-info="fx_Internals" data-tooltip="Account internals sensor for PCI mode">INT</div>
+                            <div class="node recurrent-node" data-info="recurrent" data-tooltip="Jordan recurrent connection: Provides temporal context and memory of previous chart patterns.">REC</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Substrate Input Plane (Z=-1)</div>
+                        <div class="substrate-grid" id="inputPlane">
+                            <!-- Generated dynamically -->
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Hidden Hyperplane (Z=0)</div>
+                        <div class="substrate-grid" id="hiddenPlane">
+                            <!-- Generated dynamically -->
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Output Hyperplane (Z=1)</div>
+                        <div class="nodes-container">
+                            <div class="node substrate-node" data-info="substrate_output" data-tooltip="Substrate output neuron: Integrates all hyperplane activations into final trading decision using 4D coordinate system.">SUB</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Trade Actuator</div>
+                        <div class="nodes-container">
+                            <div class="node actuator-node" data-info="fx_Trade" data-tooltip="Substrate-driven trade actuator">ACT</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hybrid Architecture -->
+                <div id="hybridArchitecture" class="architecture" style="display: none;">
+                    <div class="layer">
+                        <div class="layer-title">Combined Input Sensors</div>
+                        <div class="nodes-container">
+                            <div class="node sensor-node" data-info="fx_PLI" data-tooltip="Price List Input branch">PLI</div>
+                            <div class="node sensor-node" data-info="fx_PCI" data-tooltip="Price Chart Input branch">PCI</div>
+                            <div class="node sensor-node" data-info="fx_Internals" data-tooltip="Account internals for both branches">INT</div>
+                            <div class="node recurrent-node" data-info="recurrent" data-tooltip="Recurrent memory">REC</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Fusion Processing Layer</div>
+                        <div class="nodes-container">
+                            <div class="node processing-node" data-info="fusion1" data-tooltip="Fusion neuron: Combines PLI and PCI signals">F1</div>
+                            <div class="node processing-node" data-info="fusion2" data-tooltip="Secondary fusion processing">F2</div>
+                            <div class="node substrate-node" data-info="substrate_fusion" data-tooltip="Substrate-based pattern fusion">SF</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Decision Output</div>
+                        <div class="nodes-container">
+                            <div class="node output-node" data-info="hybrid_output" data-tooltip="Hybrid decision output combining both PLI and PCI analysis">HOUT</div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <div class="layer-title">Trade Actuator</div>
+                        <div class="nodes-container">
+                            <div class="node actuator-node" data-info="fx_Trade" data-tooltip="Hybrid-driven trade actuator">ACT</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="info-panel">
+                <div class="info-section">
+                    <h3>System Information</h3>
+                    <p id="systemInfo">TWEANN-based FX Trading System - Chapter 19 Implementation<br><br>Click any component to learn more about its role in the neuroevolutionary trading system.</p>
+                </div>
+
+                <div class="info-section">
+                    <h3>Current Trading Metrics</h3>
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="metric-label">Account Balance</div>
+                            <div class="metric-value" id="balance">$300.00</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Current Position</div>
+                            <div class="metric-value" id="position">NONE</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Profit & Loss</div>
+                            <div class="metric-value" id="pnl">$0.00</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Fitness Score</div>
+                            <div class="metric-value" id="fitness">300</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Win Rate</div>
+                            <div class="metric-value" id="winRate">0%</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">Trade Count</div>
+                            <div class="metric-value" id="tradeCount">0</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-section">
+                    <h3>EUR/USD Price Chart</h3>
+                    <div class="candlestick-chart" id="priceChart"></div>
+                    <div style="text-align: center; font-size: 0.9em; color: #B0BEC5; margin-top: 5px;">
+                        Current Price: <span id="currentPrice">1.3500</span>
+                    </div>
+                </div>
+
+                <div class="info-section">
+                    <h3>Neural Network Evolution</h3>
+                    <div class="evolution-status">
+                        <div class="generation-info">
+                            <span>Generation: <span id="generation">1</span></span>
+                            <span>Best Fitness: <span id="bestFitness">300</span></span>
+                        </div>
+                        <div class="fitness-bar">
+                            <div class="fitness-fill" id="fitnessBar" style="width: 30%"></div>
+                        </div>
+                        <div class="network-stats">
+                            <div class="stat-item">
+                                <div class="stat-value" id="nodeCount">8</div>
+                                <div>Nodes</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="connectionCount">12</div>
+                                <div>Connections</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="stat-value" id="complexity">0.75</div>
+                                <div>Complexity</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="info-section">
+                    <h3>Architecture Comparison</h3>
+                    <div id="architectureInfo">
+                        <p><strong>PLI (Price List Input):</strong> Direct encoding using sliding window of historical prices.</p>
+                        <p><strong>Advantages:</strong> Simple, fast processing, direct numerical input</p>
+                        <p><strong>Disadvantages:</strong> Cannot detect geometric chart patterns, limited spatial awareness</p>
+                        <br>
+                        <p><strong>Performance:</strong> Good for trend following, limited pattern recognition</p>
+                    </div>
+                </div>
+
+                <div class="info-section">
+                    <h3>Trading Log</h3>
+                    <div class="trading-log" id="tradingLog">
+                        <div class="log-entry info">System initialized - Ready for trading</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color sensor-node"></div>
+                <span>Input Sensors</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color processing-node"></div>
+                <span>Processing Nodes</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color substrate-node"></div>
+                <span>Substrate Nodes</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color recurrent-node"></div>
+                <span>Recurrent Connections</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color output-node"></div>
+                <span>Output Decisions</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color actuator-node"></div>
+                <span>Trade Actuators</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        class TWEANNFXTrader {
+            constructor() {
+                this.isSimulating = false;
+                this.isEvolving = false;
+                this.currentArchitecture = 'pli';
+                this.balance = 300;
+                this.position = 'NONE';
+                this.pnl = 0;
+                this.entryPrice = 0;
+                this.currentPrice = 1.3500;
+                this.generation = 1;
+                this.fitness = 300;
+                this.bestFitness = 300;
+                this.winRate = 0;
+                this.tradeCount = 0;
+                this.totalTrades = 0;
+                this.winningTrades = 0;
+                this.priceHistory = [];
+                this.tradingLog = [];
+                this.connections = [];
+                this.timer = null;
+                this.index = 50; // rolling index into priceHistory
+                
+                // Network topology
+                this.nodes = {
+                    sensors: ['fx_PLI', 'fx_Internals', 'bias'],
+                    hidden: ['hidden1', 'hidden2', 'hidden3', 'hidden4'],
+                    recurrent: ['recurrent'],
+                    output: ['output'],
+                    actuators: ['fx_Trade']
+                };
+                
+                this.init();
+            }
+
+            init() {
+                this.setupEventListeners();
+                this.generateInitialPriceData();
+                this.drawPriceChart();
+                this.createSubstrateGrids();
+                this.setupTooltips();
+                this.updateDisplay();
+            }
+
+            setupEventListeners() {
+                const $ = (id)=>document.getElementById(id);
+                $('startSimulation').addEventListener('click', ()=>{
+                    if(!this.isSimulating){ this.startSimulation(); } else { this.stopSimulation(); }
+                });
+                $('showDataFlow').addEventListener('click', ()=> this.toggleDataFlow());
+                $('trainMode').addEventListener('click', ()=> this.setMode('train'));
+                $('testMode').addEventListener('click', ()=> this.setMode('test'));
+                $('evolveBtn').addEventListener('click', ()=> this.runEvolution());
+                $('resetBtn').addEventListener('click', ()=> this.resetSystem());
+                $('architectureSelect').addEventListener('change', (e)=> this.switchArchitecture(e.target.value));
+
+                // Click on nodes to show info
+                document.querySelectorAll('.node').forEach(el=>{
+                    el.addEventListener('click', ()=>{
+                        document.querySelectorAll('.node').forEach(n=>n.classList.remove('selected'));
+                        el.classList.add('selected');
+                        const info = el.getAttribute('data-info') || el.textContent;
+                        const tip = el.getAttribute('data-tooltip') || 'Component';
+                        this.setInfo(`<strong>${info}</strong><br>${tip}`);
+                    });
+                });
+            }
+
+            generateInitialPriceData() {
+                // Simple random-walk around 1.3500
+                const N = 300;
+                let p = 1.3500;
+                const out = [];
+                for(let i=0;i<N;i++){
+                    const drift = (Math.sin(i/30)+Math.sin(i/9))*0.00005;
+                    const shock = (Math.random()-0.5)*0.0006;
+                    p = Math.max(0.8, Math.min(1.6, p + drift + shock));
+                    out.push(p);
+                }
+                this.priceHistory = out;
+                this.index = 50;
+                this.currentPrice = out[this.index];
+            }
+
+            drawPriceChart() {
+                const el = document.getElementById('priceChart');
+                el.innerHTML = '';
+                const W = el.clientWidth || 360;
+                const H = el.clientHeight || 200;
+                const windowSize = 50;
+                const start = Math.max(0, this.index - windowSize + 1);
+                const data = this.priceHistory.slice(start, this.index+1);
+                if(data.length < 2) return;
+                const minP = Math.min(...data);
+                const maxP = Math.max(...data);
+                const range = Math.max(1e-6, maxP-minP);
+                const candleWidth = Math.max(4, Math.floor(W/(data.length+2)));
+                data.forEach((p,i)=>{
+                    if(i===0) return;
+                    const open = data[i-1];
+                    const close = p;
+                    const high = Math.max(open, close) + range*0.05*Math.random();
+                    const low  = Math.min(open, close) - range*0.05*Math.random();
+                    const x = i*candleWidth + 10;
+                    const bodyH = Math.max(2, Math.floor((Math.abs(close-open)/range)*(H-40)));
+                    const y = 20 + Math.floor(((Math.max(open,close)-minP)/range)*(H-40) - bodyH);
+                    const div = document.createElement('div');
+                    div.className = 'candlestick' + (close<open ? ' red' : '');
+                    if(i===data.length-1) div.classList.add('current');
+                    div.style.left = x+'px';
+                    div.style.height = bodyH+'px';
+                    div.style.bottom = (H - (y+bodyH))+'px';
+                    div.title = `o:${open.toFixed(5)} c:${close.toFixed(5)}`;
+                    el.appendChild(div);
+                });
+                document.getElementById('currentPrice').textContent = this.currentPrice.toFixed(4);
+            }
+
+            createSubstrateGrids() {
+                const make = (id)=>{
+                    const grid = document.getElementById(id);
+                    if(!grid) return;
+                    grid.innerHTML = '';
+                    for(let i=0;i<64;i++){
+                        const cell = document.createElement('div');
+                        cell.className = 'substrate-cell';
+                        cell.textContent = '';
+                        cell.addEventListener('click', ()=> cell.classList.toggle('active'));
+                        grid.appendChild(cell);
+                    }
+                };
+                make('inputPlane');
+                make('hiddenPlane');
+            }
+
+            setupTooltips() {
+                const tip = document.getElementById('tooltip');
+                const show = (e, text)=>{
+                    tip.innerHTML = text;
+                    tip.style.left = (e.pageX + 12)+'px';
+                    tip.style.top = (e.pageY + 12)+'px';
+                    tip.style.opacity = 1;
+                };
+                const hide = ()=>{ tip.style.opacity = 0; };
+                document.querySelectorAll('[data-tooltip]').forEach(el=>{
+                    el.addEventListener('mousemove', (e)=> show(e, el.getAttribute('data-tooltip')));
+                    el.addEventListener('mouseleave', hide);
+                });
+            }
+
+            updateDisplay() {
+                document.getElementById('balance').textContent = `$${this.balance.toFixed(2)}`;
+                document.getElementById('position').textContent = this.position;
+                document.getElementById('pnl').textContent = (this.pnl>=0?'+':'') + `$${this.pnl.toFixed(2)}`;
+                document.getElementById('fitness').textContent = Math.round(this.fitness);
+                document.getElementById('bestFitness').textContent = Math.round(this.bestFitness);
+                document.getElementById('generation').textContent = this.generation;
+                document.getElementById('tradeCount').textContent = this.tradeCount;
+                const wr = this.totalTrades>0 ? Math.round(100*this.winningTrades/this.totalTrades) : 0;
+                document.getElementById('winRate').textContent = wr + '%';
+                document.getElementById('fitnessBar').style.width = Math.min(100, Math.max(0, (this.fitness/600)*100)) + '%';
+                this.drawPriceChart();
+            }
+
+            startSimulation() {
+                if(this.isSimulating) return;
+                this.isSimulating = true;
+                document.getElementById('startSimulation').classList.add('active');
+                this.log('Starting simulation...','info');
+                this.timer = setInterval(()=> this.simulateTick(), 600);
+            }
+
+            stopSimulation() {
+                this.isSimulating = false;
+                clearInterval(this.timer);
+                document.getElementById('startSimulation').classList.remove('active');
+                this.log('Simulation paused.','info');
+            }
+
+            toggleDataFlow() {
+                // Pulse nodes in architecture to indicate flow
+                const arch = this.currentArchitecture;
+                const selector = arch==='pli' ? '#pliArchitecture .node' :
+                                 arch==='pci' ? '#pciArchitecture .node' : '#hybridArchitecture .node';
+                const nodes = Array.from(document.querySelectorAll(selector));
+                let i=0;
+                const step = ()=>{
+                    nodes.forEach(n=>n.classList.remove('active'));
+                    if(i<nodes.length){ nodes[i].classList.add('active'); i++; setTimeout(step, 200); }
+                };
+                step();
+            }
+
+            setMode(mode) {
+                if(mode==='train'){
+                    this.log('Switched to TRAINING mode (fitness measured on training slice).','info');
+                    document.getElementById('trainMode').classList.add('active');
+                    document.getElementById('testMode').classList.remove('active');
+                } else {
+                    this.log('Switched to GENERALIZATION TEST mode (held-out slice).','info');
+                    document.getElementById('testMode').classList.add('active');
+                    document.getElementById('trainMode').classList.remove('active');
+                }
+            }
+
+            runEvolution() {
+                if(this.isEvolving) return;
+                this.isEvolving = true;
+                document.getElementById('evolveBtn').classList.add('active');
+                this.log('Exoself: perturbing weights and evaluating...','info');
+                let steps = 10;
+                const tick = ()=>{
+                    if(steps-- <= 0){
+                        this.isEvolving = false;
+                        document.getElementById('evolveBtn').classList.remove('active');
+                        if(this.fitness > this.bestFitness){ this.bestFitness = this.fitness; this.log('Exoself: new best fitness found.','info'); }
+                        this.generation += 1;
+                        this.updateDisplay();
+                        return;
+                    }
+                    // random perturb effect
+                    this.fitness += (Math.random()-0.4)*8;
+                    this.updateDisplay();
+                    setTimeout(tick, 200);
+                };
+                tick();
+            }
+
+            resetSystem() {
+                this.stopSimulation();
+                this.balance = 300;
+                this.pnl = 0;
+                this.position = 'NONE';
+                this.entryPrice = 0;
+                this.tradeCount = 0;
+                this.totalTrades = 0;
+                this.winningTrades = 0;
+                this.generation = 1;
+                this.fitness = 300;
+                this.bestFitness = 300;
+                this.generateInitialPriceData();
+                this.drawPriceChart();
+                this.setInfo('System reset.');
+                this.log('System reset to defaults.','info');
+                this.updateDisplay();
+            }
+
+            switchArchitecture(value) {
+                this.currentArchitecture = value;
+                document.querySelectorAll('.architecture').forEach(a=> a.style.display='none');
+                if(value==='pli') document.getElementById('pliArchitecture').style.display='block';
+                if(value==='pci') document.getElementById('pciArchitecture').style.display='block';
+                if(value==='hybrid') document.getElementById('hybridArchitecture').style.display='block';
+                const infoEl = document.getElementById('architectureInfo');
+                if(value==='pli'){
+                    infoEl.innerHTML = `<p><strong>PLI:</strong> Sliding window vector of closes; direct encoding.</p><p><strong>Use for</strong> quick trend capture.</p>`;
+                } else if(value==='pci'){
+                    infoEl.innerHTML = `<p><strong>PCI:</strong> Candlestick plane with trinary cells; substrate encoding with Jordan recurrence.</p><p><strong>Use for</strong> geometric pattern recognition.</p>`;
+                } else {
+                    infoEl.innerHTML = `<p><strong>Hybrid:</strong> Combines PLI vector branch and PCI substrate branch.</p><p><strong>Use for</strong> robust pattern + trend fusion.</p>`;
+                }
+            }
+
+            simulateTick() {
+                if(this.index >= this.priceHistory.length-2){
+                    this.stopSimulation();
+                    this.log('End of price data.','info');
+                    return;
+                }
+                this.index++;
+                this.currentPrice = this.priceHistory[this.index];
+
+                // Decision from simple heuristics (stand-in for NN)
+                const decision = this.makeDecision();
+                this.executeTrade(decision);
+                this.updateMetrics();
+                this.updateDisplay();
+            }
+
+            makeDecision() {
+                // Very simple placeholder "NN" decisions
+                // PLI: SMA(5) vs SMA(20)
+                const windowShort = 5, windowLong = 20;
+                const start = Math.max(0, this.index-windowLong);
+                const slice = this.priceHistory.slice(start, this.index+1);
+                const sma = (arr)=>arr.reduce((a,b)=>a+b,0)/arr.length;
+                let out = 0;
+                if(this.currentArchitecture==='pli' || this.currentArchitecture==='hybrid'){
+                    const s5 = sma(slice.slice(-windowShort));
+                    const s20 = sma(slice.slice(-windowLong));
+                    if(s5 > s20*1.0001) out += 1;
+                    if(s5 < s20*0.9999) out -= 1;
+                }
+                if(this.currentArchitecture==='pci' || this.currentArchitecture==='hybrid'){
+                    // PCI: momentum over last 8 ticks
+                    const last8 = this.priceHistory.slice(Math.max(0,this.index-8), this.index+1);
+                    const mom = last8[last8.length-1] - last8[0];
+                    if(mom > 0) out += 1; else if(mom < 0) out -= 1;
+                }
+                // Threshold
+                if(out > 0) return 1;
+                if(out < 0) return -1;
+                return 0;
+            }
+
+            executeTrade(action) {
+                // Map: -1 short, 0 hold/close, 1 long
+                const spread = 0.000150;
+                const price = this.currentPrice;
+                if(action===0){
+                    // Close if holding
+                    if(this.position==='LONG'){
+                        const pl = (price - (this.entryPrice + spread)) * Math.round(5000/this.entryPrice);
+                        this.balance += pl;
+                        this.pnl += pl;
+                        this.totalTrades++;
+                        if(pl>0) this.winningTrades++;
+                        this.log(`Close LONG @ ${price.toFixed(5)} | P/L ${pl.toFixed(2)}`, pl>=0?'profit':'loss');
+                        this.position = 'NONE';
+                    } else if(this.position==='SHORT'){
+                        const pl = ((this.entryPrice - spread) - price) * Math.round(5000/this.entryPrice);
+                        this.balance += pl;
+                        this.pnl += pl;
+                        this.totalTrades++;
+                        if(pl>0) this.winningTrades++;
+                        this.log(`Close SHORT @ ${price.toFixed(5)} | P/L ${pl.toFixed(2)}`, pl>=0?'profit':'loss');
+                        this.position = 'NONE';
+                    }
+                    return;
+                }
+                // If switching sides, close first
+                if(this.position==='LONG' && action===-1){
+                    this.executeTrade(0);
+                } else if(this.position==='SHORT' && action===1){
+                    this.executeTrade(0);
+                }
+                // Open if flat
+                if(this.position==='NONE'){
+                    this.entryPrice = price;
+                    this.tradeCount++;
+                    if(action===1){
+                        this.position = 'LONG';
+                        this.log(`Open LONG @ ${price.toFixed(5)}`,'info');
+                    } else if(action===-1){
+                        this.position = 'SHORT';
+                        this.log(`Open SHORT @ ${price.toFixed(5)}`,'info');
+                    }
+                } else {
+                    // Already in same direction → hold
+                }
+            }
+
+            updateMetrics() {
+                // Fitness proxy: balance (capped for bar scaling)
+                this.fitness = this.balance;
+                if(this.fitness > this.bestFitness) this.bestFitness = this.fitness;
+            }
+
+            setInfo(html) {
+                document.getElementById('systemInfo').innerHTML = html;
+            }
+
+            log(msg, type='info') {
+                const el = document.getElementById('tradingLog');
+                const div = document.createElement('div');
+                div.className = `log-entry ${type}`;
+                div.textContent = `[t=${this.index}] ${msg}`;
+                el.appendChild(div);
+                el.scrollTop = el.scrollHeight;
+            }
+        }
+
+        // Boot the app
+        window.addEventListener('DOMContentLoaded', ()=>{
+            window.fxApp = new TWEANNFXTrader();
+        });
+    </script>
+</body>
+</html>

@@ -67,12 +67,14 @@ fx_PLI(Exoself_Id,VL,Parameters,Scape)->
 			%Normal, assuming we have 10000 rows, we start from 1000 to 200
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_start_index(),config:data_end_index()};
 		benchmark ->
+
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_end_index(),config:benchmark_end_index()};
 		live_trading ->
 			io:format("Live Trading not implemented")
 	end,
 	receive 
 		{_From,Result}->
+			%io:format("fx_PLI received: ~p~n", [{_From, Result}]),
 			normalize(Result)
 	end.
 	

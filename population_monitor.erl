@@ -403,6 +403,7 @@ summon_agents(OpMode,[Agent_Id|Agent_Ids],Acc)->
 	Agent_PId = exoself:start(Agent_Id,self()),
 	summon_agents(OpMode,Agent_Ids,[{Agent_Id,Agent_PId}|Acc]);
 summon_agents(_OpMode,[],Acc)->
+	fx:log(io_lib:format("_OpMode:~p, Acc:~p~n",[_OpMode,Acc])),
 	Acc.
 %The summon_agents/2 and summon_agents/3 spawns all the agents in the Agent_ids list, and returns to the caller a list of tuples as follows: [{Agent_Id,Agent_PId}...].
 
@@ -450,6 +451,7 @@ init_population(Init_State,Specie_Constraints)->
 	create_Population(Population_Id,SpecieSize,Specie_Constraints)->
 		Specie_Ids = [create_specie(Population_Id,SpecCon,origin,SpecieSize) || SpecCon <- Specie_Constraints],
 		[C|_]=Specie_Constraints,
+		fx:log(io_lib:format("Creating Population:~p with Specie_Ids:~p~n",[Population_Id,Specie_Ids])),
 		Population = #population{
 			id = Population_Id,
 			specie_ids = Specie_Ids,
@@ -457,6 +459,7 @@ init_population(Init_State,Specie_Constraints)->
 			fitness_postprocessor_f = C#constraint.population_fitness_postprocessor_f,
 			selection_f = C#constraint.population_selection_f
 		},
+		fx:log(io_lib:format("Population Record:~p~n",[Population])),
 		genotype:write(Population).
 
 		create_specie(Population_Id,SpeCon,Fingerprint)->
@@ -474,6 +477,7 @@ init_population(Init_State,Specie_Constraints)->
 				constraint = SpeCon,
 				agent_ids = IdAcc
 			},
+			fx:log(io_lib:format("Specie Record:~p~n",[Specie])),
 			genotype:write(Specie),
 			Specie_Id;
 		create_specie(Population_Id,Specie_Id,Agent_Index,IdAcc,SpeCon,Fingerprint)->
