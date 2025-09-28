@@ -85,7 +85,7 @@ loop(E,P_Id)->
 					genotype:write(U_E),
 					report(U_E#experiment.id,"report"),
 					fx:log("Time:~p, RunIndex:~p, tot_runs:~p - Completed~n",[{date(),time()},U_RunIndex,E#experiment.tot_runs]),
-					completion_signal();
+					checkpoint_and_exit();
 				false ->
 					U_E = E#experiment{
 						trace_acc = U_TraceAcc,
