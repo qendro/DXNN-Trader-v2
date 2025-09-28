@@ -9,9 +9,7 @@ _build/
 .rebar/
 .rebar3/
 rebar.lock
-logs/
-log/
-*.log
+
 
 # Mnesia database files
 Mnesia.*/
@@ -55,7 +53,6 @@ _rel/
 test/*.beam
 eunit.coverdata
 ct_run.*/
-logs/
 
 
 # Node.js (if using any JS tooling)
