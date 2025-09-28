@@ -1,7 +1,7 @@
 
 -module(fx).
 -compile(export_all).
--define(ALL_TABLES,[metadata,'EURUSD1']).
+-define(ALL_TABLES,[metadata, 'EURUSD1','EURUSD1_LIVE']).
 %-define(T2D,[{'EURUSD1',1},{'EURUSD15',15},{'EURUSD30',30},{'EURUSD60',60}]).
 %-define(SOURCE_DIR,"/home/puter/.wine/dosdevices/c:/Program Files/MetaTrader - Alpari (US)/experts/files/").
 -define(FX_TABLES_DIR,"fx_tables/").
@@ -233,6 +233,7 @@ tt(PId,TradeSignal)->
 % Defines the initial state and account, and starts the simulation loop for this PID
 % Calls the recursive sim/3 function to handle the simulation logic.
 sim(ExoSelf)->io:format("Started~n"),
+	%fx:log("FX Simulation Started sim(ExoSelf)"),
 	put(prev_PC,0),
 	S = #state{},
 	A = create_account(),
@@ -250,6 +251,7 @@ sim(ExoSelf)->io:format("Started~n"),
 % The function also handles a timeout of 10 seconds to recheck the state.
 % If the simulation is over, it returns the total profit and resets the state and account.
 sim(ExoSelf,S,A)-> 
+	%fx:log("FX Simulation sim(ExoSelf,S,A)"),
 	receive
 		{From,sense,TableName,Feature,Parameters,Start,Finish}->%Parameters:{VL,SignalEncoding}
 			% This is the main sensing signal that starts the simulation.
@@ -261,15 +263,20 @@ sim(ExoSelf,S,A)->
 			% The result is a tuple of the form {Result,U_S}, where Result is the sensed data and U_S is the updated state.
 			% If the table name is undefined, it initializes the state with the given parameters.
 			%io:format("******************************STARTING TO PROCESS SENSE SIGNAL******************************~n"),
+			%fx:log(io_lib:format("Sense Signal Received From: ~p Table: ~p Feature: ~p Parameters: ~p Start: ~p End: ~p~n",[From, TableName, Feature, Parameters, Start, Finish])),
 			{Result,U_S}=case S#state.table_name of
 				undefined ->
+					%fx:log(io_lib:format("undefined table name, initializing state for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,Start,Finish])),
 					sense(init_state(S,TableName,Feature,Start,Finish),Parameters);
 				CurrentTableName when CurrentTableName =:= TableName ->
+					%fx:log(io_lib:format("Table name match, continuing with current state for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,Start,Finish])),
 					sense(S,Parameters);
 				_OtherTableName ->
 					%% Table name mismatch, reinitialize state
+					%fx:log(io_lib:format("Table name mismatch, reinitializing state for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,Start,Finish])),
 					sense(init_state(S,TableName,Feature,Start,Finish),Parameters)
 			end,
+			%fx:log(io_lib:format("Sense Result: ~p, sending to ~p~n",[Result, From])),
 			From ! {self(),Result},
 			%io:format("State:~p~n",[U_S]),
 			%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
@@ -295,6 +302,7 @@ sim(ExoSelf,S,A)->
 			% Parameters is a list that can contain the resolution and type of sensor (e.g., graph_sensor, list_sensor).
 			% The result is a list of three elements: [Position, Entry, Previous_Percentage_Change].
 			% If there is no order, it returns [0, 0, 0].
+			%fx:log("Sense Internals Signal Received"),
 			Result = case A#account.order of
 				undefined ->
 					[0,0,0];
@@ -309,6 +317,7 @@ sim(ExoSelf,S,A)->
 			From ! {self(),Result},
 			fx:sim(ExoSelf,S,A);
 		{From,trade,TableName,TradeSignal}->
+			
 			% This is the main trading signal that executes a trade.
 			% It receives the table name, trade signal, and the current state and account.
 			% The function processes the trade signal and updates the account accordingly.
@@ -316,6 +325,7 @@ sim(ExoSelf,S,A)->
 			% The result is a tuple of the form {Result,U_A}, where Result is the trade result and U_A is the updated account.
 			% If the table name is undefined, it initializes the state with the given parameters.
 			%io:format("************************a******STARTING TO PROCESS TRADE SIGNAL******************************~n"),
+			%fx:log(io_lib:format("Trade Signal Received Table: ~p TradeSignal: ~p~n",[TableName,TradeSignal])),
 			U_A = make_trade(S,A,TradeSignal),
 			Total_Profit = A#account.balance + A#account.unrealized_PL,
 			
@@ -360,6 +370,7 @@ sim(ExoSelf,S,A)->
 		terminate ->
 			ok
 		after 10000 ->
+			%fx:log("Timeout Rechecking State"),
 			fx:sim(ExoSelf,S,A)
 	end.
 
@@ -379,14 +390,21 @@ sim(ExoSelf,S,A)->
 % The state record contains the table name, feature, start index, end index, and current index.
 % The state record is used to keep track of the current state of the simulation.
 init_state(S,TableName,Feature,StartBL,EndBL)->
+	%fx:log(io_lib:format("Initializing State for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,StartBL,EndBL])),
 	Index_End = case EndBL of
 		last ->
+			%fx:log(io_lib:format("last~n",[])),
+			%fx:log(io_lib:format("Table: ~p~n",[TableName])),
+			%fx:log(io_lib:format("List all ets Tables: ~p~n",[ets:all() ])),
+			%fx:log(io_lib:format("ets:last(~p)~n",[ets:last(TableName)])),
 			ets:last(TableName);
 		_ ->
+			%fx:log(io_lib:format("_->~p~n",[EndBL])),
+			%%fx:log(io_lib:format("prev(TableName,ets:last(TableName),prev,EndBL)~n",[prev(TableName,ets:last(TableName),prev,EndBL)])),
 			prev(TableName,ets:last(TableName),prev,EndBL)
 	end,
 	Index_Start = prev(TableName,ets:last(TableName),prev,StartBL),
-	log(io_lib:format("Table: ~p Start: ~p End: ~p~n",[TableName,Index_Start,Index_End])),
+	%log(io_lib:format("Table: ~p Start: ~p End: ~p~n",[TableName,Index_Start,Index_End])),
 	S#state{
 		table_name = TableName,
 		feature = Feature,
@@ -646,8 +664,6 @@ erase_all()->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% DB Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 start()->
-	progress_logger:start(),
-	progress_logger:mark_launch(),
 	register(fx,spawn(fx,loop,[])).
 loop()->
 	TableNames = ?ALL_TABLES,
@@ -731,6 +747,9 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		fx:heartbeat(FXTables_PId,TableNames,Time)
 	end.
 
+	updater([metadata|TableNames])->
+		% Skip non-price metadata table
+		updater(TableNames);
 	updater([TN|TableNames])->
 		%io:format("Updating.~n"),
 		insert_ForexRaw(?SOURCE_DIR++atom_to_list(TN)++".txt",update),
@@ -780,20 +799,20 @@ member(TableName,Key)->
 insert_ForexRaw(URL,Flag)->
 	{Dir,File} = extract_dir(URL),
 	{FileName,_FileExtension} = extract_filename(File),
-	{CurrencyPair,TimeFrame} = extract_cpair(FileName), 
-	TableName = CurrencyPair++TimeFrame,
+	{CurrencyPair,TimeFrameRaw} = extract_cpair(FileName), 
+	TableName = CurrencyPair++TimeFrameRaw,
+	SamplingRate = timeframe_to_integer(TimeFrameRaw),
 %	io:format("Inserting into table:~p~n",[TableName]),
 	case lists:member(TableName,[atom_to_list(TN) || TN<-?ALL_TABLES]) of
 		true ->
 			case file:read_file(URL) of
-					{ok,Data} ->
-						file:close(URL),
-						List = binary_to_list(Data),
+						{ok,Data} ->
+							List = binary_to_list(Data),
 						case Flag of
 							init ->
 								exit("Can not yet recognize Flag: init~n");
-							update ->
-								case update_ForexDB(list_to_atom(TableName),CurrencyPair,list_to_integer(TimeFrame),List) of
+								update ->
+									case update_ForexDB(list_to_atom(TableName),CurrencyPair,SamplingRate,List) of
 									undefined ->
 										done;
 									NewestKey ->
@@ -827,6 +846,20 @@ insert_ForexRaw(URL,Flag)->
 			
 	extract_cpair(FileName)->
 		lists:split(6,FileName).
+
+%% Convert timeframe suffix to integer by taking leading digits only
+%% Examples: "1" -> 1, "1_LIVE" -> 1, "15_TEST" -> 15
+timeframe_to_integer(TimeframeRaw) ->
+	Digits = take_digits(TimeframeRaw, []),
+	case Digits of
+		[] -> erlang:error({bad_timeframe, TimeframeRaw});
+		_  -> list_to_integer(Digits)
+	end.
+
+take_digits([C|Rest], Acc) when C >= $0, C =< $9 ->
+	take_digits(Rest, [C|Acc]);
+take_digits(_Other, Acc) ->
+	lists:reverse(Acc).
 
 update_ForexDB(_TableName,_CurrencyPair,_SamplingRate,[])->
 	Key = get(new_id),
@@ -932,6 +965,14 @@ table_size(TableName)->
 %% This module handles logging for the FX processing system.
 
 log(Msg) ->
-    {ok, F} = file:open("logs/delete.log", [append]),
+	{ok, F} = file:open("logs/delete.log", [append]),
     io:format(F, "~s~n", [Msg]),
     file:close(F).
+
+log(Format, Args) ->
+	Msg = io_lib:format(Format, Args),
+	log(Msg).
+
+clear_log() ->
+	{ok, F} = file:open("logs/delete.log", [write, raw]),
+	file:close(F).

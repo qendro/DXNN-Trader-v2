@@ -34,6 +34,8 @@
 # m.stream_eurusd_ticks_live()
 
 # m.fetch_fx_to_txt_chunked('EURUSD', '10 D', '1 sec', filename='eurusd_1s_10d.txt')
+# m.fetch_fx_to_txt_chunked('EURUSD', '3 Y', '1 min', filename='eurusd_1m_3y.txt')
+
 
 
 from datetime import datetime, timedelta, timezone

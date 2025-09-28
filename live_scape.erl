@@ -1,6 +1,7 @@
-%% Simplified Live Scape - Python-Centric Architecture
-%% Complete data path in one module: port/socket, decode/encode, acks, ETS insert, sense/2, trade signal out
-%% Python handles ALL IB operations, Erlang handles neural network coordination and ETS storage
+%% Live Scape - Per-Pair LIVE ETS Tables Using fx #technical Schema
+%% - Python handles ALL IB operations.
+%% - Erlang stores bars as #technical in per-pair tables: 'EURUSD1_LIVE', 'EURJPY1_LIVE', etc.
+%% - Sensors return the same list/graph encodings as fx.erl.
 
 -module(live_scape).
 
@@ -12,8 +13,7 @@
 %% Internal exports
 -export([python_port_loop/1]).
 
-%% Canonical OHLC ETS schema: Key by {Symbol, TOpen}, idempotent upsert
--define(OHLC_TABLES, [ohlc_data]).
+%% Default horizontal resolution for readiness init
 -define(DEFAULT_HRES, 100).
 
 
@@ -31,9 +31,6 @@ start_link() ->
     {ok, Pid}.
 
 init_scape() ->
-    %% Create ETS tables for canonical OHLC storage
-    ensure_ohlc_tables(),
-
     %% Start Python service port
     PythonPort = start_python_service(),
 
@@ -43,6 +40,7 @@ init_scape() ->
     %% Enter main loop
     receive
         {ExoSelfPid, live_sim} ->
+            %fx:log(io_lib:format("Starting live simulation for: ~p~n", [ExoSelfPid])),
             live_sim(ExoSelfPid, PythonPort)
     end.
 
@@ -61,7 +59,12 @@ prep(ExoSelfPid) ->
 %% ============================================================================
 
 live_sim(ExoSelfPid, PythonPort) ->
-    LiveState = #live_state{table_name = ohlc_data},
+    %% Default live table from config (e.g., 'EURUSD1_LIVE')
+    DefaultTable = config:primary_currency_pair(),
+    %fx:log(io_lib:format("Ensure Live Table: ~p~n", [DefaultTable])),
+    ensure_live_table(DefaultTable),
+    %fx:log("Live table ensured."),
+    LiveState = #live_state{table_name = DefaultTable},
     State = #python_state{live_state = LiveState, python_port = PythonPort},
     loop(ExoSelfPid, State).
 
@@ -69,8 +72,13 @@ loop(ExoSelfPid, State = #python_state{}) ->
     receive
         %% Neural network sensor requests (maintain exact compatibility)
         {From, sense, TableName, Feature, Parameters, _Start, _Finish} ->
+            %fx:log(io_lib:format("Received sense request from Exoself: ~p, Table: ~p, Feature: ~p, Parameters: ~p~n",[From, TableName, Feature, Parameters])),
             {Result, NewState} = handle_sense(TableName, Feature, Parameters, State),
+            %fx:log(io_lib:format("Result: ~p, NewState: ~p~n", [Result, NewState])),
+            %fx:log(io_lib:format("recieved sense request: ~p ~p ~p~n", [TableName, Feature, Parameters])),
+            %% Code for getting the data from the live table
             From ! {self(), Result},
+            %fx:log("Sent sense response."),
             loop(ExoSelfPid, NewState);
         {From, sense, internals, _Params} ->
             LiveState = State#python_state.live_state,
@@ -87,8 +95,8 @@ loop(ExoSelfPid, State = #python_state{}) ->
             loop(ExoSelfPid, NewState);
         %% Python service messages
         {python_data, OhlcBar} ->
-            handle_ohlc_bar(OhlcBar),
-            loop(ExoSelfPid, State);
+            NewState1 = handle_ohlc_bar(OhlcBar, State),
+            loop(ExoSelfPid, NewState1);
         {python_trade_confirmation, TradeResult} ->
             NewState = handle_trade_confirmation(TradeResult, State),
             loop(ExoSelfPid, NewState);
@@ -104,40 +112,90 @@ loop(ExoSelfPid, State = #python_state{}) ->
 %% NEURAL NETWORK SENSOR INTERFACE (100% Compatibility)
 %% ============================================================================
 
-handle_sense(_TableName, _Feature, Parameters, State) ->
+handle_sense(TableName, _Feature, Parameters, State) ->
+    %fx:log(io_lib:format("handle_sense called: ~p ~p ~p~n", [TableName, _Feature, Parameters])),
+    Table = resolve_table(TableName, State),
+    %fx:log(io_lib:format("Resolved table: ~p~n", [Table])),
     case Parameters of
         [HRes, list_sensor] ->
-            {PriceList, NewState} = get_price_list(HRes, State),
+            %fx:log(io_lib:format("Handling list_sensor with HRes: ~p~n", [HRes])),
+            {PriceList, NewState} = get_price_list(Table, HRes, State),
             {[Close || {_O, Close, _H, _L} <- PriceList], NewState};
         [HRes, VRes, graph_sensor] ->
-            {PriceList, NewState} = get_price_list(HRes, State),
+            %fx:log(io_lib:format("Handling graph_sensor with HRes: ~p, VRes: ~p~n", [HRes, VRes])),
+            {PriceList, NewState} = get_price_list(Table, HRes, State),
             {encode_to_plane(HRes, VRes, PriceList), NewState};
         _ ->
             {[], State}
     end.
 
-get_price_list(HRes, State) ->
+get_price_list(Table, HRes, State) ->
     LiveState = State#python_state.live_state,
-    TableName = LiveState#live_state.table_name,
+    ensure_live_table(Table),
+    %fx:log(io_lib:format("Getting price list from table: ~p with HRes: ~p~n", [Table, HRes])),
 
-    %% Get latest bars from ETS using canonical schema
-    LastKey = ets:last(TableName),
+    %% LastSent gating inside this function (non-blocking, mailbox-friendly)
+    LastSentKey = {last_sent, Table, HRes},
+    %fx:log(io_lib:format("LastSentKey: ~p~n", [LastSentKey])),  
+    LastSent = get(LastSentKey),
+    %fx:log(io_lib:format("LastSent: ~p~n", [LastSent])),
+
+    Wait = fun Loop(StateAcc) ->
+        %fx:log(io_lib:format("Entering Wait loop..., StateAcc: ~p~n", [StateAcc])),
+        Size = ets:info(Table, size),
+        %fx:log(io_lib:format("all Ets tables: ~p~n", [ets:all()])),
+        %fx:log(io_lib:format("Table size: ~p, Table: ~p~n", [Size, Table])),
+        EnoughBars = (is_integer(Size) andalso Size >= HRes),
+        %fx:log(io_lib:format("EnoughBars: ~p~n", [EnoughBars])),
+        {EnoughNew, LastKeyNow} =
+            case ets:last(Table) of
+                '$end_of_table' -> {false, '$end_of_table'};
+                LK ->
+                    case LastSent of
+                        undefined -> {true, LK};          %% initial fill once we have EnoughBars
+                        _ -> {LK > LastSent, LK}          %% fire when one new bar arrives
+                    end
+            end,
+
+        GateOk = EnoughBars andalso EnoughNew,
+        case GateOk of
+            true  -> StateAcc;
+            false ->
+                receive
+                    {python_data, OhlcData} ->
+                        Loop(handle_ohlc_bar(OhlcData, StateAcc));
+                    {python_trade_confirmation, TradeResult} ->
+                        Loop(handle_trade_confirmation(TradeResult, StateAcc))
+                after 30000 ->
+                        Loop(StateAcc)
+                end
+        end
+        end,
+
+    ReadyState = Wait(State),
+
+    %% Fetch latest bars from ETS
+    %fx:log(io_lib:format("Fetching last ~p bars from table ~p~n", [HRes, Table])),
+    LastKey = ets:last(Table),
+    %fx:log(io_lib:format("Last key in table ~p is ~p~n", [Table, LastKey])),
     PriceList =
         case LastKey of
             '$end_of_table' ->
-                %% No data yet, return flat line
                 lists:duplicate(HRes, {1.0, 1.0, 1.0, 1.0});
             _ ->
-                collect_recent_bars(TableName, LastKey, HRes, [])
+                collect_recent_bars(Table, LastKey, HRes, [])
         end,
 
+    %% Update LastSent to the most recent key we used
+    put(LastSentKey, LastKey),
+
     NewLiveState =
-        LiveState#live_state{price_list =
+        (ReadyState#python_state.live_state)#live_state{price_list =
                              lists:keystore(HRes,
                                             2,
-                                            LiveState#live_state.price_list,
+                                            (ReadyState#python_state.live_state)#live_state.price_list,
                                             {PriceList, HRes})},
-    NewState = State#python_state{live_state = NewLiveState},
+    NewState = ReadyState#python_state{live_state = NewLiveState},
     {PriceList, NewState}.
 
 collect_recent_bars(_Table, '$end_of_table', _Remaining, Acc) ->
@@ -146,10 +204,10 @@ collect_recent_bars(_Table, _Key, 0, Acc) ->
     lists:reverse(Acc);
 collect_recent_bars(Table, Key, Remaining, Acc) ->
     case ets:lookup(Table, Key) of
-        [#ohlc_bar{o = O,
-                   h = H,
-                   l = L,
-                   c = C}] ->
+        [#technical{open = O,
+                    high = H,
+                    low = L,
+                    close = C}] ->
             NewAcc = [{O, C, H, L} | Acc],
             PrevKey = ets:prev(Table, Key),
             collect_recent_bars(Table, PrevKey, Remaining - 1, NewAcc);
@@ -318,7 +376,7 @@ python_port_loop(Port) ->
             ok;
         {send_message, Message} ->
             try
-                io:format("[Erlang->Python] send: ~p~n", [Message]),
+                %io:format("[Erlang->Python] send: ~p~n", [Message]),
                 Data = encode_json_simple(Message),
                 port_command(Port, Data),
                 python_port_loop(Port)
@@ -337,6 +395,7 @@ handle_python_message(Message) ->
         <<"ohlc_bar">> ->
             OhlcData = maps:get(<<"data">>, Message, #{}),
             %% Route to the registered process safely using ?MODULE
+            %fx:log(io_lib:format("[Python->Erlang] ohlc_bar: ~p~n", [OhlcData])),
             case whereis(?MODULE) of
                 undefined -> ok;
                 Pid -> Pid ! {python_data, OhlcData}
@@ -376,67 +435,97 @@ cleanup_python_service(Port) ->
 handle_ohlc_bar(OhlcData) ->
     io:format("handle_ohlc_bar called: ~p~n", [OhlcData]),
     %% Extract canonical OHLC data
-    Symbol = maps:get(<<"symbol">>, OhlcData, <<"EUR.USD">>),
-    TOpen = maps:get(<<"t_open">>, OhlcData, <<"">>),
+    SymbolBin = maps:get(<<"symbol">>, OhlcData, <<"EUR.USD">>),
+    TOpenBin = maps:get(<<"t_open">>, OhlcData, <<>>),
     O = maps:get(<<"o">>, OhlcData, 0.0),
     H = maps:get(<<"h">>, OhlcData, 0.0),
     L = maps:get(<<"l">>, OhlcData, 0.0),
     C = maps:get(<<"c">>, OhlcData, 0.0),
     Vol = maps:get(<<"vol">>, OhlcData, 0),
-    Source = maps:get(<<"source">>, OhlcData, <<"live">>),
 
-    %% Create ETS key: {Symbol, TOpen}
-    Key = {binary_to_list(Symbol), binary_to_list(TOpen)},
+    %% Determine ETS table name (e.g., 'EURUSD1_LIVE') and ensure table exists
+    Table = symbol_to_live_table(SymbolBin),
+    ensure_live_table(Table),
 
-    %% Create OHLC bar record
-    OhlcBar =
-        #ohlc_bar{key = Key,
-                  symbol = binary_to_list(Symbol),
-                  t_open = binary_to_list(TOpen),
-                  o = O,
-                  h = H,
-                  l = L,
-                  c = C,
-                  vol = Vol,
-                  source = binary_to_list(Source)},
+    %% Build technical record with parsed ISO timestamp as Id
+    TOpenStr = binary_to_list(TOpenBin),
+    Id = case parse_iso_utc(TOpenStr) of
+             {ok, {{Y,Mo,D},{Hh,Mi,Ss}}} -> {Y,Mo,D,Hh,Mi,Ss,1};
+             error -> {0,0,0,0,0,0,1}
+         end,
+    Rec = #technical{id = Id, open = O, high = H, low = L, close = C, volume = Vol},
+    log_ohlc_bar(Id, O, H, L, C, Vol),
+    %fx:log(io_lib:format("live_scape: Inserting into ~p: ~p~n", [Table, Rec])),
+    ets:insert(Table, Rec).
 
-    %% Idempotent upsert into ETS
-    ets:insert(ohlc_data, OhlcBar).
+%% New arity that also updates live state (previous_pc, unrealized_pnl)
+handle_ohlc_bar(OhlcData, State = #python_state{live_state = LS0}) ->
+    %% Extract canonical OHLC data
+    SymbolBin = maps:get(<<"symbol">>, OhlcData, <<"EUR.USD">>),
+    TOpenBin = maps:get(<<"t_open">>, OhlcData, <<>>),
+    O = maps:get(<<"o">>, OhlcData, 0.0),
+    H = maps:get(<<"h">>, OhlcData, 0.0),
+    L = maps:get(<<"l">>, OhlcData, 0.0),
+    C = maps:get(<<"c">>, OhlcData, 0.0),
+    Vol = maps:get(<<"vol">>, OhlcData, 0),
+
+    %% Determine ETS table name (e.g., 'EURUSD1_LIVE') and ensure table exists
+    Table = symbol_to_live_table(SymbolBin),
+    ensure_live_table(Table),
+
+    %% Build technical record with parsed ISO timestamp as Id
+    TOpenStr = binary_to_list(TOpenBin),
+    Id = case parse_iso_utc(TOpenStr) of
+             {ok, {{Y,Mo,D},{Hh,Mi,Ss}}} -> {Y,Mo,D,Hh,Mi,Ss,1};
+             error -> {0,0,0,0,0,0,1}
+         end,
+    Rec = #technical{id = Id, open = O, high = H, low = L, close = C, volume = Vol},
+    log_ohlc_bar(Id, O, H, L, C, Vol),
+    %fx:log(io_lib:format("live_scape2: Inserting into ~p: ~p~n", [Table, Rec])),
+    ets:insert(Table, Rec),
+
+    %% Update internals when in position
+    InPos  = (LS0#live_state.current_position =/= 0),
+    Entry  = LS0#live_state.entry_price,
+    Qty    = case LS0#live_state.position_qty of undefined -> 0; Q -> Q end,
+    NewLS = case InPos andalso Entry > 0 of
+        true ->
+            PC  = ((C - Entry) / Entry) * 100,
+            UPL = (LS0#live_state.current_position) * (C - Entry) * Qty,
+            LS0#live_state{previous_pc = PC, unrealized_pnl = UPL, table_name = Table};
+        false ->
+            LS0#live_state{table_name = Table}
+    end,
+    State#python_state{live_state = NewLS}.
 
 %% ============================================================================
-%% READINESS GATE (simple ISO parser, no deps)
+%% Data Ready? Check 
 %% ============================================================================
+
+
 
 wait_for_readiness() ->
-    %% Wait for ">= MinBars AND last_bar_age < MaxAgeSeconds"
+    %% Wait for ">= MinBars AND last_bar_age < MaxAgeSeconds" on default live table
     MinBars = 10,
     MaxAgeSeconds = 300,  % 5 minutes
-    wait_for_readiness_loop(MinBars, MaxAgeSeconds, 30).  % 30 attempts
+    DefaultTable = config:primary_currency_pair(),
+    wait_for_readiness_loop(DefaultTable, MinBars, MaxAgeSeconds, 30).  % 30 attempts
 
-wait_for_readiness_loop(_MinBars, _MaxAgeSeconds, 0) ->
+wait_for_readiness_loop(_Table, _MinBars, _MaxAgeSeconds, 0) ->
     ok;  % give up
-wait_for_readiness_loop(MinBars, MaxAgeSeconds, Attempts) ->
-    case check_readiness(MinBars, MaxAgeSeconds) of
+wait_for_readiness_loop(Table, MinBars, MaxAgeSeconds, Attempts) ->
+    case check_readiness(Table, MinBars, MaxAgeSeconds) of
         true -> ok;
         false ->
             timer:sleep(1000),
-            wait_for_readiness_loop(MinBars, MaxAgeSeconds, Attempts - 1)
+            wait_for_readiness_loop(Table, MinBars, MaxAgeSeconds, Attempts - 1)
     end.
 
-check_readiness(MinBars, MaxAgeSeconds) ->
-    case ets:info(ohlc_data, size) of
+check_readiness(Table, MinBars, _MaxAgeSeconds) ->
+    case ets:info(Table, size) of
         undefined -> false;
-        Size when Size < MinBars -> false;
-        _ ->
-            case ets:last(ohlc_data) of
-                '$end_of_table' -> false;
-                LastKey ->
-                    case ets:lookup(ohlc_data, LastKey) of
-                        [#ohlc_bar{t_open = TOpenStr}] ->
-                            check_bar_age(TOpenStr, MaxAgeSeconds);
-                        [] -> false
-                    end
-            end
+        Size when is_integer(Size), Size < MinBars -> false;
+        _ -> true
     end.
 
 check_bar_age(TOpenStr, MaxAgeSeconds) ->
@@ -481,17 +570,18 @@ parse_iso_utc(Bin) when is_binary(Bin) ->
 %% FX.ERL COMPATIBILITY SHIMS (Maintain 100% Compatibility)
 %% ============================================================================
 
-init_state(S, _TableName, Feature, live_data, live_data) ->
-    ensure_ohlc_tables(),
-    IndexEnd = ets:last(ohlc_data),
+init_state(S, TableName, Feature, live_data, live_data) ->
+    Table = resolve_table(TableName, #python_state{live_state = #live_state{table_name = config:primary_currency_pair()}}),
+    ensure_live_table(Table),
+    IndexEnd = ets:last(Table),
     {IndexStart, IndexEnd1} =
         case IndexEnd of
             '$end_of_table' ->
                 {undefined, undefined};
             _ ->
-                {find_start_index(IndexEnd, ?DEFAULT_HRES - 1), IndexEnd}
+                {find_start_index(Table, IndexEnd, ?DEFAULT_HRES - 1), IndexEnd}
         end,
-    S#state{table_name = ohlc_data,
+    S#state{table_name = Table,
             feature = Feature,
             index_start = IndexStart,
             index_end = IndexEnd1,
@@ -499,12 +589,13 @@ init_state(S, _TableName, Feature, live_data, live_data) ->
             price_list = []}.
 
 sense(S = #state{}, Parameters) ->
+    Table = S#state.table_name,
     case Parameters of
         [HRes, list_sensor] ->
-            {PriceList, _} = get_price_list(HRes, #live_state{}),
+            {PriceList, _} = get_price_list(Table, HRes, #python_state{live_state = #live_state{}}),
             {[C || {_O, C, _H, _L} <- PriceList], S};
         [HRes, VRes, graph_sensor] ->
-            {PriceList, _} = get_price_list(HRes, #live_state{}),
+            {PriceList, _} = get_price_list(Table, HRes, #python_state{live_state = #live_state{}}),
             {encode_to_plane(HRes, VRes, PriceList), S};
         _ ->
             {[], S}
@@ -640,22 +731,21 @@ get_json_object_blob(Bin, Key) ->
     end.
 
 %% ============================================================================
-%% ETS TABLE MANAGEMENT
+%% ETS TABLE MANAGEMENT & HELPERS
 %% ============================================================================
 
-ensure_ohlc_tables() ->
-    lists:foreach(fun(TableName) ->
-                     case ets:info(TableName) of
-                         undefined ->
-                             ets:new(TableName,
-                                     [ordered_set, public, named_table, {keypos, #ohlc_bar.key}]);
-                         _ -> ok
-                     end
-                  end,
-                  ?OHLC_TABLES).
+ensure_live_table(Table) when is_atom(Table) ->
+    case ets:info(Table) of
+        undefined ->
+            %fx:log(io_lib:format("Creating ETS table: ~p~n", [Table])),
+            ets:new(Table, [ordered_set, public, named_table, {keypos, 2}]);
+        _ -> 
+            %fx:log(io_lib:format("ETS table already exists: ~p~n", [Table])),
+            ok
+    end.
 
-find_start_index(EndIndex, Count) ->
-    find_start_index_loop(ohlc_data, EndIndex, Count).
+find_start_index(Table, EndIndex, Count) ->
+    find_start_index_loop(Table, EndIndex, Count).
 
 find_start_index_loop(_Table, Index, 0) ->
     Index;
@@ -666,3 +756,36 @@ find_start_index_loop(Table, Index, N) ->
         PrevIndex ->
             find_start_index_loop(Table, PrevIndex, N - 1)
     end.
+
+%% Resolve requested table or fallback to live state's default
+resolve_table(TableName, State) when is_atom(TableName) ->
+    Name = atom_to_list(TableName),
+    case lists:reverse(Name) of
+        [$E,$V,$I,$L,$_|_] -> 
+            %fx:log(io_lib:format("Table name ~p already ends with _LIVE:~p, Name: ~p~n", [TableName, Name, lists:reverse(Name)])),
+            TableName;              %% ends with "_LIVE"
+        _ -> 
+            %fx:log(io_lib:format("Table name ~p does not end with _LIVE, converting to ~p~n", [TableName, Name ++ "_LIVE"])),
+            list_to_atom(Name ++ "_LIVE")
+    end;
+resolve_table(_Other, State = #python_state{}) ->
+    State#python_state.live_state#live_state.table_name;
+resolve_table(_Other, #live_state{table_name = T}) -> T.
+
+%% Convert 'EUR.USD' to 'EURUSD1_LIVE'
+symbol_to_live_table(Bin) when is_binary(Bin) ->
+    symbol_to_live_table(binary_to_list(Bin));
+symbol_to_live_table(List) when is_list(List) ->
+    Pair = [C || C <- List, C =/= $.],
+    list_to_atom(Pair ++ "1_LIVE").
+
+log_ohlc_bar(Id, O, H, L, C, Vol) ->
+    Timestamp = lists:flatten(format_timestamp(Id)),
+    Line = io_lib:format("~s,~p,~p,~p,~p,~p~n", [Timestamp, O, H, L, C, Vol]),
+    file:write_file("live_bars.log", Line, [append]),
+    ok.
+
+format_timestamp({Y,Mo,D,Hh,Mi,Ss,_}) ->
+    io_lib:format(" ~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B", [Y,Mo,D,Hh,Mi,Ss]);
+format_timestamp(_) ->
+    " ".

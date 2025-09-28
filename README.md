@@ -18,6 +18,7 @@ docker run -it --rm --network host -v ${PWD}:/app -w /app erlang-dev
 # Inside container:
 make:all().
 make:all([load]).
+fx:clear_log().
 mnesia:create_schema([node()]).
 mnesia:start().
 fx:init().
@@ -58,6 +59,7 @@ q().
    
    % Print top N agents
    genotype_utils:print_top_agents(5).
+   genotype_utils:print_top_agents(1, all).
    
    % Get agent statistics
    genotype_utils:get_agent_stats().
@@ -99,6 +101,22 @@ q().
     benchmarker:start(chart_plane_50x10).
     benchmarker:start(chart_plane_50x20).
     benchmarker:start(chart_plane_100x10).
+
+    make:all([load]).
+    fx:clear_log().
+    mnesia:start().
+    polis:start().
+    polis:sync().
+    {atomic, Best} = genotype_utils:find_best_agent(all).
+    exoself:start(Best, self(), live_trading).
+    <CX_ID> ! {<ActuatorPID>, sync, 0.5, 1}.
+    <0.337.0> ! {<0.339.0>, sync, 0.5, 0}.
+
+    {atomic, Best} = genotype_utils:find_best_agent(all).
+    exoself:start(Best, self(), benchmark).
+
+    live_scape:start_link().
+    fx:sim(<0.323.0>).
    ```
 
 ## IB Python Service Calls

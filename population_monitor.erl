@@ -98,7 +98,6 @@ init(S) ->
 		step_size = T#trace.step_size,
 		tot_evaluations = TotEvaluations
 	},
-	progress_logger:set_iteration(0),
 	{ok, State}.
 %In init/1 the population_monitor proces registers itself with the node under the name monitor, and sets all the needed parameters within its #state record. The function first extracts all the Agent_Ids that belong to the population using the extract_AgentIds/2 function. Each agent is then spawned/activated, converted from genotype to phenotype in the summon_agents/2 function. The summon_agents/2 function summons the agents and returns to the caller a list of tuples with the following format: [{Agent_Id,Agent_PId}...]. Once the state record's parameters have been set, the function drops into the main gen_server loop.
 
@@ -134,7 +133,6 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 		true ->
 			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm),
 			U_PopGen = S#state.pop_gen+1,
-			progress_logger:set_iteration(U_PopGen),
 %			io:format("Population Generation:~p Ended.~n~n~n",[U_PopGen]),
 			case OpTag of
 				continue ->
@@ -152,7 +150,6 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 							{stop,normal,U_S};
 						false ->%IN_PROGRESS
 							Agent_Ids = extract_AgentIds(Population_Id,all),
-							progress_logger:set_total_evals(length(Agent_Ids)),
 							U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
 							TotAgents=length(Agent_Ids),
 							U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
@@ -340,7 +337,6 @@ terminate(Reason, S) ->
 			U_T = T#trace{tot_evaluations=TotEvaluations},
 			U_P = P#population{trace=U_T},
 			genotype:write(U_P),
-			progress_logger:inc_done_eval(),
 			io:format("******** TRACE START ********~n"),
 			io:format("~p~n",[U_T]),
 			io:format("******** ^^^^ TRACE END ^^^^ ********~n"),
@@ -403,7 +399,7 @@ summon_agents(OpMode,[Agent_Id|Agent_Ids],Acc)->
 	Agent_PId = exoself:start(Agent_Id,self()),
 	summon_agents(OpMode,Agent_Ids,[{Agent_Id,Agent_PId}|Acc]);
 summon_agents(_OpMode,[],Acc)->
-	fx:log(io_lib:format("_OpMode:~p, Acc:~p~n",[_OpMode,Acc])),
+	%fx:log(io_lib:format("_OpMode:~p, Acc:~p~n",[_OpMode,Acc])),
 	Acc.
 %The summon_agents/2 and summon_agents/3 spawns all the agents in the Agent_ids list, and returns to the caller a list of tuples as follows: [{Agent_Id,Agent_PId}...].
 
@@ -451,7 +447,7 @@ init_population(Init_State,Specie_Constraints)->
 	create_Population(Population_Id,SpecieSize,Specie_Constraints)->
 		Specie_Ids = [create_specie(Population_Id,SpecCon,origin,SpecieSize) || SpecCon <- Specie_Constraints],
 		[C|_]=Specie_Constraints,
-		fx:log(io_lib:format("Creating Population:~p with Specie_Ids:~p~n",[Population_Id,Specie_Ids])),
+		%fx:log(io_lib:format("Creating Population:~p with Specie_Ids:~p~n",[Population_Id,Specie_Ids])),
 		Population = #population{
 			id = Population_Id,
 			specie_ids = Specie_Ids,
@@ -459,7 +455,7 @@ init_population(Init_State,Specie_Constraints)->
 			fitness_postprocessor_f = C#constraint.population_fitness_postprocessor_f,
 			selection_f = C#constraint.population_selection_f
 		},
-		fx:log(io_lib:format("Population Record:~p~n",[Population])),
+		%fx:log(io_lib:format("Population Record:~p~n",[Population])),
 		genotype:write(Population).
 
 		create_specie(Population_Id,SpeCon,Fingerprint)->
@@ -477,7 +473,7 @@ init_population(Init_State,Specie_Constraints)->
 				constraint = SpeCon,
 				agent_ids = IdAcc
 			},
-			fx:log(io_lib:format("Specie Record:~p~n",[Specie])),
+			%fx:log(io_lib:format("Specie Record:~p~n",[Specie])),
 			genotype:write(Specie),
 			Specie_Id;
 		create_specie(Population_Id,Specie_Id,Agent_Index,IdAcc,SpeCon,Fingerprint)->

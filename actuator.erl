@@ -15,8 +15,10 @@ prep(ExoSelf_PId) ->
 %When gen/2 is executed it spawns the actuator element and immediately begins to wait for its initial state message.
 
 loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[From_PId|Fanin_PIds],MFanin_PIds},Acc) ->
+	%fx:log(io_lib:format("Loop Actuator:~p waiting for forward from ~p.~n",[Id,From_PId])),
 	receive
 		{From_PId,forward,Input} ->
+			%fx:log(io_lib:format("Actuator:~p received forward from ~p with input ~p.~n",[Id,From_PId,Input])),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{Fanin_PIds,MFanin_PIds},lists:append(Input,Acc));
 		{ExoSelf_PId,terminate} ->
 			%io:format("Actuator:~p is terminating.~n",[self()])
@@ -43,7 +45,7 @@ pts(ExoSelf_PId,Result,_Scape)->
 % 1 → Long (buy).
 fx_Trade(ExoSelf_PId,Output,Parameters,Scape)->
 	[TradeSignal] = Output,
-	io:format("[TRADE] ExoSelf=~p Pair=~p Signal=~p~n", [ExoSelf_PId, config:primary_currency_pair(), TradeSignal]),
+	%io:format("[TRADE] ExoSelf=~p Pair=~p Signal=~p~n", [ExoSelf_PId, config:primary_currency_pair(), TradeSignal]),
 	Scape ! {self(),trade,config:primary_currency_pair(),functions:trinary(TradeSignal)},
 	receive 
 		{Scape,Fitness,HaltFlag}->

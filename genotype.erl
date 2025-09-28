@@ -49,7 +49,7 @@ construct_Agent(Specie_Id,Agent_Id,SpecCon)->
     % io:format("  substrate_id: ~p~n", [Substrate_Id]),
 	% io:format("  SPlasticity: ~p~n", [SPlasticity]),
     % io:format("  SLinkform: ~p~n", [SLinkform]),
-	fx:log(io_lib:format("Constructed Agent:~p~n",[Agent])),
+	%fx:log(io_lib:format("Constructed Agent:~p~n",[Agent])),
 	write(Agent),
 	update_fingerprint(Agent_Id).
 %The population monitor should have all the information with regards to the morphologies and specie constraint under which the agent's genotype should be created. Thus the construct_Agent/3 is run with the Specie_Id to which this NN based system will belong, the Agent_Id that this NN based intelligent agent will have, and the SpecCon (specie constraint) that will define the list of activation functions and other parameters from which the seed agent can choose its parameters. First the generation is set to 0, since the agent is just created, then the construct_Cortex/3 is ran, which creates the NN and returns its Cx_Id. Once the NN is created and the the cortex's id is returned, we can fill out the information needed by the agent record, and write it to the mnesia database
@@ -108,7 +108,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 				actuator_ids = A_Ids
 			}
 	end,
-	fx:log(io_lib:format("Constructed Cortex:~p~n",[Cortex])),
+	%fx:log(io_lib:format("Constructed Cortex:~p~n",[Cortex])),
 	write(Cortex),
 	{Cx_Id,[{0,N_Ids}],Substrate_Id}.
 %construct_Cortex/3 generates a new Cx_Id, extracts the morphology from the Constraint record passed to it in SpecCon, and then extracts the initial sensors and actuators for that morphology. After the sensors and actuators are extracted, the function calls construct_InitialNeuroLayer/7, which creates a single layer of neurons connected to the specified sensors and actuators, and returns the ids of the created neurons. Finally, the sensors and actuator ids are extracted from the sensors and actuators, and the cortex record is composed and stored to the database.

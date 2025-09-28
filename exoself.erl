@@ -47,19 +47,22 @@ start(Agent_Id,PM_PId,OpMode)->
 %The start/3 function spawns a new Agent_Id exoself process, belonging to the population_monitor process with the pid PM_PId, and using the OpMode with which it was spawned.
 
 prep(Agent_Id,PM_PId,OpMode)->
+	%fx:log(io_lib:format("Preparing exoself:~p OpMode:~p~n",[Agent_Id,OpMode])),
 	random:seed(now()),
-	IdsNPIds = ets:new(idsNpids,[set,private]), 
+	IdsNPIds = ets:new(idsNpids,[set,private]),
 	A = genotype:dirty_read({agent,Agent_Id}),
 	HeredityType = A#agent.heredity_type,
 	Cx = genotype:dirty_read({cortex,A#agent.cx_id}),
 	SIds = Cx#cortex.sensor_ids,
 	AIds = Cx#cortex.actuator_ids,
 	NIds = Cx#cortex.neuron_ids,
-	ScapePIds = spawn_Scapes(IdsNPIds,SIds,AIds,Agent_Id),
+	ScapePIds = spawn_Scapes(IdsNPIds,SIds,AIds,Agent_Id,OpMode),
+	%fx:log(io_lib:format("ScapePIds:~p~n",[ScapePIds])),
 	spawn_CerebralUnits(IdsNPIds,cortex,[Cx#cortex.id]),
 	spawn_CerebralUnits(IdsNPIds,sensor,SIds),
 	spawn_CerebralUnits(IdsNPIds,actuator,AIds),
 	spawn_CerebralUnits(IdsNPIds,neuron,NIds),
+	%fx:log(io_lib:format("1SIDs:~p AIDs:~p NIDs:~p~n",[SIds,AIds,NIds])),
 	case A#agent.encoding_type of
 		substrate ->
 			Substrate_Id=A#agent.substrate_id,
@@ -86,11 +89,16 @@ prep(Agent_Id,PM_PId,OpMode)->
 			CEP_PIds=[],
 			Substrate_PId = undefined
 	end,
+	%fx:log(io_lib:format("Substrate_PId:~p~n",[Substrate_PId])),
 	link_Sensors(SIds,IdsNPIds,OpMode),
+	%fx:log(io_lib:format("Linked Sensors for Agent:~p SIds:~p~n",[Agent_Id,SIds])),
 	link_Actuators(AIds,IdsNPIds,OpMode),
+	%fx:log(io_lib:format("Linked Actuators for Agent:~p AIds:~p~n",[Agent_Id,AIds])),
 	link_Neurons(NIds,IdsNPIds,HeredityType),
+	%fx:log(io_lib:format("2SIDs:~p AIDs:~p NIDs:~p~n",[SIds,AIds,NIds])),
 	{SPIds,NPIds,APIds}=link_Cortex(Cx,IdsNPIds),
 	Cx_PId = ets:lookup_element(IdsNPIds,Cx#cortex.id,2),
+	%fx:log(io_lib:format("Cx_PId:~p~n",[Cx_PId])),
 	{TuningDurationFunction,Parameter} = A#agent.tuning_duration_f,
 	S = #state{
 		agent_id=Agent_Id,
@@ -115,9 +123,8 @@ prep(Agent_Id,PM_PId,OpMode)->
 		opmode=OpMode
 	},
 	%io:format("S:~p~n",[{S,OpMode}]),
-	
-
-	
+	%fx:log(io_lib:format("Agent:~p Specie:~p Generation:~p~n",[S#state.agent_id,S#state.specie_id,S#state.generation])),	
+	%fx:log(io_lib:format("State:~p, OpMode:~p~n",[S,OpMode])),
 	loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 
@@ -156,7 +163,6 @@ loop(S,gt)->
 				true ->	%End training
 					A=genotype:dirty_read({agent,S#state.agent_id}),
 					genotype:write(A#agent{fitness=U_HighestFitness}),
-					progress_logger:inc_done_eval(),
 					backup_genotype(S#state.idsNpids,S#state.npids),
 					terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
 					io:format("Agent:~p terminating. Genotype has been backed up.~n Fitness:~p~n TotEvaluations:~p~n TotCycles:~p~n TimeAcc:~p~n",[self(),U_HighestFitness,U_EvalAcc,U_CycleAcc,U_TimeAcc]),
@@ -201,28 +207,74 @@ loop(S,test)->
 			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
 			io:format("Test complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
 			S#state.pm_pid ! {self(),benchmark_complete,S#state.specie_id,Fitness,Cycles,Time}
+	end;
+
+loop(S,live_trading)->
+	receive
+		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
+			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
+			io:format("Live trading complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
+			S#state.pm_pid ! {self(),live_trading_complete,S#state.specie_id,Fitness,Cycles,Time}
 	end.
 %The exoself process' main loop awaits from its cortex proccess the evoluation_completed message. Once the message is received, based on the fitness achieved, exoself decides whether to continue tunning the weights or terminate the system. Exoself tries to improve the fitness by perturbing/tuning the weights of its neurons, after each tuning session, the Neural Network based system performs another evaluation by interacting with the scape until completion (the NN solves a problem, or dies within the scape or...). The order of events is important: When evaluation_completed message is received, the function first checks whether the newly achieved fitness is higher than the highest fitness achieved so far. If it is not, the function sends the neurons a message to restore their weights to previous state, during which it last acehived the highest fitness instead of their current state which yielded the current lower fitness score. If on the other hand the new fitness is higher than the previously highest achieved fitness, then the function tells the neurons to backup their current weights, as these weights represent the NN's best, most fit form yet. Exoself then tells all the neurons to prepare for a reset by sending each neuron the {self(),reset_prep} message. Since the NN can have recursive connections, and the manner in which initial recursive messages are sent, it is important for each neuron to flush their buffers to be reset into an initial fresh state, which is achieved after the neurons receive the reset_prep message. The function then sends the reset message to the neurons, which returns them into their main loop. Finally, the function checks whether exoself has already tried to improve the NN's fitness a maximum S#state.max_attempts number of times. If that is the case, the exoself process backs up the updated NN (the updated, tuned weights) to database using the backup_genotype/2 function, prints to screen that it is terminating, and sends to the population_monitor the acumulated statistics (highest fitness, evaluation count, cycle count...). On the other hand, if the exoself is not yet done tuning the neural weights, it has not yet reached its ending condition, it uses a tuning_selection_function to compose a list of tuples: [{NId,Spread}...] of neuron ids and the perturbation spread values, where the spread is the range from which the perturbation is randomly chosen. The spread itself is based on the age of the slected neuron, using the annealing_factor value, which when set to 1 implies that there is no annealing, and when set to a value less than 1, decreases the Spread. Once this list of elements is composed, the exoself sends each of the neurons a message to perturb their synaptic weights using the Spread value. The exoself then reactivates the cortex, and drops back into its main loop.
 
-	spawn_CerebralUnits(IdsNPIds,CerebralUnitType,[Id|Ids])-> 
-		PId = CerebralUnitType:gen(self(),node()),
-		ets:insert(IdsNPIds,{Id,PId}), 
-		ets:insert(IdsNPIds,{PId,Id}), 
-		spawn_CerebralUnits(IdsNPIds,CerebralUnitType,Ids); 
-	spawn_CerebralUnits(IdsNPIds,_CerebralUnitType,[])-> 
-		ets:insert(IdsNPIds,{bias,bias}).
+spawn_CerebralUnits(IdsNPIds,CerebralUnitType,[Id|Ids])-> 
+	PId = CerebralUnitType:gen(self(),node()),
+	ets:insert(IdsNPIds,{Id,PId}), 
+	ets:insert(IdsNPIds,{PId,Id}), 
+	spawn_CerebralUnits(IdsNPIds,CerebralUnitType,Ids); 
+spawn_CerebralUnits(IdsNPIds,_CerebralUnitType,[])-> 
+	ets:insert(IdsNPIds,{bias,bias}).
 %We spawn the process for each element based on its type: CerebralUnitType, and the gen function that belongs to the CerebralUnitType module. We then enter the {Id,PId} tuple into our ETS table for later use.
 
-	spawn_Scapes(IdsNPIds,Sensor_Ids,Actuator_Ids,Agent_Id)->
-		Sensor_Scapes = [(genotype:dirty_read({sensor,Id}))#sensor.scape || Id<-Sensor_Ids], 
-		Actuator_Scapes = [(genotype:dirty_read({actuator,Id}))#actuator.scape || Id<-Actuator_Ids], 
-		Unique_Scapes = Sensor_Scapes++(Actuator_Scapes--Sensor_Scapes), 
-		Private_SN_Tuples=[{scape:gen(self(),node()),ScapeName} || {private,ScapeName}<-Unique_Scapes],
-		[ets:insert(IdsNPIds,{ScapeName,PId}) || {PId,ScapeName} <- Private_SN_Tuples], 
-		[ets:insert(IdsNPIds,{PId,ScapeName}) || {PId,ScapeName} <-Private_SN_Tuples],
-		[PId ! {self(),ScapeName} || {PId,ScapeName} <- Private_SN_Tuples],
-		[PId || {PId,_ScapeName} <-Private_SN_Tuples].
+spawn_Scapes(IdsNPIds,Sensor_Ids,Actuator_Ids,Agent_Id,OpMode)->
+        Sensor_Scapes = [(genotype:dirty_read({sensor,Id}))#sensor.scape || Id<-Sensor_Ids], 
+        Actuator_Scapes = [(genotype:dirty_read({actuator,Id}))#actuator.scape || Id<-Actuator_Ids], 
+        Unique_Scapes = Sensor_Scapes++(Actuator_Scapes--Sensor_Scapes), 
+        Mapped_Scapes = map_live_scapes(Unique_Scapes, OpMode),
+        %% Preferred wiring: in live_trading, map live_sim to the registered live_scape PID
+        Private_SN_Tuples=[
+            case {OpMode, ScapeName} of
+                {live_trading, live_sim} ->
+                    ensure_live_scape_started(),
+                    {whereis(live_scape), live_sim};
+                _ ->
+                    {scape:gen(self(),node()), ScapeName}
+            end
+        || {private, ScapeName} <- Mapped_Scapes],
+        %fx:log(io_lib:format("Private_SN_Tuples:~p~n",[Private_SN_Tuples])),
+        %fx:log(io_lib:format("Mapped_Scapes:~p, OpMode:~p, Agent_Id:~p~n",[Mapped_Scapes,OpMode,Agent_Id])),
+        [ets:insert(IdsNPIds,{ScapeName,PId}) || {PId,ScapeName} <- Private_SN_Tuples], 
+        [ets:insert(IdsNPIds,{PId,ScapeName}) || {PId,ScapeName} <-Private_SN_Tuples],
+        %[%fx:log(io_lib:format("Sending to Scape:~p Message ~p~n", [PId, {self(), ScapeName}])) || {PId, ScapeName} <- Private_SN_Tuples],
+        %% Send handshake to all scapes (live_scape exits init on this)
+        [PId ! {self(), ScapeName} || {PId, ScapeName} <- Private_SN_Tuples],
+        %fx:log(io_lib:format("Spawned Scapes for Agent:~p Scapes:~p~n",[Agent_Id,Private_SN_Tuples])),
+        [PId || {PId,_ScapeName} <-Private_SN_Tuples].
+    map_live_scapes(Unique_Scapes, live_trading) ->
+        %fx:log(io_lib:format("Mapping live_trading scapes:~p~n",[Unique_Scapes])),
+        [maybe_live(Sc) || Sc <- Unique_Scapes];
+    map_live_scapes(Unique_Scapes, _Other) ->
+        %fx:log(io_lib:format("Not mapping scapes:~p~n",[Unique_Scapes])),
+        Unique_Scapes.
+
+    maybe_live({private, fx_sim}) -> {private, live_sim};
+    maybe_live(Other) -> Other.
+
+    %% Map a single scape atom when linking elements
+    maybe_map_scape_name(fx_sim, live_trading) -> live_sim;
+    maybe_map_scape_name(ScapeName, _OpMode) -> ScapeName.
 %The spawn_Scapes/3 function first extracts all the scapes that the sensors and actuators interface with, it then creates a filtered scape list which only holds unique scape records, after which it further only selects those scapes that are private, and spawns them.
+
+ensure_live_scape_started() ->
+    case whereis(live_scape) of
+        undefined ->
+            case live_scape:start_link() of
+                {ok, _Pid} -> ok;
+                _ -> ok
+            end;
+        _Pid -> ok
+    end.
 
 		enter_PublicScape(IdsNPIds,Sensor_Ids,Actuator_Ids,Agent_Id)->
 			io:format("SIds:~p AIds:~p~n",[Sensor_Ids,Actuator_Ids]),
@@ -245,32 +297,47 @@ loop(S,test)->
 			ok.
 
 	link_Sensors([SId|Sensor_Ids],IdsNPIds,OpMode) ->
+		%fx:log(io_lib:format("Linking Sensor SID:~p, Sensor_Ids:~p, IDsNPIds:~p, OpMode:~p~n",[SId,Sensor_Ids,IdsNPIds,OpMode])),
 		S=genotype:dirty_read({sensor,SId}),
 		SPId = ets:lookup_element(IdsNPIds,SId,2),
+		%fx:log(io_lib:format("Linking Sensor SId:~p to SPId:~p~n",[SId,SPId])),
 		Cx_PId = ets:lookup_element(IdsNPIds,S#sensor.cx_id,2),
+		%fx:log(io_lib:format("Linking Sensor SId:~p to Cx_PId:~p~n",[SId,Cx_PId])),	
 		SName = S#sensor.name,
 		Fanout_Ids = S#sensor.fanout_ids,
 		Fanout_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- Fanout_Ids],
+		%fx:log(io_lib:format("Linking Sensor SId:~p to Fanout_PIds:~p~n",[SId,Fanout_PIds])),
 		Scape=case S#sensor.scape of
 			{private,ScapeName}->
-				ets:lookup_element(IdsNPIds,ScapeName,2)
-		end,
+            MappedScapeName = maybe_map_scape_name(ScapeName, OpMode),
+				%fx:log(io_lib:format("IdsNPIds:~p, ScapeName:~p -> Mapped:~p~n",[IdsNPIds,ScapeName,MappedScapeName])),
+				ets:lookup_element(IdsNPIds,MappedScapeName,2)
+    	end,
+		%fx:log(io_lib:format("Linking Sensor SId:~p to Scape:~p~n",[SId,Scape])),
 		SPId ! {self(),{SId,Cx_PId,Scape,SName,S#sensor.vl,S#sensor.parameters,Fanout_PIds,OpMode}},
+		%fx:log(io_lib:format("Linked Sensor SId:~p to SPId:~p, Cx_PId:~p, Scape:~p, Name:~p, VL:~p, Params:~p, Fanout_PIds:~p, OpMode:~p~n",[SId,SPId,Cx_PId,Scape,SName,S#sensor.vl,S#sensor.parameters,Fanout_PIds,OpMode])),
+		%fx:log(io_lib:format("Linking next Sensor Ids:~p, IDsNPIds:~p, OpMode:~p~n",[Sensor_Ids,IdsNPIds,OpMode])),
 		link_Sensors(Sensor_Ids,IdsNPIds,OpMode);
 	link_Sensors([],_IdsNPIds,_OpMode)->
+		%fx:log(io_lib:format("Finished linking sensors.~n",[])),
 		ok.
 %The link_Sensors/2 function sends to the already spawned and waiting sensors their states, composed of the PId lists and other information which are needed by the sensors to link up and interface with other elements in the distributed phenotype.
 
 	link_Actuators([AId|Actuator_Ids],IdsNPIds,OpMode) ->
+		%fx:log(io_lib:format("Linking Actuator AId:~p, Actuator_Ids:~p, IDsNPIds:~p, OpMode:~p~n",[AId,Actuator_Ids,IdsNPIds,OpMode])),
 		A=genotype:dirty_read({actuator,AId}),
+		%fx:log(io_lib:format("A record:~p~n",[A])),
 		APId = ets:lookup_element(IdsNPIds,AId,2),
 		Cx_PId = ets:lookup_element(IdsNPIds,A#actuator.cx_id,2),
 		AName = A#actuator.name,
 		Fanin_Ids = A#actuator.fanin_ids,
 		Fanin_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- Fanin_Ids],
+		%fx:log(io_lib:format("Link Actuator AId:~p to APId:~p, Actuator_Ids:~p, IDsNPIds:~p, OpMode:~p~n",[AId,APId,Actuator_Ids,IdsNPIds,OpMode])),
 		Scape=case A#actuator.scape of
 			{private,ScapeName}->
-				ets:lookup_element(IdsNPIds,ScapeName,2)
+            MappedScapeName = maybe_map_scape_name(ScapeName, OpMode),
+				%fx:log(io_lib:format("Link Actuators: IdsNPIds:~p, ScapeName:~p -> Mapped:~p~n",[IdsNPIds,ScapeName,MappedScapeName])),
+				ets:lookup_element(IdsNPIds,MappedScapeName,2)
 		end,
 		APId ! {self(),{AId,Cx_PId,Scape,AName,A#actuator.parameters,Fanin_PIds,OpMode}},
 		link_Actuators(Actuator_Ids,IdsNPIds,OpMode);
@@ -341,6 +408,7 @@ loop(S,test)->
 		NPIds = [ets:lookup_element(IdsNPIds,NId,2) || NId <- NIds],
 		APIds = [ets:lookup_element(IdsNPIds,AId,2) || AId <- AIds],
 		Cx_PId ! {self(),Cx_Id,SPIds,NPIds,APIds},
+		%fx:log(io_lib:format("Linked Cortex:~p SIds:~p AIds:~p NIds:~p~n",[Cx_PId,SIds,AIds,NIds])),
 		{SPIds,NPIds,APIds}.
 %The link_Cortex/2 function sends to the already spawned and waiting cortex its state, composed of the PId lists and other information which is needed by the cortex to link up and interface with other elements in the distributed phenotype.
 

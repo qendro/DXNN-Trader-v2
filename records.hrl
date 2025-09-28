@@ -206,17 +206,16 @@
     position_qty = undefined
 }).
 
-%% Canonical OHLC bar record for live trading
--record(ohlc_bar, {
-    key,        % {Symbol, TOpen} - ETS key
-    symbol,     % "EUR.USD"
-    t_open,     % ISO timestamp string
-    o,          % Open price (float)
-    h,          % High price (float)
-    l,          % Low price (float)
-    c,          % Close price (float)
-    vol,        % Volume (integer)
-    source      % "historical" | "live"
+%% FX technical bar record (aligned with fx.erl)
+%% ETS tables use {keypos,2} so the key is the Id field.
+%% Id format: {Year,Month,Day,Hour,Minute,Second,SamplingRate}
+-record(technical, {
+    id,
+    open,
+    high,
+    low,
+    close,
+    volume
 }).
 
 %% Python integration state record

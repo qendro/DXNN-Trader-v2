@@ -16,7 +16,7 @@ buy_money_fixed() -> 100.                    % Options: any positive number (fix
 min_profit_threshold() -> 0.000150.          % Options: 0.00001-0.01 (minimum profit in pips)
 
 %% === Data Parameters ===
-primary_currency_pair() -> 'EURUSD1'.         % Options: 'EURUSD1', 'EURUSD15', 'EURUSD30', 'EURUSD60'
+primary_currency_pair() -> 'EURUSD1'.   % Options: 'EURUSD1', 'EURUSD1_LIVE', 'EURUSD15', 'EURUSD30', 'EURUSD60'
 data_start_index() -> 1000.                  % Options: 1-N (starting row for training data)
 data_end_index() -> 200.                     % Options: data_start_index+1 to N (ending row for training)
 benchmark_end_index() -> last.               % Options: last, or specific number (ending row for benchmark)
@@ -35,11 +35,11 @@ pci_1m_vertical_resolutions() -> [10,15].    % Options: [5], [10], [15], [5,10],
 internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dimensions: position, profit, time)
 
 %% === Evolution Parameters ===
-specie_size_limit() -> 2.                    % Options: 1-100 (max agents per species)
-init_specie_size() -> 2.                     % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 1.                    % Options: 10-100000 (max evaluations per run)
+specie_size_limit() -> 5.                    % Options: 1-100 (max agents per species)
+init_specie_size() -> 5.                     % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 10.                    % Options: 10-100000 (max evaluations per run)
 survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
-tot_runs() -> 1.                             % Options: 1-100 (number of benchmark runs)
+tot_runs() -> 5.                             % Options: 1-100 (number of benchmark runs)
 
 %% === Neural Network Parameters ===
 morphology() -> forex_trader.             % Options: forex_trader, forex_trader_1m
@@ -85,4 +85,4 @@ mutation_operators() -> [
 fx_tables_directory() -> "fx_tables/".  % Options: any valid directory path
 source_directory() -> "fx_tables/".     % Options: any valid directory path  
 actuator_debug_tag() -> false.               % Options: true, false (enables trade-by-trade debug output)
-sensor_debug_tag() -> true.                 % Options: true, false (enables sensor debug output)
+sensor_debug_tag() -> false.                 % Options: true, false (enables sensor debug output)

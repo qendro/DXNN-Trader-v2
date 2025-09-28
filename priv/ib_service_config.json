@@ -6,13 +6,13 @@
     "timeout": 10
   },
   "trading": {
-    "symbols": ["EUR.USD", "GBP.USD", "USD.JPY"],
+    "symbols": ["EUR.USD"],
     "default_quantity": 0.1,
     "paper_mode_enforced": true,
     "max_daily_trades": 50
   },
   "data": {
-    "historical_weeks": 1,
+    "historical_bars": 50,
     "bar_size": "1 min",
     "preload_on_startup": true,
     "tick_aggregation_enabled": true
@@ -23,7 +23,7 @@
     "max_reconnect_attempts": 5
   },
   "risk_management": {
-    "allow_live_orders": false,
+    "allow_live_orders": true,
     "max_position_size": 999999999999999999999999999,
     "daily_loss_limit": 1.00
   }

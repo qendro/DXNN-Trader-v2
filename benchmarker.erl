@@ -84,19 +84,23 @@ loop(E,P_Id)->
 					},
 					genotype:write(U_E),
 					report(U_E#experiment.id,"report"),
+					fx:log("Time:~p, RunIndex:~p, tot_runs:~p - Completed~n",[{date(),time()},U_RunIndex,E#experiment.tot_runs]),
 					completion_signal();
 				false ->
 					U_E = E#experiment{
 						trace_acc = U_TraceAcc,
 						run_index = U_RunIndex
 					},
+					fx:log("Time:~p, RunIndex:~p, tot_runs:~p~n",[{date(),time()},U_RunIndex,E#experiment.tot_runs]),
 					genotype:write(U_E),
 					PMP = U_E#experiment.pm_parameters,
 					Constraints = U_E#experiment.init_constraints,
 					population_monitor:prep_PopState(PMP,Constraints),
+					checkpoint(),
 					loop(U_E,P_Id)
 			end;
 		terminate ->
+			fx:log("Benchmarker received terminate signal, exiting...~n",[]),
 			ok
 	end.
 
@@ -253,8 +257,15 @@ trace2graph(TraceFileName)->
 
 % Checkpoint with fsync before shutdown
 checkpoint_and_exit() ->
+	fx:log("Checkpointing and exiting...~n",[]),
+	checkpoint(),
+	
+	%% Graceful shutdown
+    init:stop().
+
+checkpoint() ->
     %% Stop new work (best-effort, fast)
-    catch gen_server:call(population_monitor, pause, 5000),
+    catch gen_server:call(population_monitor, pause, 500),
     
     %% Sync Mnesia and create backup with timestamp
     catch mnesia:sync_log(),
@@ -265,24 +276,13 @@ checkpoint_and_exit() ->
     
     case mnesia:backup(Backup) of
         ok -> 
-            %% Create metadata
-            MetadataFile = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".metadata.json",
-            {ok, Fd} = file:open(MetadataFile, [write]),
-            io:format(Fd, "{\"timestamp\": ~p, \"backup_file\": ~p}~n", 
-                     [Timestamp, Backup]),
-            file:sync(Fd),
-            file:close(Fd),
-            
             %% Copy logs to checkpoint directory
             copy_logs_to_checkpoint("/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp),
-            
             ok;
         {error, Reason} ->
             error_logger:error_msg("Backup failed: ~p~n", [Reason])
-    end,
-    
-    %% Graceful shutdown
-    init:stop().
+    end.
+
 
 % Restore from latest checkpoint (no-op if absent)
 maybe_restore() ->
@@ -312,7 +312,8 @@ copy_logs_to_checkpoint(CheckpointDir) ->
     case file:read_file_info("logs/dxnn_run.log") of
         {ok, _} ->
             DestFile = CheckpointDir ++ "/dxnn_run.log",
-            file:copy("logs/dxnn_run.log", DestFile);
+            file:copy("logs/dxnn_run.log", DestFile), 
+			fx:log("Logs copied to checkpoint.~n",[]);
         _ -> ok
     end.
 

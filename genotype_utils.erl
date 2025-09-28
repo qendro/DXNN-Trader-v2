@@ -151,3 +151,39 @@ get_agent_stats(Population_Id) ->
         end
     end,
     mnesia:transaction(F).
+%% Return the best agent id (by fitness)
+find_best_agent() -> find_best_agent(test).
+
+find_best_agent(Population_Id) ->
+    F = fun() ->
+        Agent_Keys = mnesia:dirty_all_keys(agent),
+        Filtered = case Population_Id of
+            all -> Agent_Keys;
+            _ -> [Agent_Id || Agent_Id <- Agent_Keys,
+                   case mnesia:dirty_read({agent, Agent_Id}) of
+                       [] -> false;
+                       [Agent] -> Agent#agent.population_id == Population_Id
+                   end]
+        end,
+        case Filtered of
+            [] -> undefined;
+            _ ->
+                Best = lists:foldl(
+                    fun(Agent_Id, Acc) ->
+                        case mnesia:dirty_read({agent, Agent_Id}) of
+                            [] -> Acc;
+                            [Agent] ->
+                                case Acc of
+                                    undefined -> Agent;
+                                    BestSoFar when Agent#agent.fitness > BestSoFar#agent.fitness -> Agent;
+                                    _ -> Acc
+                                end
+                        end
+                    end, undefined, Filtered),
+                case Best of
+                    undefined -> undefined;
+                    Agent -> Agent#agent.id
+                end
+        end
+    end,
+    mnesia:transaction(F).

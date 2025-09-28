@@ -6,7 +6,7 @@ tick aggregation, and trade execution. Erlang focuses purely on neural networks.
 
 Architecture:
 - IBConnectionManager: IB TWS connection and monitoring
-- HistoricalDataLoader: Load x weeks of x bar size data
+- HistoricalDataLoader: Load a configurable number of bars
 - LiveTickAggregator: Real-time tick-to-OHLC conversion
 - TradeExecutor: Direct trade execution with comprehensive kill switches
 - ErlangBridge: Communication with Erlang neural networks
@@ -31,6 +31,8 @@ except AttributeError:
 
 # Logging
 logging.basicConfig(level=logging.INFO)
+# Reduce verbosity from ib_insync library
+logging.getLogger('ib_insync').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # Global state
@@ -50,16 +52,17 @@ def load_config():
             "timeout": 10
         },
         "trading": {
-            "symbols": ["EUR.USD", "GBP.USD", "USD.JPY"],
+            "symbols": ["EUR.USD"],
             "default_quantity": 0.1,
             "max_daily_trades": 50,
             "max_daily_loss": 0.05,
             "max_position_size": 0.2
         },
         "data": {
-            "historical_weeks": 1,
+            "historical_bars": 50,
             "bar_size": "1 min",
-            "preload_on_startup": True
+            "preload_on_startup": True,
+            "tick_aggregation_enabled": True
         },
         "monitoring": {
             "heartbeat_interval": 3,
@@ -180,6 +183,7 @@ class IBConnectionManager:
 # 2. HISTORICAL DATA LOADER
 # ============================================================================
 
+
 class HistoricalDataLoader:
     """Loads historical data and streams to Erlang bar-by-bar"""
 
@@ -187,15 +191,15 @@ class HistoricalDataLoader:
         self.ib = ib_connection
         self.bridge = bridge  # ErlangBridge instance
 
-    async def load_weeks_of_data(self, symbol, weeks=4, bar_size='1 min'):
-        """Load historical data for specified weeks and bar size,
-        then send to Erlang one bar at a time via bridge.send_ohlc_bar()"""
+    async def load_bars(self, symbol, bar_count=50, bar_size='1 min'):
+        """Load a fixed number of historical bars and stream them to Erlang"""
 
         contract = self._parse_symbol(symbol)
-        duration = f"{weeks} W"  # e.g., "4 W" for 4 weeks
+        bar_count = max(1, int(bar_count or 1))
+        duration = self._duration_for_bars(bar_count, bar_size)
 
         try:
-            logger.info(f"Loading {weeks} weeks of {bar_size} data for {symbol}")
+            logger.info(f"Loading {bar_count} bars of {bar_size} data for {symbol} (duration: {duration})")
             bars = await self.ib.reqHistoricalDataAsync(
                 contract=contract,
                 endDateTime='',           # Current time
@@ -206,8 +210,14 @@ class HistoricalDataLoader:
                 formatDate=1
             )
 
-            # Convert and stream to Erlang bar-by-bar
-            for bar in bars:
+            bars = list(bars or [])
+            if not bars:
+                logger.warning(f"No historical data returned for {symbol}")
+                return 0
+
+            selected_bars = bars[-bar_count:] if len(bars) > bar_count else bars
+
+            for bar in selected_bars:
                 ohlc_bar = {
                     'symbol': symbol,
                     't_open': (bar.date.replace(tzinfo=timezone.utc) if getattr(bar.date, 'tzinfo', None) is None else bar.date.astimezone(timezone.utc)).isoformat().replace('+00:00', 'Z'),
@@ -220,12 +230,63 @@ class HistoricalDataLoader:
                 }
                 self.bridge.send_ohlc_bar(ohlc_bar)
 
-            logger.info(f"Loaded {len(bars)} historical bars for {symbol}")
-            return len(bars)
+            logger.info(f"Loaded {len(selected_bars)} historical bars for {symbol}")
+            return len(selected_bars)
 
         except Exception as e:
             logger.error(f"Error loading historical data for {symbol}: {e}")
             return 0
+
+    def _duration_for_bars(self, bar_count, bar_size):
+        seconds_per_bar = self._bar_size_to_seconds(bar_size)
+        total_seconds = max(seconds_per_bar * max(1, bar_count), seconds_per_bar)
+
+        min_span = self._minimum_duration_seconds(bar_size)
+        if min_span is not None:
+            total_seconds = max(total_seconds, min_span)
+
+        return f"{max(1, int(math.ceil(total_seconds)))} S"
+
+    @staticmethod
+    def _minimum_duration_seconds(bar_size):
+        size = str(bar_size).strip().lower()
+        if 'sec' in size:
+            return 1800  # 30 minutes of data minimum
+        if 'min' in size:
+            return 86400  # 1 day
+        if 'hour' in size or 'hr' in size:
+            return 604800  # 1 week
+        if 'day' in size:
+            return 2678400  # 31 days
+        if 'week' in size:
+            return 7776000  # 90 days
+        return None
+
+    @staticmethod
+    def _bar_size_to_seconds(bar_size):
+        size = str(bar_size).strip().lower()
+        try:
+            value_str, unit = size.split(' ', 1)
+            value = float(value_str)
+        except ValueError:
+            return 60
+
+        unit = unit.strip()
+        unit_map = {
+            's': 1, 'sec': 1, 'secs': 1, 'second': 1, 'seconds': 1,
+            'm': 60, 'min': 60, 'mins': 60, 'minute': 60, 'minutes': 60,
+            'h': 3600, 'hr': 3600, 'hrs': 3600, 'hour': 3600, 'hours': 3600,
+            'd': 86400, 'day': 86400, 'days': 86400,
+            'w': 604800, 'week': 604800, 'weeks': 604800
+        }
+
+        seconds = unit_map.get(unit)
+        if seconds is None and unit.endswith('s'):
+            seconds = unit_map.get(unit[:-1])
+        if seconds is None:
+            return 60
+
+        return max(1, int(math.ceil(value * seconds)))
 
     def _parse_symbol(self, symbol: str):
         """Convert 'EUR.USD' to Forex contract"""
@@ -233,6 +294,8 @@ class HistoricalDataLoader:
             base, quote = symbol.split('.', 1)
             return Forex(base + quote)
         return Forex(symbol)
+
+# ============================================================================
 
 # ============================================================================
 # 3. LIVE TICK AGGREGATOR
@@ -245,6 +308,8 @@ class LiveTickAggregator:
         self.current_bars = {}  # symbol -> current 1-min bar
         self.bar_duration = timedelta(minutes=1)
         self.bridge = bridge
+        self.bar_log_path = os.path.join('logs', 'aggregated_bars.log')
+        os.makedirs(os.path.dirname(self.bar_log_path), exist_ok=True)
 
     def process_tick(self, symbol, price, volume, timestamp):
         """Process individual tick and aggregate into 1-minute bars"""
@@ -286,6 +351,7 @@ class LiveTickAggregator:
                     'vol': int(completed_bar['vol']) if isinstance(completed_bar['vol'], (int, float)) and math.isfinite(completed_bar['vol']) and completed_bar['vol'] >= 0 else 0,
                     'source': 'live'
                 })
+                self._log_completed_bar(completed_bar)
 
                 # Start new bar
                 self._start_new_bar(symbol, price, vol, bar_start)
@@ -332,6 +398,19 @@ class LiveTickAggregator:
             'vol': int(volume) if isinstance(volume, (int, float)) and math.isfinite(volume) and volume >= 0 else 0,
             'tick_count': 1
         }
+
+    def _log_completed_bar(self, bar):
+        """Append finalized bar to a simple CSV log"""
+        try:
+            timestamp = bar['start_time'].astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            timestamp = str(bar.get('start_time', ''))
+        line = f"{timestamp},{bar.get('o','')},{bar.get('h','')},{bar.get('l','')},{bar.get('c','')},{bar.get('vol','')}\n"
+        try:
+            with open(self.bar_log_path, 'a', encoding='ascii', errors='ignore') as log_file:
+                log_file.write(line)
+        except OSError as exc:
+            logger.warning(f"Failed to write aggregated bar log: {exc}")
 
 # ============================================================================
 # 4. TRADE EXECUTOR WITH ENHANCED KILL SWITCH
@@ -716,9 +795,10 @@ class IBService:
                          os.getenv("AUTO_BACKFILL", "0") in ("1", "true", "True"))
         if should_preload:
             symbols = config.get("trading", {}).get("symbols", ["EUR.USD"])
-            weeks = config.get("data", {}).get("historical_weeks", 4)
+            bar_count = config.get("data", {}).get("historical_bars", 50)
+            bar_size = config.get("data", {}).get("bar_size", '1 min')
             for symbol in symbols:
-                await self.historical_loader.load_weeks_of_data(symbol, weeks=weeks)
+                await self.historical_loader.load_bars(symbol, bar_count=bar_count, bar_size=bar_size)
 
         # Start background tasks
         asyncio.create_task(self._heartbeat_task())
@@ -773,10 +853,23 @@ class IBService:
     async def _handle_load_historical(self, cmd, cid):
         """Handle historical data loading request"""
         symbol = cmd.get('symbol', 'EUR.USD')
-        weeks = cmd.get('weeks', 4)
-        bar_size = cmd.get('bar_size', '1 min')
+        bar_size = cmd.get('bar_size', config.get("data", {}).get("bar_size", '1 min'))
+        bar_count = cmd.get('bars')
 
-        count = await self.historical_loader.load_weeks_of_data(symbol, weeks, bar_size)
+        if bar_count is None:
+            weeks = cmd.get('weeks')
+            if weeks is not None:
+                try:
+                    weeks_value = float(weeks)
+                except (TypeError, ValueError):
+                    weeks_value = None
+                if weeks_value is not None:
+                    seconds_per_bar = max(1, self.historical_loader._bar_size_to_seconds(bar_size))
+                    bar_count = max(1, int(math.ceil(weeks_value * 7 * 24 * 3600 / seconds_per_bar)))
+            if bar_count is None:
+                bar_count = config.get('data', {}).get('historical_bars', 50)
+
+        count = await self.historical_loader.load_bars(symbol, bar_count, bar_size)
         write_msg({
             "v": 1, "type": "historical_loaded", "cid": cid,
             "symbol": symbol, "bars_loaded": count
