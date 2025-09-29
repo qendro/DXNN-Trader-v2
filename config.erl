@@ -17,15 +17,15 @@ min_profit_threshold() -> 0.000150.          % Options: 0.00001-0.01 (minimum pr
 
 %% === Data Parameters ===
 primary_currency_pair() -> 'EURUSD1'.   % Options: 'EURUSD1', 'EURUSD1_LIVE', 'EURUSD15', 'EURUSD30', 'EURUSD60'
-data_start_index() -> 1000.                  % Options: 1-N (starting row for training data)
-data_end_index() -> 200.                     % Options: data_start_index+1 to N (ending row for training)
+data_start_index() -> 106000.                  % Options: 1-N (starting row for training data)
+data_end_index() -> 10000.                     % Options: data_start_index+1 to N (ending row for training)
 benchmark_end_index() -> last.               % Options: last, or specific number (ending row for benchmark)
-market_props_start() -> 800.                 % Options: 1-N (market analysis start point)
-market_props_end() -> 200.                   % Options: market_props_start+1 to N (market analysis end)
+market_props_start() -> 96000.                 % Options: 1-N (market analysis start point)
+market_props_end() -> 1000.                   % Options: market_props_start+1 to N (market analysis end)
 
 %% === Sensor Configuration - Standard Forex Trader ===
 pli_resolutions() -> [20].                   % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc.
-pci_horizontal_resolutions() -> [50].        % Options: [10], [20], [50], [10,20], [20,50], etc.
+pci_horizontal_resolutions() -> [90].        % Options: [10], [20], [50], [10,20], [20,50], etc.
 pci_vertical_resolutions() -> [20].          % Options: [10], [15], [20], [10,15], [15,20], etc.
 
 %% === Sensor Configuration - 1-Minute Optimized ===
@@ -35,11 +35,11 @@ pci_1m_vertical_resolutions() -> [10,15].    % Options: [5], [10], [15], [5,10],
 internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dimensions: position, profit, time)
 
 %% === Evolution Parameters ===
-specie_size_limit() -> 5.                    % Options: 1-100 (max agents per species)
-init_specie_size() -> 5.                     % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 10.                    % Options: 10-100000 (max evaluations per run)
-survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
-tot_runs() -> 5.                             % Options: 1-100 (number of benchmark runs)
+specie_size_limit() -> 1000.                    % Options: 1-100 (max agents per species)
+init_specie_size() -> 1000.                     % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 10000.                    % Options: 10-100000 (max evaluations per run)
+survival_percentage() -> 0.3.                % Options: 0.1-0.9 (percentage of agents that survive)
+tot_runs() -> 10000.                             % Options: 1-100 (number of benchmark runs)
 
 %% === Neural Network Parameters ===
 morphology() -> forex_trader.             % Options: forex_trader, forex_trader_1m
