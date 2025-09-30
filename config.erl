@@ -35,10 +35,10 @@ pci_1m_vertical_resolutions() -> [10,15].    % Options: [5], [10], [15], [5,10],
 internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dimensions: position, profit, time)
 
 %% === Evolution Parameters ===
-specie_size_limit() -> 1000.                    % Options: 1-100 (max agents per species)
-init_specie_size() -> 1000.                     % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 10000.                    % Options: 10-100000 (max evaluations per run)
-survival_percentage() -> 0.3.                % Options: 0.1-0.9 (percentage of agents that survive)
+specie_size_limit() -> 200.                    % Options: 1-100 (max agents per species)
+init_specie_size() -> 100.                     % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 1000.                    % Options: 10-100000 (max evaluations per run)
+survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
 tot_runs() -> 10000.                             % Options: 1-100 (number of benchmark runs)
 
 %% === Neural Network Parameters ===
