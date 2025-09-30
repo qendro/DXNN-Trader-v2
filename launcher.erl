@@ -24,9 +24,13 @@ start() ->
 
 start(BenchmarkId) ->
     ok = ensure_compiled(),
+    fx:log("Compilation checked"),
     ok = ensure_fx_ready(),
+    fx:log("FX ready"),
     ok = ensure_polis_ready(),
+    fx:log("Polis ready"),
     ok = sync_code(),
+    fx:log("Code synchronized"),
     benchmarker:start(BenchmarkId).
 
 ensure_compiled() ->
