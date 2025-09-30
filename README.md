@@ -13,6 +13,9 @@ docker build -t erlang-dev .
 # Run your neural network system
 docker run -it --rm -v ${PWD}:/app -w /app erlang-dev
 docker run -it --rm --network host -v ${PWD}:/app -w /app erlang-dev
+
+make:all([load]).
+launcher:start().
 ```
 ``` erlang
 # Inside container:
