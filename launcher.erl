@@ -20,7 +20,6 @@
 ]).
 
 start() ->
-    fx:log("Launcher started"),
     start(sliding_window_5).
 
 start(BenchmarkId) ->
