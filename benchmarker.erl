@@ -39,6 +39,7 @@ start(Id)->
 	},
 	%io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
     %io:format("Experiment record: ~p~n", [E]), %qq
+	fx:log("Time:~p, RunIndex:~p, tot_runs:0 - Starting~n",[{date(),time()},E#experiment.tot_runs]),
 	genotype:write(E),
 	register(benchmarker,spawn(benchmarker,prep,[E])).
 
