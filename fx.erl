@@ -755,6 +755,7 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		insert_ForexRaw(?SOURCE_DIR++atom_to_list(TN)++".txt",update),
 		updater(TableNames);
 	updater([])->
+		launcher ! fx_updated,
 		ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Table Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -965,7 +966,7 @@ table_size(TableName)->
 %% This module handles logging for the FX processing system.
 
 log(Msg) ->
-	{ok, F} = file:open("logs/delete.log", [append]),
+	{ok, F} = file:open("logs/fx_log.log", [append]),
     io:format(F, "~s~n", [Msg]),
     file:close(F).
 
@@ -974,5 +975,5 @@ log(Format, Args) ->
 	log(Msg).
 
 clear_log() ->
-	{ok, F} = file:open("logs/delete.log", [write, raw]),
+	{ok, F} = file:open("logs/fx_log.log", [write, raw]),
 	file:close(F).

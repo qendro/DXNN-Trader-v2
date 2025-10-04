@@ -43,6 +43,9 @@ find . -name "*.beam" -delete
 mnesia:stop().
 mnesia:delete_schema([node()]).
 q().
+
+make:all([load]).
+launcher:start().
 ```
 
 4. **Print the best genotype:**
