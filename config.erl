@@ -35,11 +35,11 @@ pci_1m_vertical_resolutions() -> [10,15].    % Options: [5], [10], [15], [5,10],
 internal_sensor_dimensions() -> 3.           % Options: 1-10 (trading state dimensions: position, profit, time)
 
 %% === Evolution Parameters ===
-specie_size_limit() -> 10.                    % Options: 1-100 (max agents per species)
-init_specie_size() -> 10.                     % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 30000.                    % Options: 10-100000 (max evaluations per run)
+specie_size_limit() -> 100.                    % Options: 1-100 (max agents per species)
+init_specie_size() -> 100.                     % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 800.                    % Options: 10-100000 (max evaluations per run)
 survival_percentage() -> 0.5.                % Options: 0.1-0.9 (percentage of agents that survive)
-tot_runs() -> 1000.                             % Options: 1-100 (number of benchmark runs)
+tot_runs() -> 3.                             % Options: 1-100 (number of benchmark runs)
 
 %% === Neural Network Parameters ===
 morphology() -> forex_trader.             % Options: forex_trader, forex_trader_1m
@@ -66,19 +66,19 @@ population_selection_f() -> competition.     % Options: competition, top3
 
 %% === Mutation Operators Configuration ===
 mutation_operators() -> [
-    {mutate_weights,1},
-    {add_bias,1},
-    {remove_bias,1},
-    {mutate_af,1},
+    {mutate_weights,40},
+    {add_bias,40},
+    {remove_bias,40},
+    {mutate_af,40},
     {add_outlink,40},
     {add_inlink,40},
     {add_neuron,40},
     {outsplice,4},
-    {add_sensor,10},
+    {add_sensor,100},
     {add_actuator,1},
-    {mutate_plasticity_parameters,1},
-    {add_cpp,1},
-    {add_cep,1}
+    {mutate_plasticity_parameters,40},
+    {add_cpp,40},
+    {add_cep,40}
 ]. % Options: adjust weights and probabilities as needed
 
 %% === System Configuration ===

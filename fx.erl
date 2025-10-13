@@ -755,7 +755,12 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		insert_ForexRaw(?SOURCE_DIR++atom_to_list(TN)++".txt",update),
 		updater(TableNames);
 	updater([])->
-		launcher ! fx_updated,
+		case whereis(launcher) of
+			undefined -> 
+				ok;
+			Pid when is_pid(Pid) -> 
+				launcher ! fx_updated
+		end,
 		ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Table Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -800,28 +805,44 @@ member(TableName,Key)->
 insert_ForexRaw(URL,Flag)->
 	{Dir,File} = extract_dir(URL),
 	{FileName,_FileExtension} = extract_filename(File),
-	{CurrencyPair,TimeFrameRaw} = extract_cpair(FileName), 
-	TableName = CurrencyPair++TimeFrameRaw,
-	SamplingRate = timeframe_to_integer(TimeFrameRaw),
+	{CurrencyPair,TimeFrame} = extract_cpair(FileName), 
+	TableName = CurrencyPair++TimeFrame,
 %	io:format("Inserting into table:~p~n",[TableName]),
 	case lists:member(TableName,[atom_to_list(TN) || TN<-?ALL_TABLES]) of
 		true ->
 			case file:read_file(URL) of
-						{ok,Data} ->
-							List = binary_to_list(Data),
+					{ok,Data} ->
+						file:close(URL),
+						List = binary_to_list(Data),
 						case Flag of
 							init ->
 								exit("Can not yet recognize Flag: init~n");
-								update ->
-									case update_ForexDB(list_to_atom(TableName),CurrencyPair,SamplingRate,List) of
-									undefined ->
-										done;
-									NewestKey ->
-										io:format("New FOREX_DB update starting with:~p~n",[NewestKey]),
-										%calculate_ForexTechnicals(TableName,CurrencyPair,NewestKey),
-										%calculate_ForexMetaData(TableName,CurrencyPair,?FOREX_TECHNICAL--[key]),
-										fx ! {self(),fx_updated,NewestKey},
-										done
+							update ->
+								% Check if this is live trading (has "_LIVE" suffix) or normal training
+								case string:str(TimeFrame, "_LIVE") > 0 of
+									true ->
+										% Live trading: extract sampling rate and use current format
+										SamplingRate = timeframe_to_integer(TimeFrame),
+										case update_ForexDB(list_to_atom(TableName),CurrencyPair,SamplingRate,List) of
+											undefined ->
+												done;
+											NewestKey ->
+												io:format("New FOREX_DB update starting with:~p~n",[NewestKey]),
+												fx ! {self(),fx_updated,NewestKey},
+												done
+										end;
+									false ->
+										% Normal training: use original format (list_to_integer directly)
+										case update_ForexDB(list_to_atom(TableName),CurrencyPair,list_to_integer(TimeFrame),List) of
+											undefined ->
+												done;
+											NewestKey ->
+												io:format("New FOREX_DB update starting with:~p~n",[NewestKey]),
+												%calculate_ForexTechnicals(TableName,CurrencyPair,NewestKey),
+												%calculate_ForexMetaData(TableName,CurrencyPair,?FOREX_TECHNICAL--[key]),
+												fx ! {self(),fx_updated,NewestKey},
+												done
+										end
 								end
 						end;
 					{error,Error} ->
