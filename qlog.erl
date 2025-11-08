@@ -112,8 +112,9 @@ genotype_snapshot(Agent_Id, Context) ->
 
 %% Log generation boundary events (start/end of generation)
 generation_boundary(Population_Id, Generation, Event) ->
-    Filename = lists:flatten(io_lib:format("/workspace/logs/Population/generation_~p.log", [Generation])),
-    ensure_directory_exists("/workspace/logs/Population/"),
+    Dir = population_log_dir(),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, lists:flatten(io_lib:format("generation_~p.log", [Generation]))),
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [GENERATION_~s] Population: ~p | Gen: ~p~n", [Timestamp, Event, Population_Id, Generation]),
@@ -121,8 +122,9 @@ generation_boundary(Population_Id, Generation, Event) ->
 
 %% Log parent-child lineage relationships
 lineage_tracking(Parent_Id, Child_Id, Mutation_Details) ->
-    Filename = lists:flatten(io_lib:format("/workspace/logs/Population/lineage.log", [])),
-    ensure_directory_exists("/workspace/logs/Population/"),
+    Dir = population_log_dir(),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "lineage.log"),
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [LINEAGE] Parent: ~p -> Child: ~p | Mutation: ~s~n", [Timestamp, Parent_Id, Child_Id, Mutation_Details]),
@@ -130,8 +132,9 @@ lineage_tracking(Parent_Id, Child_Id, Mutation_Details) ->
 
 %% Log population summary statistics
 population_summary(Population_Id, Summary_Data) ->
-    Filename = lists:flatten(io_lib:format("/workspace/logs/Population/population_~p.log", [Population_Id])),
-    ensure_directory_exists("/workspace/logs/Population/"),
+    Dir = population_log_dir(),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, lists:flatten(io_lib:format("population_~p.log", [Population_Id]))),
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [POPULATION_SUMMARY] ~s~n", [Timestamp, Summary_Data]),
@@ -139,8 +142,9 @@ population_summary(Population_Id, Summary_Data) ->
 
 %% Log evolution milestones and key events
 evolution_milestone(Event_Type, Event_Details) ->
-    Filename = "/workspace/logs/Population/evolution_milestones.log",
-    ensure_directory_exists("/workspace/logs/Population/"),
+    Dir = population_log_dir(),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "evolution_milestones.log"),
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [MILESTONE] ~s: ~s~n", [Timestamp, Event_Type, Event_Details]),
@@ -155,6 +159,19 @@ ensure_directory_exists(Dir) ->
                 ok -> ok;
                 {error, eexist} -> ok;
                 Error -> Error
+            end
+    end.
+
+population_log_dir() ->
+    filename:join([get_log_root_dir(), "Population"]).
+
+get_log_root_dir() ->
+    case application:get_env(qlog, log_root_dir) of
+        {ok, Dir} -> Dir;
+        undefined ->
+            case os:getenv("QLOG_ROOT") of
+                false -> filename:absname("logs");
+                EnvDir -> EnvDir
             end
     end.
 
