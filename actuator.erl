@@ -19,6 +19,7 @@ loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[From_PId|Fanin_PIds],MFanin_
 	receive
 		{From_PId,forward,Input} ->
 			%fx:log(io_lib:format("Actuator:~p received forward from ~p with input ~p.~n",[Id,From_PId,Input])),
+			%qlog:l3msg(ExoSelf_PId, io_lib:format("Neuron -> Actuator(~p) | MSG: {~p, forward, ~p} | Accumulated inputs: ~p/~p", [AName, From_PId, Input, length(Acc)+length(Input), length(MFanin_PIds)])),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{Fanin_PIds,MFanin_PIds},lists:append(Input,Acc));
 		{ExoSelf_PId,terminate} ->
 			%io:format("Actuator:~p is terminating.~n",[self()])
@@ -26,6 +27,7 @@ loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[From_PId|Fanin_PIds],MFanin_
 	end;
 loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[],MFanin_PIds},Acc)->
 	{Fitness,EndFlag} = actuator:AName(ExoSelf_PId,lists:reverse(Acc),Parameters,Scape),
+	%qlog:l2msg(ExoSelf_PId, io_lib:format("Actuator(~p) -> Cortex | MSG: {~p, sync, ~p, ~p}", [AName, self(), Fitness, EndFlag])),
 	Cx_PId ! {self(),sync,Fitness,EndFlag},
 	loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{MFanin_PIds,MFanin_PIds},[]).
 %The actuator process gathers the control signals from the neurons, appending them to the accumulator. The order in which the signals are accumulated into a vector is in the same order as the neuron ids are stored within NIds. Once all the signals have been gathered, the actuator sends cortex the sync signal, executes its function, and then again begins to wait for the neural signals from the output layer by reseting the Fanin_PIds from the second copy of the list.
@@ -46,8 +48,12 @@ pts(ExoSelf_PId,Result,_Scape)->
 fx_Trade(ExoSelf_PId,Output,Parameters,Scape)->
 	[TradeSignal] = Output,
 	%io:format("[TRADE] ExoSelf=~p Pair=~p Signal=~p~n", [ExoSelf_PId, config:primary_currency_pair(), TradeSignal]),
+	%qlog:l2msg(ExoSelf_PId, io_lib:format("Actuator(fx_Trade) -> Scape | MSG: {~p, trade, ~p, ~p} | RawOutput: ~p", [self(), config:primary_currency_pair(), functions:trinary(TradeSignal), TradeSignal])),
+	%qlog:trading(ExoSelf_PId, io_lib:format("Trade decision: ~p | Pair: ~p | RawSignal: ~p | Confidence: ~p", [functions:trinary(TradeSignal), config:primary_currency_pair(), TradeSignal, abs(TradeSignal)])),
 	Scape ! {self(),trade,config:primary_currency_pair(),functions:trinary(TradeSignal)},
 	receive 
 		{Scape,Fitness,HaltFlag}->
+			%qlog:l2msg(ExoSelf_PId, io_lib:format("Scape -> Actuator(fx_Trade) | MSG: {~p, ~p, ~p}", [Scape, Fitness, HaltFlag])),
+			%qlog:trading(ExoSelf_PId, io_lib:format("Trade outcome | Fitness: ~p | HaltFlag: ~p | Decision: ~p", [Fitness, HaltFlag, functions:trinary(TradeSignal)])),
 			{Fitness,HaltFlag}
 	end.

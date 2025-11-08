@@ -30,6 +30,7 @@ prep(ExoSelf)->
 		{ExoSelf,init,InitState}->
 			{Sensors,Actuators,SPIds,APIds,CPP_PIds,CEP_PIds,Densities,Plasticity,LinkForm}=InitState,
 			%io:format("InitState:~p~n",[InitState]),
+			%qlog:agent(ExoSelf, io_lib:format("Substrate initialized | SPIds: ~p | APIds: ~p | CPP_PIds: ~p | CEP_PIds: ~p | Sensors: ~p | Actuators: ~p", [SPIds, APIds, CPP_PIds, CEP_PIds, length(Sensors), length(Actuators)])),
 			S = #state{
 				sensors=Sensors,
 				actuators=Actuators,
@@ -51,6 +52,7 @@ loop(ExoSelf,S,[SPId|SPIds],SAcc)->
 	%io:format("~p~n",[S]),
 	receive
 		{SPId,forward,Sensory_Signal}->
+			%qlog:l1msg(self(), "DEBUG: Substrate received data from sensor " ++ lists:flatten(io_lib:format("~p", [SPId])) ++ " with length=" ++ integer_to_list(length(Sensory_Signal)) ++ ", data=" ++ lists:flatten(io_lib:format("~p", [lists:sublist(Sensory_Signal, 5)])) ++ " (showing first 5 elements)"),
 			loop(ExoSelf,S,SPIds,[Sensory_Signal|SAcc]);
 		{ExoSelf,reset_substrate}->
 			U_S = S#state{
@@ -78,14 +80,26 @@ loop(ExoSelf,S,[SPId|SPIds],SAcc)->
 		{ExoSelf,terminate}->
 %			io:format("Resulting substrate:~p~n",[Substrate]),
 			void;
+		{UnexpectedSPId,forward,Sensory_Signal} ->
+			%qlog:l1msg(ExoSelf, io_lib:format("Substrate unexpected sensor order | Expected: ~p | Got: ~p | InList: ~p", [SPId, UnexpectedSPId, lists:member(UnexpectedSPId,[SPId|SPIds])])),
+			case lists:member(UnexpectedSPId,[SPId|SPIds]) of
+				true ->
+					%qlog:l2msg(ExoSelf, io_lib:format("Substrate accepting out-of-order sensor | SPId: ~p | Remaining: ~p", [UnexpectedSPId, lists:delete(UnexpectedSPId,[SPId|SPIds])])),
+					loop(ExoSelf,S,lists:delete(UnexpectedSPId,[SPId|SPIds]),[Sensory_Signal|SAcc]);
+				false ->
+					%qlog:l1msg(ExoSelf, io_lib:format("Substrate ignoring unknown sensor | SPId: ~p | Expected list: ~p", [UnexpectedSPId, [SPId|SPIds]])),
+					loop(ExoSelf,S,[SPId|SPIds],SAcc)
+			end;
 		Msg ->
-			io:format("Unknown Msg:~p~n",[Msg]),
+			%qlog:l1msg(ExoSelf, io_lib:format("Substrate unknown message | Msg: ~p | Expected SPId: ~p | Remaining: ~p", [Msg, SPId, SPIds])),
 			loop(ExoSelf,S,[SPId|SPIds],SAcc)
 %		after 20000 ->
 %			io:format("********ERROR: Substrate Crashed:~p~n",[S])
 	end;
 loop(ExoSelf,S,[],SAcc)->%All sensory signals received
 	{U_Substrate,U_SMode,OAcc} = reason(SAcc,S),
+	%qlog:l1msg(self(), "DEBUG: Substrate processed " ++ integer_to_list(length(SAcc)) ++ " sensor inputs, sending " ++ integer_to_list(length(OAcc)) ++ " outputs to neuron"),
+	%%qlog:l1msg(self(), "DEBUG: Substrate output data: " ++ lists:flatten(io_lib:format("~p", [lists:sublist(OAcc, 5)])) ++ " (showing first 5 elements)"),
 	advanced_fanout(OAcc,S#state.actuators,S#state.apids),
 	U_S = S#state{
 		cur_substrate=U_Substrate,
@@ -179,6 +193,7 @@ test_OS(SubstrateDimension)->
 	compose_OSubstrate(Actuators,SubstrateDimension,[w1,w2,w3]).
 	
 create_substrate(Sensors,Densities,Actuators,LinkForm)->
+	%qlog:l1msg(self(), "DEBUG: create_substrate called with " ++ integer_to_list(length(Sensors)) ++ " sensors, densities=" ++ lists:flatten(io_lib:format("~p", [Densities])) ++ ", " ++ integer_to_list(length(Actuators)) ++ " actuators"),
 	[Depth|SubDensities] = Densities,
 	Substrate_I = compose_ISubstrate(Sensors,length(Densities)),
 	I_VL = length(Substrate_I),
@@ -230,22 +245,30 @@ create_substrate(Sensors,Densities,Actuators,LinkForm)->
 	compose_ISubstrate(Sensors,SubstrateDimension)->
 		compose_ISubstrate(Sensors,[],1,SubstrateDimension-2).
 	compose_ISubstrate([S|Sensors],Acc,Max_Dim,Required_Dim)->
+		%qlog:l1msg(self(), "DEBUG: Processing sensor " ++ atom_to_list(S#sensor.name) ++ " with format=" ++ lists:flatten(io_lib:format("~p", [S#sensor.format])) ++ ", vl=" ++ integer_to_list(S#sensor.vl)),
 		case S#sensor.format of
 			undefined ->
 				Dim=1,
+				%qlog:l1msg(self(), "DEBUG: Creating coord lists for undefined format sensor with vl=" ++ integer_to_list(S#sensor.vl)),
 				CoordLists = create_CoordLists([S#sensor.vl]),
+				%qlog:l1msg(self(), "DEBUG: Created " ++ integer_to_list(length(CoordLists)) ++ " coordinate lists for undefined format sensor"),
 				ISubstrate_Part=[{Coord,0,void}|| Coord<-CoordLists],
 				{Dim,ISubstrate_Part};
 			no_geo ->
 				Dim=1,
+				%qlog:l1msg(self(), "DEBUG: Creating coord lists for no_geo format sensor with vl=" ++ integer_to_list(S#sensor.vl)),
 				CoordLists = create_CoordLists([S#sensor.vl]),
+				%qlog:l1msg(self(), "DEBUG: Created " ++ integer_to_list(length(CoordLists)) ++ " coordinate lists for no_geo format sensor"),
 				ISubstrate_Part=[{Coord,0,void}|| Coord<-CoordLists],
 				{Dim,ISubstrate_Part};
 			{symmetric,Resolutions}->
 				Dim = length(Resolutions),
 				Signal_Length = mult(Resolutions),
+				%qlog:l1msg(self(), "DEBUG: Creating coord lists for symmetric format sensor with resolutions=" ++ lists:flatten(io_lib:format("~p", [Resolutions])) ++ ", signal_length=" ++ integer_to_list(Signal_Length)),
 				CoordLists = create_CoordLists(Resolutions),
+				%qlog:l1msg(self(), "DEBUG: create_CoordLists returned, creating ISubstrate_Part"),
 				ISubstrate_Part=[{Coord,0,void}|| Coord<-CoordLists],
+				%qlog:l1msg(self(), "DEBUG: Created " ++ integer_to_list(length(CoordLists)) ++ " coordinate lists for symmetric format sensor, ISubstrate_Part length=" ++ integer_to_list(length(ISubstrate_Part))),
 				{Dim,ISubstrate_Part};
 			{coorded,Dim,Resolutions,ISubstrate_Part} ->
 				{Dim,ISubstrate_Part}
@@ -258,20 +281,31 @@ create_substrate(Sensors,Densities,Actuators,LinkForm)->
 		end,
 		compose_ISubstrate(Sensors,[ISubstrate_Part|Acc],U_Dim,Required_Dim);
 	compose_ISubstrate([],Acc,ISubstratePart_MaxDim,Required_Dim)->
+		%qlog:l1msg(self(), "DEBUG: compose_ISubstrate finished processing all sensors, Acc length=" ++ integer_to_list(length(Acc)) ++ ", MaxDim=" ++ integer_to_list(ISubstratePart_MaxDim) ++ ", RequiredDim=" ++ integer_to_list(Required_Dim)),
+		%qlog:l1msg(self(), "DEBUG: Acc contains substrate parts with lengths: " ++ lists:flatten(io_lib:format("~p", [lists:map(fun(Part) -> length(Part) end, Acc)]))),
+		%qlog:l1msg(self(), "DEBUG: Checking if Required_Dim >= ISubstratePart_MaxDim: " ++ integer_to_list(Required_Dim) ++ " >= " ++ integer_to_list(ISubstratePart_MaxDim)),
 		case Required_Dim >= ISubstratePart_MaxDim of
 			true ->
+				%qlog:l1msg(self(), "DEBUG: Condition true, proceeding with adv_extrude"),
 				ISubstrate_Depth = length(Acc),
+				%qlog:l1msg(self(), "DEBUG: ISubstrate_Depth = " ++ integer_to_list(ISubstrate_Depth)),
 				ISubstrate_DepthCoords = build_CoordList(ISubstrate_Depth),
+				%qlog:l1msg(self(), "DEBUG: About to call adv_extrude with depth=" ++ integer_to_list(ISubstrate_Depth) ++ ", coords=" ++ integer_to_list(length(ISubstrate_DepthCoords))),
 				adv_extrude(Acc,Required_Dim,lists:reverse(ISubstrate_DepthCoords),-1,[]);%Passed in inverted,reversed inside adv_extrude, same for depth coords.
 			false ->
+				%qlog:l1msg(self(), "DEBUG 294: Condition false, exiting with error"),
 				exit("Error in adv_extrude, Required_Depth < ISubstratePart_MaxDepth~n")
 		end.
 
 		adv_extrude([ISubstrate_Part|ISubstrate],Required_Dim,[IDepthCoord|ISubstrate_DepthCoords],LeadCoord,Acc)->
+			%qlog:l1msg(self(), "DEBUG: adv_extrude processing substrate part with " ++ integer_to_list(length(ISubstrate_Part)) ++ " elements"),
+			%qlog:l1msg(self(), "DEBUG: Sample coordinates before extrusion: " ++ lists:flatten(io_lib:format("~p", [lists:sublist([Coord || {Coord,_,_} <- ISubstrate_Part], 3)]))),
 			Extruded_ISP = [{[LeadCoord,IDepthCoord|lists:append(lists:duplicate(Required_Dim - length(Coord),0),Coord)],O,W} || {Coord,O,W}<-ISubstrate_Part],
+			%qlog:l1msg(self(), "DEBUG: Sample coordinates after extrusion: " ++ lists:flatten(io_lib:format("~p", [lists:sublist([Coord || {Coord,_,_} <- Extruded_ISP], 3)]))),
 			extrude(ISubstrate_Part,Required_Dim,IDepthCoord,[]),
 			adv_extrude(ISubstrate,Required_Dim,ISubstrate_DepthCoords,LeadCoord,lists:append(Extruded_ISP,Acc));
 		adv_extrude([],_Required_Dim,[],_LeadCoord,Acc)->
+			%qlog:l1msg(self(), "DEBUG: adv_extrude completed, returning " ++ integer_to_list(length(Acc)) ++ " elements"),
 			Acc.
 			
 			extrude([{Coord,O,W}|ISubstrate_Part],Required_Dim,DepthCoord,Acc)->
@@ -319,6 +353,7 @@ create_substrate(Sensors,Densities,Actuators,LinkForm)->
 				ISubstrate_DepthCoords = build_CoordList(ISubstrate_Depth),
 				adv_extrude(Acc,Required_Dim,lists:reverse(ISubstrate_DepthCoords),1,[]);%Passed in inverted,reversed inside adv_extrude, same for depth coord
 			false ->
+				%qlog:l1msg(self(), "DEBUG 344: Condition false, exiting with error"),
 				exit("Error in adv_extrude, Required_Depth < OSubstratePart_MaxDepth~n")
 		end.
 
@@ -336,12 +371,15 @@ create_substrate(Sensors,Densities,Actuators,LinkForm)->
 %Weights = [W1,W2...WI],
 %[[{[Z1,Y,X],o,[W1...Wn]}...{[Z1,Yn,Xk],o,[W1...Wn]}]...[{[Zs,Y,X],o,[W1...Wn]}...]],
 		build_CoordList(Density)->
+			%qlog:l1msg(self(), "DEBUG: build_CoordList called with density=" ++ integer_to_list(Density)),
 			case Density == 1 of
 				true ->
+					%qlog:l1msg(self(), "DEBUG: Density=1, returning [0.0]"),
 					[0.0];
 				false ->
 					DensityDividers = Density - 1,
 					Resolution = 2/DensityDividers,
+					%qlog:l1msg(self(), "DEBUG: Density=" ++ integer_to_list(Density) ++ ", dividers=" ++ integer_to_list(DensityDividers) ++ ", resolution=" ++ float_to_list(Resolution)),
 					build_CoordList(Resolution,DensityDividers,1,[])
 			end.
 
@@ -378,16 +416,23 @@ tot_ONeurodes([],Acc)->
 		attach(Substrate,0,Weights).
 	
 		create_CoordLists(Densities)->
+			%qlog:l1msg(self(), "DEBUG: create_CoordLists called with densities=" ++ lists:flatten(io_lib:format("~p", [Densities]))),
 			create_CoordLists(Densities,[]).	
 		create_CoordLists([Density|RDensities],[])->
+			%qlog:l1msg(self(), "DEBUG: Building coord list for density=" ++ integer_to_list(Density)),
 			CoordList = build_CoordList(Density),
+			%qlog:l1msg(self(), "DEBUG: Built coord list with " ++ integer_to_list(length(CoordList)) ++ " elements"),
 			XtendedCoordList = [[Coord]||Coord <- CoordList],
 			create_CoordLists(RDensities,XtendedCoordList);
 		create_CoordLists([Density|RDensities],Acc)->
+			%qlog:l1msg(self(), "DEBUG: create_CoordLists recursive call with density=" ++ integer_to_list(Density) ++ ", Acc length=" ++ integer_to_list(length(Acc))),
 			CoordList = build_CoordList(Density),
+			%qlog:l1msg(self(), "DEBUG: Built coord list with " ++ integer_to_list(length(CoordList)) ++ " elements, about to create extended list"),
 			XtendedCoordList = [[Coord|Sub_Coord]||Coord <- CoordList,Sub_Coord <- Acc],
+			%qlog:l1msg(self(), "DEBUG: Created extended coord list with " ++ integer_to_list(length(XtendedCoordList)) ++ " elements"),
 			create_CoordLists(RDensities,XtendedCoordList);
 		create_CoordLists([],Acc)->
+			%qlog:l1msg(self(), "DEBUG: create_CoordLists completed, returning " ++ integer_to_list(length(Acc)) ++ " coordinate lists"),
 			Acc.
 			
 			build_CoordList(Resolution,0,Coord,Acc)->

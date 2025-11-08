@@ -38,6 +38,9 @@ benchmarker:start(chart_plane_5x10).
 ## Reseting Mnesia
 ```bash
 find . -name "*.beam" -delete
+
+fprof:trace([start, {file, "/tmp/profiling_trace.trace"}]).
+fprof:trace(stop).
 ```
 ```erlang
 mnesia:stop().

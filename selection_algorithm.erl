@@ -35,12 +35,16 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 
 	gather_survivors([{MutantAlotment,Fitness,TotNeurons,Agent_Id}|AlotmentsP],Normalizer,Acc)->
 		Normalized_MutantAlotment = round(MutantAlotment/Normalizer),
-		io:format("Agent_Id:~p Normalized_MutantAlotment:~p~n",[Agent_Id,Normalized_MutantAlotment]),
+		%io:format("Agent_Id:~p Normalized_MutantAlotment:~p~n",[Agent_Id,Normalized_MutantAlotment]),
 		SurvivingAgent_Ids = case Normalized_MutantAlotment >= 1 of
 			true ->
 				MutantAgent_Ids = case Normalized_MutantAlotment >= 2 of
 					true ->
-						[population_monitor:create_MutantAgentCopy(Agent_Id)|| _ <-lists:seq(1,Normalized_MutantAlotment-1)];
+						[begin
+							MutantAgent_Id = population_monitor:create_MutantAgentCopy(Agent_Id),
+							%qlog:lineage_tracking(Agent_Id, MutantAgent_Id, lists:flatten(io_lib:format("OFFSPRING_~p", [I]))),
+							MutantAgent_Id
+						end || I <- lists:seq(1,Normalized_MutantAlotment-1)];
 					false ->
 						[]
 				end,
@@ -76,6 +80,7 @@ top3(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 	breed(Valid_AgentIds,OffspringIndex,Acc)->%TODO
 		Parent_AgentId = lists:nth(random:uniform(length(Valid_AgentIds)),Valid_AgentIds),
 		MutantAgent_Id = population_monitor:create_MutantAgentCopy(Parent_AgentId),
+		%qlog:lineage_tracking(Parent_AgentId, MutantAgent_Id, lists:flatten(io_lib:format("BREED_OFFSPRING_~p", [OffspringIndex]))),
 		breed(Valid_AgentIds,OffspringIndex-1,[MutantAgent_Id|Acc]).
 %The breed/3 function is part of a very simple selection algorithm, which just selects the top 3 most fit agents, and then uses the create_MutantAgentCopy/1 function to create their offspring.
 

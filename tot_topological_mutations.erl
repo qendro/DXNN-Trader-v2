@@ -9,7 +9,7 @@ ncount_exponential(Power,Agent_Id)->
 	Cx = genotype:read({cortex,A#agent.cx_id}),
 	TotNeurons = length(Cx#cortex.neuron_ids),
 	TotMutations = random:uniform(round(math:pow(TotNeurons,Power))),
-	io:format("Tot neurons:~p Performing Tot mutations:~p on:~p~n",[TotNeurons,TotMutations,Agent_Id]),
+	%io:format("Tot neurons:~p Performing Tot mutations:~p on:~p~n",[TotNeurons,TotMutations,Agent_Id]),
 	TotMutations.
 
 %ncount_linear/2 calcualtes TotMutations by multiplying the size of the NN by the value Multiplier.
@@ -18,5 +18,5 @@ ncount_linear(Multiplier,Agent_Id)->
 	Cx = genotype:read({cortex,A#agent.cx_id}),
 	TotNeurons = length(Cx#cortex.neuron_ids),
 	TotMutations = TotNeurons*Multiplier,
-	io:format("Tot neurons:~p Performing Tot mutations:~p on:~p~n",[TotNeurons,TotMutations,Agent_Id]),
+	%io:format("Tot neurons:~p Performing Tot mutations:~p on:~p~n",[TotNeurons,TotMutations,Agent_Id]),
 	TotMutations.

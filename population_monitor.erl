@@ -35,7 +35,7 @@ get_init_constraints() ->
 	specie_size_limit = config:specie_size_limit(),
 	init_specie_size = config:init_specie_size(),
 	polis_id = mathema,
-	generation_limit = 100,
+	generation_limit = config:generation_limit(),
 	evaluations_limit = config:evaluations_limit(),
 	fitness_goal = inf,
 	benchmarker_pid,
@@ -125,14 +125,20 @@ handle_call({stop,shutdown},_From,State)->
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
 handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm == generational ->
+	%qlog:population(S#state.population_id, io_lib:format("Agent ~p terminated | Fitness: ~p | AgentsLeft: ~p", [Agent_Id, Fitness, S#state.agents_left-1])),
 	Population_Id = S#state.population_id,
 	OpTag = S#state.op_tag,
 	OpMode = S#state.op_mode,
 	AgentsLeft = S#state.agents_left,
 			case (AgentsLeft-1) =< 0 of
 		true ->
+			qlog:generation_boundary(Population_Id, S#state.pop_gen, "END"),
+			qlog:evolution_milestone("GENERATION_COMPLETE", lists:flatten(io_lib:format("Gen ~p completed with ~p agents", [S#state.pop_gen, S#state.tot_agents]))),
 			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm),
+			%qlog:population(Population_Id, io_lib:format("Generation ~p mutations applied | BestFitness: ~p | TotEvaluations: ~p", [S#state.pop_gen, S#state.best_fitness, S#state.tot_evaluations])),
 			U_PopGen = S#state.pop_gen+1,
+			qlog:generation_boundary(Population_Id, U_PopGen, "START"),
+			qlog:evolution_milestone("GENERATION_START", lists:flatten(io_lib:format("Gen ~p starting with ~p agents", [U_PopGen, S#state.tot_agents]))),
 %			io:format("Population Generation:~p Ended.~n~n~n",[U_PopGen]),
 			case OpTag of
 				continue ->
@@ -152,6 +158,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 							Agent_Ids = extract_AgentIds(Population_Id,all),
 							U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
 							TotAgents=length(Agent_Ids),
+							%qlog:population(Population_Id, io_lib:format("Generation ~p started | Agents: ~p | Species: ~p | BestFitness: ~p", [U_PopGen, TotAgents, length(Specie_Ids), BestFitness])),
 							U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
 							{noreply,U_S}
 					end;
@@ -198,7 +205,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			SelectionAlgorithmName = S#state.selection_algorithm,
 			A = genotype:dirty_read({agent,Agent_Id}),
 			Morphology= (A#agent.constraint)#constraint.morphology,
-			io:format("Agent_Id:~p of morphology:~p with fitness:~p terminated.~n",[Agent_Id,Morphology,Fitness]),
+			%io:format("Agent_Id:~p of morphology:~p with fitness:~p terminated.~n",[Agent_Id,Morphology,Fitness]),
 			Specie_Id = A#agent.specie_id,
 			Specie = genotype:dirty_read({specie,Specie_Id}),
 			Old_DeadPool_AgentSummaries = Specie#specie.dead_pool,
@@ -226,6 +233,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 				false ->
 					U_DeadPool_AgentSummaries = Valid_AgentSummaries,
 					CloneAgent_Id = create_MutantAgentCopy(WinnerAgent_Id,safe),
+					%qlog:genotype_snapshot(CloneAgent_Id, "AGENT_CLONE"),
 					CloneAgent_PId = exoself:start(CloneAgent_Id,self()),
 					{CloneAgent_Id,CloneAgent_PId}
 			end,
@@ -272,13 +280,14 @@ handle_cast({From,evaluations,Specie_Id,AEA,AgentCycleAcc,AgentTimeAcc},S)->
 	U_TotEvaluations = S#state.tot_evaluations + AgentEvalAcc,
 	SEval_Acc=get({evaluations,Specie_Id}),
 	put({evaluations,Specie_Id},SEval_Acc+AgentEvalAcc),
+	io:format("Eval_Acc:~p~n",[Eval_Acc]),
 	case Eval_Acc rem S#state.step_size of
 		0 ->
 			io:format("Evaluations/Step:~p~n",[Eval_Acc]);
 		_ ->
 			done
 	end,
-	U_S=case U_EvalAcc >= S#state.step_size of
+	U_S=case U_EvalAcc >= S#state.step_size of 
 		true ->
 			gather_STATS(S#state.population_id,U_EvalAcc,S#state.op_mode),
 			Population_Id = S#state.population_id,
@@ -288,6 +297,7 @@ handle_cast({From,evaluations,Specie_Id,AEA,AgentCycleAcc,AgentTimeAcc},S)->
 			io:format("Tot Evaluations:~p~n",[TotEvaluations]),
 			S#state{eval_acc=0, cycle_acc=0, time_acc=0, tot_evaluations=U_TotEvaluations};
 		false ->
+			io:format("Eval_Acc:~p~n",[U_EvalAcc]),
 			S#state{eval_acc=U_EvalAcc,cycle_acc=U_CycleAcc,time_acc=U_TimeAcc,tot_evaluations=U_TotEvaluations}
 	end,
 	{noreply,U_S};
@@ -445,6 +455,7 @@ init_population(Init_State,Specie_Constraints)->
 %The function init_population/1 creates a new population with the id Population_Id, composed of length(Specie_Constraints) species, where each specie uses the particular specie constraint specified within the Specie_Constraints list. The function first checks if a population with the noted Population_Id already exists, if a population does exist, then the function first delets it, and then creates a fresh one. Since the ids are usually generated with the genotype:create_UniqueId/0, the only way an already existing Population_Id is dropped into the function as a parameter is if it is intended, usually when runing tests, with the Population_Id = test.
 
 	create_Population(Population_Id,SpecieSize,Specie_Constraints)->
+		qlog:evolution_milestone("POPULATION_CREATION", lists:flatten(io_lib:format("Creating population ~p with ~p species", [Population_Id, length(Specie_Constraints)]))),
 		Specie_Ids = [create_specie(Population_Id,SpecCon,origin,SpecieSize) || SpecCon <- Specie_Constraints],
 		[C|_]=Specie_Constraints,
 		%fx:log(io_lib:format("Creating Population:~p with Specie_Ids:~p~n",[Population_Id,Specie_Ids])),
@@ -479,6 +490,7 @@ init_population(Init_State,Specie_Constraints)->
 		create_specie(Population_Id,Specie_Id,Agent_Index,IdAcc,SpeCon,Fingerprint)->
 			Agent_Id = {genotype:generate_UniqueId(),agent},
 			genotype:construct_Agent(Specie_Id,Agent_Id,SpeCon),
+			%qlog:genotype_snapshot(Agent_Id, "POPULATION_CREATION"),
 			create_specie(Population_Id,Specie_Id,Agent_Index-1,[Agent_Id|IdAcc],SpeCon,Fingerprint).
 %The create_Population/3 generates length(Specie_Constraints) number of specie, each composed of ?INIT_SPECIE_SIZE number of agents. The function uses the create_specie/4 to generate the species. The create_specie/3 and create_specie/4 functions are simplified versions which use default parameters to call the create_specie/6 function. The create_specie/6 function constructs the agents using the genotype:construct_Agent/3 function, accumulating the Agent_Ids in the IdAcc list. Once all the agents have been created, the function creates the specie record, fills in the required elements, writes the specie to database, and then finally returns the Specie_Id to the caller.
 
@@ -504,6 +516,7 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 	mutate_Specie(Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name)->
 		S = genotype:dirty_read({specie,Specie_Id}),
 		{AvgFitness,Std,MaxFitness,MinFitness} = calculate_SpecieFitness({specie,S}),
+		qlog:population_summary(Specie_Id, lists:flatten(io_lib:format("Specie ~p | Agents: ~p | Fitness: Avg=~p Max=~p Min=~p", [Specie_Id, length(S#specie.agent_ids), AvgFitness, MaxFitness, MinFitness]))),
 		Agent_Ids = S#specie.agent_ids,
 		Sorted_AgentSummaries = lists:reverse(lists:sort(construct_AgentSummaries(Agent_Ids,[]))),
 		io:format("Using: Fitness Postprocessor:~p Selection Algorirthm:~p~n",[Fitness_Postprocessor_Name,Selection_Algorithm_Name]),
@@ -534,7 +547,8 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 
 	create_MutantAgentCopy(Agent_Id)->
 		AgentClone_Id = genotype:clone_Agent(Agent_Id),
-		io:format("AgentClone_Id:~p~n",[AgentClone_Id]),
+		%qlog:lineage_tracking(Agent_Id, AgentClone_Id, "CLONE_CREATED"),
+		%io:format("AgentClone_Id:~p~n",[AgentClone_Id]),
 		genome_mutator:mutate(AgentClone_Id),
 		AgentClone_Id.
 %The create_MutantAgentCopy/1 first creates a clone of the Agent_Id, and then uses the genome_mutator:mutate/1 function to mutate that clone, returning the id of the cloned agent to the caller.
@@ -543,9 +557,10 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 		A = genotype:dirty_read({agent,Agent_Id}),
 		S = genotype:dirty_read({specie,A#agent.specie_id}),
 		AgentClone_Id = genotype:clone_Agent(Agent_Id),
+		qlog:lineage_tracking(Agent_Id, AgentClone_Id, "SAFE_CLONE_CREATED"),
 		Agent_Ids = S#specie.agent_ids,
 		genotype:write(S#specie{agent_ids = [AgentClone_Id|Agent_Ids]}),
-		io:format("AgentClone_Id:~p~n",[AgentClone_Id]),
+		%io:format("AgentClone_Id:~p~n",[AgentClone_Id]),
 		genome_mutator:mutate(AgentClone_Id),
 		AgentClone_Id.
 %The create_MutantAgentCopy/2 is similar to arity 1 function of the same name, but it also adds the id of the cloned mutant agent to the specie record to which the original belonged. The specie with its updated agent_ids is then written to database, and the id of the mutant clone is returned to the caller.
@@ -711,12 +726,12 @@ calculate_SpecieAvgNodes({specie,S})->
 	Agent_Ids = S#specie.agent_ids,
 	calculate_AvgNodes(Agent_Ids,[]);
 calculate_SpecieAvgNodes(Specie_Id)->
-	io:format("calculate_SpecieAvgNodes(Specie_Id):~p~n",[Specie_Id]),
+	%io:format("calculate_SpecieAvgNodes(Specie_Id):~p~n",[Specie_Id]),
 	S = genotype:read({specie,Specie_Id}),
 	calculate_SpecieAvgNodes({specie,S}).
 	
 	calculate_AvgNodes([Agent_Id|Agent_Ids],NAcc)->
-		io:format("calculate_AvgNodes/2 Agent_Id:~p~n",[Agent_Id]),
+		%io:format("calculate_AvgNodes/2 Agent_Id:~p~n",[Agent_Id]),
 		A = genotype:read({agent,Agent_Id}),
 		Cx = genotype:read({cortex,A#agent.cx_id}),
 		Tot_Neurons = length(Cx#cortex.neuron_ids),

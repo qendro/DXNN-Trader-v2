@@ -7,6 +7,7 @@
 get_InitSensors(Morphology)->
 	Sensors = morphology:Morphology(sensors),
 	%Sensors.
+	%qlog:l1msg(self(), "DEBUG: get_InitSensors: " ++ lists:flatten(io_lib:format("~p", [lists:nth(1,Sensors)]))),
 	[lists:nth(1,Sensors)].
 
 get_InitActuators(Morphology)->
@@ -29,7 +30,7 @@ get_InitSubstrateCEPs(Dimensions,Plasticity)->
 	[lists:nth(1,Substrate_CEPs)].
 
 get_SubstrateCPPs(Dimensions,Plasticity)->
-	io:format("Dimensions:~p, Plasticity:~p~n",[Dimensions,Plasticity]),
+	%io:format("Dimensions:~p, Plasticity:~p~n",[Dimensions,Plasticity]),
 	if
 		(Plasticity == iterative) or (Plasticity == abcn) ->
 			Std=[
@@ -49,7 +50,7 @@ get_SubstrateCPPs(Dimensions,Plasticity)->
 					[]
 			end,
 			lists:append(Std,Adt);
-		(Plasticity == none) or (Plasticity == modular_none)->
+		(Plasticity == none) or (Plasticity == modular_none) or (Plasticity == hebbian) or (Plasticity == ojas)->
 			Std=[
 				#sensor{name=cartesian,type=substrate,vl=Dimensions*2},%{cartesian,Dimensions*2},
 				#sensor{name=centripital_distances,type=substrate,vl=2},%{centripital_distances,2},
@@ -77,7 +78,11 @@ get_SubstrateCEPs(Dimensions,Plasticity)->
 		none ->
 			[#actuator{name=set_weight,type=substrate,vl=1}]; %[{weight,1}]
 		modular_none ->
-			[#actuator{name=weight_expression,type=substrate,vl=2}] %[{weight_conexpr,2}]
+			[#actuator{name=weight_expression,type=substrate,vl=2}]; %[{weight_conexpr,2}]
+		hebbian ->
+			[#actuator{name=set_weight,type=substrate,vl=1}]; %[{weight,1}]
+		ojas ->
+			[#actuator{name=set_weight,type=substrate,vl=1}] %[{weight,1}]
 	end.
 	
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% MORPHOLOGIES %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -101,9 +106,10 @@ forex_trader(sensors)->
 	PCI_Sensors = [#sensor{name=fx_PCI,type=standard,scape={private,fx_sim},format={symmetric,[HRes,VRes]},vl=HRes*VRes,parameters=[HRes,VRes]} || HRes <-config:pci_horizontal_resolutions(), VRes<-config:pci_vertical_resolutions()],
 	InternalSensors = [#sensor{name=fx_Internals,type=standard,scape={private,fx_sim},format=no_geo,vl=config:internal_sensor_dimensions(),parameters=[config:internal_sensor_dimensions()]}],%[Long|Short|Void],Value
 	%PCI_Sensors. %Inital state [BASE]
-	PLI_Sensors++PCI_Sensors++InternalSensors.
+	PCI_Sensors++PLI_Sensors++InternalSensors.
 	%PLI_Sensors.%++InternalSensors. %qq
-	%PLI_Sensors. % qq
+	%PLI_Sensors++InternalSensors. % qq - Enable internal sensors for more mutation options
+	%InternalSensors.
 
 % New morphology specifically optimized for 1-minute forsex trading
 % Uses smaller time windows and higher resolution for quick decision making

@@ -15,6 +15,7 @@ prep(ExoSelf_PId) ->
 			%fx:log(io_lib:format("Cortex ~p started~n",[Id])),
 			%fx:log(io_lib:format("ExoSelf_PId: ~p, Id: ~p, SPIds: ~p, NPIds: ~p, APIds: ~p~n",[ExoSelf_PId,Id,SPIds,NPIds,APIds])),
 			put(start_time,now()),
+			%qlog:l2msg(ExoSelf_PId, io_lib:format("Cortex -> Sensors | MSG: {~p, sync} | Cycle: ~p | Sensors: ~p", [self(), 1, length(SPIds)])),
 			[SPId ! {self(),sync} || SPId <- SPIds],
 			loop(Id,ExoSelf_PId,SPIds,{APIds,APIds},NPIds,1,0,0,active)
 	end.
@@ -43,10 +44,12 @@ loop(Id,ExoSelf_PId,SPIds,{[],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,active)->
 		true ->%Organism finished evaluation
 			%fx:log(io_lib:format("Cortex:~p evaluation completed with fitness ~p in ~p cycles.~n",[Id,FitnessAcc,CycleAcc])),
 			TimeDif=timer:now_diff(now(),get(start_time)),
+			%qlog:l2msg(ExoSelf_PId, io_lib:format("Cortex -> ExoSelf | MSG: {~p, evaluation_completed, ~p, ~p, ~pms, ~p}", [self(), FitnessAcc, CycleAcc, TimeDif, get(goal_reached)])),
 			ExoSelf_PId ! {self(),evaluation_completed,FitnessAcc,CycleAcc,TimeDif,get(goal_reached)},
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,inactive);
 		false ->
 			%fx:log(io_lib:format("Cortex:~p completed cycle ~p with fitness ~p.~n",[Id,CycleAcc,FitnessAcc])),
+			%qlog:l2msg(ExoSelf_PId, io_lib:format("Cortex -> Sensors | MSG: {~p, sync} | Cycle: ~p | Sensors: ~p", [self(), CycleAcc+1, length(SPIds)])),
 			[PId ! {self(),sync} || PId <- SPIds],
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,CycleAcc+1,FitnessAcc,EFAcc,active)
 	end;
@@ -55,6 +58,7 @@ loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,_CycleAcc,_FitnessAcc,_EFAcc,ina
 	receive
 		{ExoSelf_PId,reactivate}->
 			put(start_time,now()),
+			%qlog:l2msg(ExoSelf_PId, io_lib:format("Cortex -> Sensors | MSG: {~p, sync} | Cycle: ~p | Sensors: ~p", [self(), 1, length(SPIds)])),
 			[SPId ! {self(),sync} || SPId <- SPIds],
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,1,0,0,active);
 		{ExoSelf_PId,terminate}->

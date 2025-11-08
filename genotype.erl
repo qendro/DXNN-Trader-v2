@@ -30,6 +30,7 @@ construct_Agent(Specie_Id,Agent_Id,SpecCon)->
 		evo_hist = [],
 		substrate_id = Substrate_Id
 	},
+	%qlog:genotype_creation(Agent_Id), % 
 	% io:format("Constructed Agent:~n"), %%qq all the prints below
     % io:format("  id: ~p~n", [Agent_Id]),
     % io:format("  encoding_type: ~p~n", [Encoding_Type]),
