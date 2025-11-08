@@ -150,7 +150,12 @@ evolution_milestone(Event_Type, Event_Details) ->
 ensure_directory_exists(Dir) ->
     case filelib:is_dir(Dir) of
         true -> ok;
-        false -> file:make_dir(Dir)
+        false ->
+            case filelib:ensure_dir(filename:join(Dir, "dummy")) of
+                ok -> ok;
+                {error, eexist} -> ok;
+                Error -> Error
+            end
     end.
 
 %% Log agent creation with complete initial genotype
