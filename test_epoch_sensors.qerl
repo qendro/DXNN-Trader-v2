@@ -1,0 +1,177 @@
+-module(test_epoch_sensors).
+-compile(export_all).
+-include("records.hrl").
+
+%% Test suite for epoch-based interval sensors
+%% Usage: test_epoch_sensors:run_all_tests().
+
+run_all_tests() ->
+    io:format("=== Testing Epoch-Based Interval Sensors ===~n"),
+    
+    % Test 1: Basic epoch arithmetic
+    test_epoch_arithmetic(),
+    
+    % Test 2: Data loading with epoch format
+    test_epoch_data_loading(),
+    
+    % Test 3: Interval sensor functionality
+    test_interval_sensor(),
+    
+    % Test 4: Gap handling
+    test_gap_handling(),
+    
+    io:format("=== All Tests Complete ===~n").
+
+test_epoch_arithmetic() ->
+    io:format("Test 1: Epoch Arithmetic...~n"),
+    
+    % Test basic interval calculations
+    CurrentEpoch = 1663797300,  % 2022-09-21 21:15:00
+    Interval = 15,              % 15 minutes
+    IntervalSeconds = Interval * 60,
+    
+    Expected15MinBack = CurrentEpoch - IntervalSeconds,
+    Expected30MinBack = CurrentEpoch - (2 * IntervalSeconds),
+    
+    io:format("  Current: ~p (should be 1663797300)~n", [CurrentEpoch]),
+    io:format("  15min back: ~p (should be 1663796400)~n", [Expected15MinBack]),
+    io:format("  30min back: ~p (should be 1663795500)~n", [Expected30MinBack]),
+    
+    % Verify calculations
+    case Expected15MinBack == 1663796400 of
+        true -> io:format("  ✓ 15-minute calculation correct~n");
+        false -> io:format("  ✗ 15-minute calculation failed~n")
+    end,
+    
+    case Expected30MinBack == 1663795500 of
+        true -> io:format("  ✓ 30-minute calculation correct~n");
+        false -> io:format("  ✗ 30-minute calculation failed~n")
+    end.
+
+test_epoch_data_loading() ->
+    io:format("Test 2: Epoch Data Loading...~n"),
+    
+    % Create test table
+    TestTable = test_epoch_table,
+    ets:new(TestTable, [ordered_set, public, named_table, {keypos, 2}]),
+    
+    % Insert test records with epoch timestamps
+    TestRecords = [
+        #technical{id=1663797300, datetime={2022,9,21,21,15,0,1}, open=0.983775, high=0.9838, low=0.983685, close=0.98375, volume=-1.0},
+        #technical{id=1663797360, datetime={2022,9,21,21,16,0,1}, open=0.98375, high=0.98378, low=0.98375, close=0.98375, volume=-1.0},
+        #technical{id=1663797420, datetime={2022,9,21,21,17,0,1}, open=0.98375, high=0.983755, low=0.98375, close=0.98375, volume=-1.0}
+    ],
+    
+    [ets:insert(TestTable, Record) || Record <- TestRecords],
+    
+    % Test lookups
+    case ets:lookup(TestTable, 1663797300) of
+        [#technical{close=0.98375}] -> 
+            io:format("  ✓ Epoch lookup successful~n");
+        _ -> 
+            io:format("  ✗ Epoch lookup failed~n")
+    end,
+    
+    % Test arithmetic-based lookup
+    Target15MinBack = 1663797300 - (15 * 60),  % Should be 1663796400
+    case ets:lookup(TestTable, Target15MinBack) of
+        [] -> 
+            io:format("  ✓ Gap handling works (no data at calculated epoch)~n");
+        _ -> 
+            io:format("  ✗ Unexpected data found~n")
+    end,
+    
+    % Cleanup
+    ets:delete(TestTable).
+
+test_interval_sensor() ->
+    io:format("Test 3: Interval Sensor Functions...~n"),
+    
+    % Create test table with more data
+    TestTable = test_interval_sensor,
+    ets:new(TestTable, [ordered_set, public, named_table, {keypos, 2}]),
+    
+    % Insert test data every minute for 1 hour
+    BaseEpoch = 1663797300,  % 2022-09-21 21:15:00
+    TestData = [
+        #technical{
+            id = BaseEpoch + (N * 60),  % Every minute
+            datetime = {2022,9,21,21,15+N,0,1},
+            open = 0.98375 + (N * 0.0001),
+            high = 0.98380 + (N * 0.0001), 
+            low = 0.98370 + (N * 0.0001),
+            close = 0.98375 + (N * 0.0001),
+            volume = -1.0
+        } || N <- lists:seq(0, 59)  % 60 minutes of data
+    ],
+    
+    [ets:insert(TestTable, Record) || Record <- TestData],
+    
+    % Test interval collection
+    CurrentEpoch = BaseEpoch + (30 * 60),  % 30 minutes in
+    HRes = 5,
+    Interval = 15,  % 15-minute intervals
+    
+    try
+        Result = fx:fx_GetIntervalPriceList_Epoch(TestTable, CurrentEpoch, HRes, Interval),
+        io:format("  ✓ Interval collection successful, got ~p records~n", [length(Result)]),
+        
+        % Verify we got the right number of records
+        case length(Result) == HRes of
+            true -> io:format("  ✓ Correct number of records returned~n");
+            false -> io:format("  ✗ Wrong number of records: expected ~p, got ~p~n", [HRes, length(Result)])
+        end
+        
+    catch
+        Error:Reason ->
+            io:format("  ✗ Interval collection failed: ~p:~p~n", [Error, Reason])
+    end,
+    
+    % Cleanup
+    ets:delete(TestTable).
+
+test_gap_handling() ->
+    io:format("Test 4: Gap Handling...~n"),
+    
+    % Create test table with gaps
+    TestTable = test_gap_handling,
+    ets:new(TestTable, [ordered_set, public, named_table, {keypos, 2}]),
+    
+    % Insert data with intentional gaps
+    BaseEpoch = 1663797300,
+    TestData = [
+        #technical{id=BaseEpoch, datetime={2022,9,21,21,15,0,1}, open=0.98375, high=0.9838, low=0.983685, close=0.98375, volume=-1.0},
+        #technical{id=BaseEpoch + 60, datetime={2022,9,21,21,16,0,1}, open=0.98375, high=0.98378, low=0.98375, close=0.98375, volume=-1.0},
+        % Gap: skip BaseEpoch + 120 (21:17)
+        #technical{id=BaseEpoch + 180, datetime={2022,9,21,21,18,0,1}, open=0.98375, high=0.984385, low=0.98375, close=0.983925, volume=-1.0},
+        #technical{id=BaseEpoch + 240, datetime={2022,9,21,21,19,0,1}, open=0.983925, high=0.984025, low=0.983925, close=0.984005, volume=-1.0}
+    ],
+    
+    [ets:insert(TestTable, Record) || Record <- TestData],
+    
+    % Test gap handling
+    MissingEpoch = BaseEpoch + 120,  % This epoch is missing
+    case fx:safe_epoch_lookup(TestTable, MissingEpoch) of
+        #technical{close=0} ->
+            io:format("  ✓ Gap handling works - returned zero record~n");
+        _ ->
+            io:format("  ✗ Gap handling failed~n")
+    end,
+    
+    % Test existing epoch
+    ExistingEpoch = BaseEpoch,
+    case fx:safe_epoch_lookup(TestTable, ExistingEpoch) of
+        #technical{close=0.98375} ->
+            io:format("  ✓ Existing data lookup works~n");
+        _ ->
+            io:format("  ✗ Existing data lookup failed~n")
+    end,
+    
+    % Cleanup
+    ets:delete(TestTable).
+
+%% Helper function to convert epoch to readable datetime
+epoch_to_datetime(Epoch) ->
+    BaseDate = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+    Seconds = BaseDate + Epoch,
+    calendar:gregorian_seconds_to_datetime(Seconds).

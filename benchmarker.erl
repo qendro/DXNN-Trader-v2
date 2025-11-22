@@ -22,7 +22,7 @@ start(Id)->
 		specie_size_limit=config:specie_size_limit(), %qChangeFrom 10,
 		init_specie_size=config:init_specie_size(), %qChangeFrom 10,
 		polis_id = mathema,
-		generation_limit = inf,
+		generation_limit = config:generation_limit(),
 		evaluations_limit = config:evaluations_limit(), %qChangeFrom 10000, optimized from 10
 		fitness_goal = inf
 	},
@@ -37,9 +37,7 @@ start(Id)->
 		started={date(),time()},
 		interruptions=[]
 	},
-	%io:format("Initial constraints: ~p~n", [E#experiment.init_constraints]), %qq
-    %io:format("Experiment record: ~p~n", [E]), %qq
-	fx:log("Time:~p, RunIndex:~p, tot_runs:0 - Starting~n",[{date(),time()},E#experiment.tot_runs]),
+	qlog:benchmarker(Id,io_lib:format("EXPERIMENT_START | op_mode=~p | population_id=~p | tot_runs=~p",[PMP#pmp.op_mode, PMP#pmp.population_id, E#experiment.tot_runs])),
 	genotype:write(E),
 	register(benchmarker,spawn(benchmarker,prep,[E])).
 
@@ -77,6 +75,8 @@ loop(E,P_Id)->
 			U_RunIndex = E#experiment.run_index+1,
 			case U_RunIndex > E#experiment.tot_runs of
 				true ->
+					% All training runs for this experiment are complete
+					qlog:benchmarker(E#experiment.id,io_lib:format("TRAINING_COMPLETE | population_id=~p | runs=~p",[P_Id, U_RunIndex-1])),
 					U_E = E#experiment{
 						trace_acc = U_TraceAcc,
 						run_index = U_RunIndex,
@@ -84,15 +84,14 @@ loop(E,P_Id)->
 						progress_flag = completed
 					},
 					genotype:write(U_E),
+					qlog:benchmarker(E#experiment.id,io_lib:format("EXPERIMENT_COMPLETE | final_runs=~p", [U_E#experiment.run_index-1])),
 					report(U_E#experiment.id,"report"),
-					fx:log("Time:~p, RunIndex:~p, tot_runs:~p - Completed~n",[{date(),time()},U_RunIndex,E#experiment.tot_runs]),
 					checkpoint_and_exit();
 				false ->
 					U_E = E#experiment{
 						trace_acc = U_TraceAcc,
 						run_index = U_RunIndex
 					},
-					fx:log("Time:~p, RunIndex:~p, tot_runs:~p~n",[{date(),time()},U_RunIndex,E#experiment.tot_runs]),
 					genotype:write(U_E),
 					PMP = U_E#experiment.pm_parameters,
 					Constraints = U_E#experiment.init_constraints,
@@ -101,7 +100,7 @@ loop(E,P_Id)->
 					loop(U_E,P_Id)
 			end;
 		terminate ->
-			fx:log("Benchmarker received terminate signal, exiting...~n",[]),
+			qlog:benchmarker(E#experiment.id,io_lib:format("BENCHMARKER_TERMINATE | population_id=~p",[P_Id])),
 			ok
 	end.
 
@@ -258,7 +257,7 @@ trace2graph(TraceFileName)->
 
 % Checkpoint with fsync before shutdown
 checkpoint_and_exit() ->
-	fx:log("Checkpointing and exiting...~n",[]),
+	qlog:benchmarker(self(),"CHECKPOINT_AND_EXIT"),
 	checkpoint(),
 	
 	%% Graceful shutdown
@@ -314,7 +313,7 @@ copy_logs_to_checkpoint(CheckpointDir) ->
         {ok, _} ->
             DestFile = CheckpointDir ++ "/dxnn_run.log",
             file:copy("logs/dxnn_run.log", DestFile), 
-			fx:log("Logs copied to checkpoint.~n",[]);
+			qlog:benchmarker(self(),"LOGS_COPIED_TO_CHECKPOINT");
         _ -> ok
     end.
 

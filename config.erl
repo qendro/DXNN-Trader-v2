@@ -21,17 +21,18 @@ order_size_percentage() -> 0.2.               % Options: 0.01-1.0 (1%-100% of ba
 %% Market Data Windows
 %% ===================================================================
 primary_currency_pair() -> 'EURUSD1'.         % Options: 'EURUSD1', 'EURUSD1_LIVE', 'EURUSD15', 'EURUSD30', 'EURUSD60'
-data_start_index() -> 1000.                   % Options: 1-N (starting row for training data)
-data_end_index() -> 200.                      % Options: data_start_index+1 to N (ending row for training)
-benchmark_end_index() -> last.                % Options: last, or specific number (ending row for benchmark)
-market_props_start() -> 800.                  % Options: 1-N (market analysis start point)
-market_props_end() -> 200.                    % Options: market_props_start+1 to N (market analysis end)
+
+% Core data window configuration (all values are "bars back from latest data")
+gt_start() -> 1000.                           % Options: 1-N (starting row for training data)
+gt_end() -> 200.                              % Options: 1 to gt_start-1 (ending row for training)
+bench_start() -> 200.                         % Options: 1-N (starting row for benchmark data)
+bench_end() -> last.                          % Options: last, or specific number (ending row for benchmark)
 
 %% ===================================================================
 %% Sensor Profiles
 %% ===================================================================
 %% --- Standard Forex Trader ---
-pli_resolutions() -> [20].                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc.
+pli_resolutions() -> [20, 40].                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc.
 pci_horizontal_resolutions() -> [90].         % Options: [10], [20], [50], [10,20], [20,50], etc.
 pci_vertical_resolutions() -> [20].           % Options: [10], [15], [20], [10,15], [15,20], etc.
 
@@ -44,10 +45,10 @@ internal_sensor_dimensions() -> 3.            % Options: 1-10 (trading state dim
 %% ===================================================================
 %% Evolution Strategy
 %% ===================================================================
-specie_size_limit() -> 100.                     % Options: 1-100 (max agents per species)
-init_specie_size() -> 100.                      % Options: 1-50 (initial agents per species)
-evaluations_limit() -> 10000.                    % Options: 10-100000 (max evaluations per run)
-generation_limit() -> 100.                     % Options: 1-1000 (max generations per run)
+specie_size_limit() -> 2.                     % Options: 1-100 (max agents per species)
+init_specie_size() -> 2.                      % Options: 1-50 (initial agents per species)
+evaluations_limit() -> 10000000.                    % Options: 10-100000 (max evaluations per run)
+generation_limit() -> 1.                     % Options: 1-1000 (max generations per run)
 survival_percentage() -> 0.5.                  % Options: 0.1-0.9 (percentage of agents that survive)
 tot_runs() -> 1.                               % Options: 1-100 (number of benchmark runs)
 
@@ -63,7 +64,7 @@ tot_topological_mutations_functions() -> [{ncount_exponential,0.5}]. % Options: 
 %% ===================================================================
 %% Substrate Configuration
 %% ===================================================================
-substrate_plasticities() -> [abcn].            % Options: none, hebbian, ojas, iterative, abcn
+substrate_plasticities() -> [none].            % Options: none, hebbian, ojas, iterative, abcn
 substrate_linkforms() -> [l2l_feedforward].    % Options: l2l_feedforward, jordan_recurrent, fully_connected
 neural_aggregation_functions() -> [dot_product]. % Options: dot_product, mult_product, diff
 

@@ -27,14 +27,11 @@ gen(ExoSelf_PId,Node)->
 
 prep(ExoSelf_PId) ->
 	random:seed(now()),
-	%qlog:process_debug(ExoSelf_PId, io_lib:format("Neuron prep started | PId: ~p", [self()])),
 	receive 
 		{ExoSelf_PId,{Id,Cx_PId,AF,PF,AggrF,HeredityType,SI_PIdPs,MI_PIdPs,Output_PIds,RO_PIds}} ->
-			%qlog:process_debug(ExoSelf_PId, io_lib:format("Neuron initialized | Id: ~p | PId: ~p", [Id, self()])),
 			fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]}),
 			SI_PIds = lists:append([IPId || {IPId,_W} <- SI_PIdPs, IPId =/= bias],[ok]),
 			MI_PIds = lists:append([IPId || {IPId,_W} <- MI_PIdPs, IPId =/= bias],[ok]),
-			%io:format("SI_PIdPs:~p ~nMI_PIdPs:~p~n",[SI_PIdPs,MI_PIdPs]),
 			S=#state{
 				id=Id,
 				cx_pid=Cx_PId,
@@ -61,14 +58,9 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 	AF = S#state.af,
 	AggrF = S#state.aggrf,
 	{PFName,PFParameters} = PF,
-	%io:format("self:~p~n SIAcc:~p~n MIAcc:~p~n",[self(), SIAcc,MIAcc]),
 	Ordered_SIAcc = lists:reverse(SIAcc),
 	SI_PIdPs = S#state.si_pidps_current,
-	%qlog:l1msg(self(), "DEBUG: Neuron processing " ++ integer_to_list(length(Ordered_SIAcc)) ++ " sensor inputs, " ++ integer_to_list(length(SI_PIdPs)) ++ " weight pairs"),
-	%qlog:l1msg(self(), "DEBUG: Sensor inputs: " ++ lists:flatten(io_lib:format("~p", [Ordered_SIAcc]))),
-	%qlog:l1msg(self(), "DEBUG: Weight pairs: " ++ lists:flatten(io_lib:format("~p", [SI_PIdPs]))),
 	SAggregation_Product = sat(signal_aggregator:AggrF(Ordered_SIAcc,SI_PIdPs),?SAT_LIMIT),
-	%qlog:l1msg(self(), "DEBUG: Aggregation result=" ++ lists:flatten(io_lib:format("~p", [SAggregation_Product]))),
 	SOutput = functions:AF(SAggregation_Product),
 	
 	Output_PIds = S#state.output_pids,
@@ -83,7 +75,6 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 			MAggregation_Product = sat(signal_aggregator:dot_product(Ordered_MIAcc,MI_PIdPs),?SAT_LIMIT),
 			MOutput = functions:tanh(MAggregation_Product),
 			U_SI_PIdPs = plasticity:PFName([MOutput|PFParameters],Ordered_SIAcc,SI_PIdPs,SOutput),
-			%io:format("U_SI_PIdPs:~p~n",[U_SI_PIdPs]),
 			U_S=S#state{
 				si_pidps_current = U_SI_PIdPs
 			}
@@ -94,7 +85,6 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 	receive
 		{SI_PId,forward,Input}->
-			%qlog:l1msg(self(), "DEBUG: Neuron received input from " ++ lists:flatten(io_lib:format("~p", [SI_PId])) ++ " with length=" ++ integer_to_list(length(Input)) ++ ", data=" ++ lists:flatten(io_lib:format("~p", [Input]))),
 			loop(S,ExoSelf_PId,SI_PIds,[MI_PId|MI_PIds],[{SI_PId,Input}|SIAcc],MIAcc);
 		{MI_PId,forward,Input}->
 			loop(S,ExoSelf_PId,[SI_PId|SI_PIds],MI_PIds,SIAcc,[{MI_PId,Input}|MIAcc]);

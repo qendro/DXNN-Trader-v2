@@ -4,12 +4,9 @@
 -include("records.hrl").
 
 dot_product(IAcc,IPIdPs)->
-	%qlog:l1msg(self(), "DEBUG: dot_product called with " ++ integer_to_list(length(IAcc)) ++ " inputs, " ++ integer_to_list(length(IPIdPs)) ++ " weight pairs"),
 	dot_product(IAcc,IPIdPs,0).
 dot_product([{IPId,Input}|IAcc],[{IPId,WeightsP}|IPIdPs],Acc)->
-	%qlog:l1msg(self(), "DEBUG: Processing input from " ++ lists:flatten(io_lib:format("~p", [IPId])) ++ " with input length=" ++ integer_to_list(length(Input)) ++ ", weights length=" ++ integer_to_list(length(WeightsP))),
 	Dot = dot(Input,WeightsP,0),
-	%qlog:l1msg(self(), "DEBUG: Dot product result=" ++ lists:flatten(io_lib:format("~p", [Dot]))),
 	dot_product(IAcc,IPIdPs,Dot+Acc);
 dot_product([],[{bias,[{Bias,_LPs}]}],Acc)->
 	Acc + Bias;
@@ -17,13 +14,10 @@ dot_product([],[],Acc)->
 	Acc.
 		
 		dot([I|Input],[{W,_LPs}|WeightsP],Acc) ->
-			%qlog:l1msg(self(), "DEBUG: dot processing I=" ++ lists:flatten(io_lib:format("~p", [I])) ++ ", W=" ++ lists:flatten(io_lib:format("~p", [W])) ++ ", Acc=" ++ lists:flatten(io_lib:format("~p", [Acc]))),
 			dot(Input,WeightsP,I*W+Acc);
 		dot([],[],Acc)->
-			%qlog:l1msg(self(), "DEBUG: dot completed with final Acc=" ++ lists:flatten(io_lib:format("~p", [Acc]))),
 			Acc;
 		dot(Input,WeightsP,Acc) ->
-			%qlog:l1msg(self(), "DEBUG: dot function_clause error - Input=" ++ lists:flatten(io_lib:format("~p", [Input])) ++ ", WeightsP=" ++ lists:flatten(io_lib:format("~p", [WeightsP])) ++ ", Acc=" ++ lists:flatten(io_lib:format("~p", [Acc]))),
 			exit("Error in dot function - function_clause with Input=" ++ lists:flatten(io_lib:format("~p", [Input])) ++ ", WeightsP=" ++ lists:flatten(io_lib:format("~p", [WeightsP]))).
 %The dot/3 function accepts an input vector and a weight list, and computes the dot product of the two vectors.
 

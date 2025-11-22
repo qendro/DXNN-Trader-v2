@@ -46,7 +46,6 @@ test(Agent_Id,Mutator)->
 mutate(Agent_Id)->
 	random:seed(now()),
 	F = fun()->
-		%qlog:genotype_snapshot(Agent_Id, "PRE_MUTATION"),
 		mutate_SearchParameters(Agent_Id),
 		A = genotype:read({agent,Agent_Id}),
 		{TTM_Name,Parameter} = A#agent.tot_topological_mutations_f,
@@ -58,7 +57,6 @@ mutate(Agent_Id)->
 		genotype:update_fingerprint(Agent_Id)
 
 	end,
-	%qlog:genotype_snapshot(Agent_Id, "POST_MUTATION"),
 	mnesia:transaction(F).
 %The function mutate/1 first updates the generation of the agent to be mutated, then calculates the number of mutation operators to be applied to it by executing the tot_topological_mutations:TTM_Name/2 function, and then finally runs the apply_Mutators/2 function, which mutates the agent. Once the agent is mutated, the function updates its fingerprint by executing genotype:update_finrgerprint/1.
 
@@ -106,8 +104,6 @@ mutate(Agent_Id)->
 				A = genotype:read({agent,Agent_Id}),
 				MutatorsP = A#agent.mutation_operators,
 				Mutator = select_random_MO(MutatorsP),
-				%io:format("Mutation Operator:~p~n",[Mutator]),
-				%qlog:genotype_mutation(Agent_Id, "APPLYING", io_lib:format("Operator: ~p", [Mutator])),
 				genome_mutator:Mutator(Agent_Id)
 			end,
 			mnesia:transaction(F).
@@ -734,7 +730,6 @@ add_neuron(Agent_Id)->%Adds neuron and connects it to other neurons, not sensors
 			link_FromElementToElement(Agent_Id,From_ElementId,NewN_Id),
 			link_FromElementToElement(Agent_Id,NewN_Id,To_ElementId),
 			U_EvoHist = [{add_neuron,From_ElementId,NewN_Id,To_ElementId}|A#agent.evo_hist],
-			%qlog:architecture(Agent_Id, io_lib:format("Added neuron ~p | From: ~p | To: ~p | TotalNeurons: ~p", [NewN_Id, From_ElementId, To_ElementId, length(U_N_Ids)])),
 			genotype:write(Cx#cortex{neuron_ids = U_N_Ids}),
 			genotype:write(A#agent{pattern=U_Pattern,evo_hist=U_EvoHist})
 	end.
@@ -912,8 +907,6 @@ add_sensor(Agent_Id)->%TODO: There should be a preference towards adding sensors
 			U_Cx = Cx#cortex{sensor_ids=[NewS_Id|S_Ids]},
 			genotype:write(U_Cx),
 			genotype:write(Agent#agent{evo_hist=U_EvoHist})
-			%qlog:agent_morph(Agent#agent.specie_id, io_lib:format("Mutation add_sensor | Agent: ~p | Encoding: ~p | NewSensor: ~p | OldSensorCount: ~p | NewSensorCount: ~p | SensorType: ~p", [Agent_Id, Agent#agent.encoding_type, NewS_Id, length(S_Ids), length([NewS_Id|S_Ids]), NewSensor#sensor.name])),
-			%qlog:architecture(Agent_Id, io_lib:format("Added sensor ~p | Type: ~p | TotalSensors: ~p", [NewS_Id, NewSensor#sensor.name, length([NewS_Id|S_Ids])]))
 	end.
 %The add_sensor/1 function adds and connects a new sensor to the neural network, a sensor type to which the NN is not yet connected from. After retrieving the morphology name from the constraints record retrived from the agent, the complete set of available sensors is retrevied using the morphology:get_Sensors/1 function. From this complete sensor list we subtract the sensor tuples used by the NN based system, but first we revert those sensor's id and cx_id back to undefined, since that is what the initial state of the sensor tuples are. With the NN's sensors ids and cx_ids reverted back to undefined, they can be subtracted from the compelete set of sensors. If the resulting list is empty, then the function exits with an error. On the other hand if ther esulting list is not empty, then there are still sensors which the NN is not yet using (though it does not mean that using the sensors would make the NN better, these sensors might be simply useless, and hence not previously incorporated during evolution). From this resulting list we then select a random sensor, and create for it a unique sensor id NewS_Id. A random neuron id N_Id is then selected from the cortex's neuron_ids list, and a connection is established from NewS_Id to the N_Id. The cortex's sensor_ids is updated with the new sensor's id, and the agent's evo_hist is updated with the new tuple. The updated cortex and agent records are then written to database.
 
@@ -946,7 +939,6 @@ add_actuator(Agent_Id)->%TODO: There should be a preference towards adding actua
 			U_Cx = Cx#cortex{actuator_ids=[NewA_Id|A_Ids]},
 			genotype:write(U_Cx),
 			genotype:write(Agent#agent{evo_hist=U_EvoHist})
-			%qlog:architecture(Agent_Id, io_lib:format("Added actuator ~p | Type: ~p | TotalActuators: ~p", [NewA_Id, NewActuator#actuator.name, length([NewA_Id|A_Ids])]))
 	end.
 %The add_actuator/1 function adds and connects a new actuator to the neural network, an actuator type to which the NN is noet yet connected to. After the morphology name from the constraints record, a complete actuator list available to the NN from which to draw its actuators from during evolution is created. From that list the actuator list that the NN is already connected to is subtracted, after the ids and cx_ids of those actuators is set to undefined. The resulting list is the list of actuators to which the NN is not yet connected to. A random actuator is chosen from that list, and a random neuron id N_Id from cortex's neuron_ids is chosen and connected to the new actuator. The cortex's actuator_ids list is then updated with the id of the newly created actuator, the agent's evo_hist is updated with the new tuple, and then both the updated cortex and the agent are written to database.
 
@@ -978,8 +970,6 @@ add_cpp(Agent_Id)->%TODO: There should be a preference towards adding substrate_
 					U_Substrate = Substrate#substrate{cpp_ids=[NewCPP_Id|CPP_Ids]},
 					genotype:write(U_Substrate),
 					genotype:write(Agent#agent{evo_hist=U_EvoHist}) 
-					%qlog:agent_morph(Agent#agent.specie_id, io_lib:format("Mutation add_cpp | Agent: ~p | Generation: ~p | Encoding: ~p | NewCPP: ~p | CPP_Type: ~p | OldCPPCount: ~p | NewCPPCount: ~p | ConnectedToNeuron: ~p", [Agent_Id, Agent#agent.generation, Agent#agent.encoding_type, NewCPP_Id, NewCPP#sensor.name, length(CPP_Ids), length([NewCPP_Id|CPP_Ids]), N_Id])),
-					%qlog:architecture(Agent_Id, io_lib:format("Added CPP ~p | Type: ~p | TotalCPPs: ~p | ConnectedToNeuron: ~p", [NewCPP_Id, NewCPP#sensor.name, length([NewCPP_Id|CPP_Ids]), N_Id]))
 			end
 	end.
 	
@@ -1011,7 +1001,5 @@ add_cep(Agent_Id)->
 					U_Substrate = Substrate#substrate{cep_ids=[NewCEP_Id|CEP_Ids]},
 					genotype:write(U_Substrate),
 					genotype:write(Agent#agent{evo_hist=U_EvoHist}) 
-					%qlog:agent_morph(Agent#agent.specie_id, io_lib:format("Mutation add_cep | Agent: ~p | Generation: ~p | Encoding: ~p | NewCEP: ~p | CEP_Type: ~p | OldCEPCount: ~p | NewCEPCount: ~p | ConnectedFromNeuron: ~p", [Agent_Id, Agent#agent.generation, Agent#agent.encoding_type, NewCEP_Id, NewCEP#actuator.name, length(CEP_Ids), length([NewCEP_Id|CEP_Ids]), N_Id])),
-					%qlog:architecture(Agent_Id, io_lib:format("Added CEP ~p | Type: ~p | TotalCEPs: ~p | ConnectedFromNeuron: ~p", [NewCEP_Id, NewCEP#actuator.name, length([NewCEP_Id|CEP_Ids]), N_Id]))
 			end
 	end.

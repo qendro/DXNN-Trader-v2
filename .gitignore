@@ -90,6 +90,7 @@ results/
 outputs/
 graphs/
 reports/
+logs/
 
 # OS generated files
 .DS_Store

@@ -1,6 +1,6 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, delete_log_folder/0, delete_all/0]).
 -include("records.hrl").
 
 %% ============================================================================
@@ -148,6 +148,16 @@ evolution_milestone(Event_Type, Event_Details) ->
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [MILESTONE] ~s: ~s~n", [Timestamp, Event_Type, Event_Details]),
+    file:close(File).
+
+%% High-level benchmarker/training pipeline logging (new dedicated log file)
+benchmarker(Run_Id, Msg) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "benchmarker.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    io:format(File, "~s | [RUN:~p] ~s~n", [Timestamp, Run_Id, Msg]),
     file:close(File).
 
 %% Helper function to ensure directory exists
@@ -304,6 +314,360 @@ format_timestamp() ->
         [Y,Mo,D,H,Mi,S])).
 
 %% ============================================================================
+%% LOG FOLDER MANAGEMENT
+%% ============================================================================
+
+%% Delete the entire log folder and all its contents
+%% Uses log_directory() from config.erl
+%% Output: ok | {error, Reason}
+delete_log_folder() ->
+    LogRoot = get_log_root_dir(),
+    LogResult = case filelib:is_dir(LogRoot) of
+        true ->
+            % Recursively delete all files and directories
+            case delete_directory_recursive(LogRoot) of
+                ok ->
+                    io:format("Successfully deleted log folder: ~s~n", [LogRoot]),
+                    ok;
+                LogError ->
+                    io:format("Error deleting log folder ~s: ~p~n", [LogRoot, LogError]),
+                    LogError
+            end;
+        false ->
+            io:format("Log folder does not exist: ~s~n", [LogRoot]),
+            ok
+    end,
+    GpuSpecsRoot = filename:absname("../data/gpu_specs/"),
+    GpuSpecsResult = case filelib:is_dir(GpuSpecsRoot) of
+        true ->
+            case delete_directory_recursive(GpuSpecsRoot) of
+                ok ->
+                    io:format("Successfully deleted gpu_specs folder: ~s~n", [GpuSpecsRoot]),
+                    ok;
+                GpuError ->
+                    io:format("Error deleting gpu_specs folder ~s: ~p~n", [GpuSpecsRoot, GpuError]),
+                    GpuError
+            end;
+        false ->
+            io:format("Gpu_specs folder does not exist: ~s~n", [GpuSpecsRoot]),
+            ok
+    end,
+    case LogResult of
+        ok -> GpuSpecsResult;
+        LogErr -> LogErr
+    end.
+
+%% Delete all system-generated folders and files (logs, specs, mnesia, etc.)
+%% Output: ok | {error, Reason}
+delete_all() ->
+    io:format("Starting comprehensive cleanup...~n", []),
+    Results = [
+        delete_all_logs(),
+        delete_all_gpu_specs(),
+        delete_fx_tables_non_txt(),
+        delete_mnesia_folder(),
+        delete_crash_dumps(),
+        delete_python_caches()
+        %% Add more deletion functions here as needed
+    ],
+    case lists:filter(fun(R) -> R =/= ok end, Results) of
+        [] ->
+            io:format("All cleanup operations completed successfully.~n", []),
+            ok;
+        Errors ->
+            io:format("Some cleanup operations failed: ~p~n", [Errors]),
+            {error, Errors}
+    end.
+
+%% Helper: Delete all log folders
+delete_all_logs() ->
+    LogRoot = get_log_root_dir(),
+    case filelib:is_dir(LogRoot) of
+        true ->
+            case delete_directory_recursive(LogRoot) of
+                ok ->
+                    io:format("Deleted log folder: ~s~n", [LogRoot]),
+                    ok;
+                Error ->
+                    io:format("Error deleting log folder ~s: ~p~n", [LogRoot, Error]),
+                    Error
+            end;
+        false ->
+            io:format("Log folder does not exist: ~s~n", [LogRoot]),
+            ok
+    end.
+
+%% Helper: Delete gpu_specs folder
+delete_all_gpu_specs() ->
+    GpuSpecsRoot = filename:absname("../data/gpu_specs/"),
+    case filelib:is_dir(GpuSpecsRoot) of
+        true ->
+            case delete_directory_recursive(GpuSpecsRoot) of
+                ok ->
+                    io:format("Deleted gpu_specs folder: ~s~n", [GpuSpecsRoot]),
+                    ok;
+                Error ->
+                    io:format("Error deleting gpu_specs folder ~s: ~p~n", [GpuSpecsRoot, Error]),
+                    Error
+            end;
+        false ->
+            io:format("Gpu_specs folder does not exist: ~s~n", [GpuSpecsRoot]),
+            ok
+    end.
+
+%% Helper: Delete all files in fx_tables that don't end in .txt
+delete_fx_tables_non_txt() ->
+    FxTablesDir = filename:absname(config:fx_tables_directory()),
+    case filelib:is_dir(FxTablesDir) of
+        true ->
+            case file:list_dir(FxTablesDir) of
+                {ok, Files} ->
+                    NonTxtFiles = lists:filter(
+                        fun(Filename) ->
+                            case filename:extension(Filename) of
+                                ".txt" -> false;
+                                _ -> true
+                            end
+                        end,
+                        Files
+                    ),
+                    Results = lists:map(
+                        fun(Filename) ->
+                            Path = filename:join(FxTablesDir, Filename),
+                            case filelib:is_dir(Path) of
+                                true ->
+                                    case delete_directory_recursive(Path) of
+                                        ok ->
+                                            io:format("Deleted fx_tables directory: ~s~n", [Path]),
+                                            ok;
+                                        Error ->
+                                            io:format("Error deleting fx_tables directory ~s: ~p~n", [Path, Error]),
+                                            Error
+                                    end;
+                                false ->
+                                    case file:delete(Path) of
+                                        ok ->
+                                            io:format("Deleted fx_tables file: ~s~n", [Path]),
+                                            ok;
+                                        {error, enoent} -> ok;
+                                        Error ->
+                                            io:format("Error deleting fx_tables file ~s: ~p~n", [Path, Error]),
+                                            Error
+                                    end
+                            end
+                        end,
+                        NonTxtFiles
+                    ),
+                    case lists:filter(fun(R) -> R =/= ok end, Results) of
+                        [] -> ok;
+                        Errors -> {error, Errors}
+                    end;
+                Error ->
+                    io:format("Error listing fx_tables directory ~s: ~p~n", [FxTablesDir, Error]),
+                    Error
+            end;
+        false ->
+            io:format("Fx_tables directory does not exist: ~s~n", [FxTablesDir]),
+            ok
+    end.
+
+%% Helper: Delete Mnesia.nonode@nohost folder
+delete_mnesia_folder() ->
+    MnesiaDir = filename:absname("Mnesia.nonode@nohost"),
+    case filelib:is_dir(MnesiaDir) of
+        true ->
+            case delete_directory_recursive(MnesiaDir) of
+                ok ->
+                    io:format("Deleted Mnesia folder: ~s~n", [MnesiaDir]),
+                    ok;
+                Error ->
+                    io:format("Error deleting Mnesia folder ~s: ~p~n", [MnesiaDir, Error]),
+                    Error
+            end;
+        false ->
+            io:format("Mnesia folder does not exist: ~s~n", [MnesiaDir]),
+            ok
+    end.
+
+%% Helper: Delete Erlang crash dump files
+delete_crash_dumps() ->
+    ErlangDir = filename:absname("."),
+    case file:list_dir(ErlangDir) of
+        {ok, Files} ->
+            CrashDumps = lists:filter(
+                fun(Filename) ->
+                    case filename:extension(Filename) of
+                        ".dump" -> true;
+                        _ -> false
+                    end
+                end,
+                Files
+            ),
+            Results = lists:map(
+                fun(Filename) ->
+                    Path = filename:join(ErlangDir, Filename),
+                    case file:delete(Path) of
+                        ok ->
+                            io:format("Deleted crash dump: ~s~n", [Path]),
+                            ok;
+                        {error, enoent} -> ok;
+                        Error ->
+                            io:format("Error deleting crash dump ~s: ~p~n", [Path, Error]),
+                            Error
+                    end
+                end,
+                CrashDumps
+            ),
+            case lists:filter(fun(R) -> R =/= ok end, Results) of
+                [] -> ok;
+                Errors -> {error, Errors}
+            end;
+        Error ->
+            io:format("Error listing directory for crash dumps: ~p~n", [Error]),
+            Error
+    end.
+
+%% Helper: Delete Python cache files and directories (__pycache__, .pyc, .pyo)
+delete_python_caches() ->
+    PythonDir = filename:absname("../python/"),
+    case filelib:is_dir(PythonDir) of
+        true ->
+            case delete_python_caches_recursive(PythonDir) of
+                ok ->
+                    io:format("Deleted Python caches in: ~s~n", [PythonDir]),
+                    ok;
+                Error ->
+                    io:format("Error deleting Python caches: ~p~n", [Error]),
+                    Error
+            end;
+        false ->
+            io:format("Python directory does not exist: ~s~n", [PythonDir]),
+            ok
+    end.
+
+%% Helper: Recursively delete Python cache files and directories
+delete_python_caches_recursive(Dir) ->
+    case filelib:is_dir(Dir) of
+        true ->
+            case file:list_dir(Dir) of
+                {ok, Items} ->
+                    Results = lists:map(
+                        fun(Item) ->
+                            Path = filename:join(Dir, Item),
+                            case Item of
+                                "__pycache__" ->
+                                    % Delete entire __pycache__ directory
+                                    case delete_directory_recursive(Path) of
+                                        ok ->
+                                            io:format("Deleted __pycache__: ~s~n", [Path]),
+                                            ok;
+                                        Error ->
+                                            io:format("Error deleting __pycache__ ~s: ~p~n", [Path, Error]),
+                                            Error
+                                    end;
+                                _ ->
+                                    % Check if it's a .pyc or .pyo file
+                                    case filename:extension(Item) of
+                                        ".pyc" ->
+                                            case file:delete(Path) of
+                                                ok ->
+                                                    io:format("Deleted .pyc: ~s~n", [Path]),
+                                                    ok;
+                                                {error, enoent} -> ok;
+                                                Error ->
+                                                    io:format("Error deleting .pyc ~s: ~p~n", [Path, Error]),
+                                                    Error
+                                            end;
+                                        ".pyo" ->
+                                            case file:delete(Path) of
+                                                ok ->
+                                                    io:format("Deleted .pyo: ~s~n", [Path]),
+                                                    ok;
+                                                {error, enoent} -> ok;
+                                                Error ->
+                                                    io:format("Error deleting .pyo ~s: ~p~n", [Path, Error]),
+                                                    Error
+                                            end;
+                                        _ ->
+                                            % Recursively process subdirectories (but skip .venv)
+                                            case filelib:is_dir(Path) of
+                                                true ->
+                                                    case Item of
+                                                        ".venv" -> ok; % Skip virtual environment
+                                                        _ -> delete_python_caches_recursive(Path)
+                                                    end;
+                                                false -> ok
+                                            end
+                                    end
+                            end
+                        end,
+                        Items
+                    ),
+                    case lists:filter(fun(R) -> R =/= ok end, Results) of
+                        [] -> ok;
+                        Errors -> {error, Errors}
+                    end;
+                Error ->
+                    Error
+            end;
+        false ->
+            ok
+    end.
+
+%% Helper function to recursively delete a directory and all its contents
+delete_directory_recursive(Dir) ->
+    case filelib:is_dir(Dir) of
+        true ->
+            % Get all files and directories
+            case file:list_dir(Dir) of
+                {ok, Files} ->
+                    % Delete each item (file or subdirectory)
+                    DeleteResult = lists:foldl(
+                        fun(Item, Acc) ->
+                            Path = filename:join(Dir, Item),
+                            case filelib:is_dir(Path) of
+                                true ->
+                                    % Recursively delete subdirectory
+                                    case delete_directory_recursive(Path) of
+                                        ok -> Acc;
+                                        Error -> [{subdir_error, Path, Error} | Acc]
+                                    end;
+                                false ->
+                                    % Delete file
+                                    case file:delete(Path) of
+                                        ok -> Acc;
+                                        {error, enoent} -> Acc; % Already deleted
+                                        Error -> [{file_error, Path, Error} | Acc]
+                                    end
+                            end
+                        end,
+                        [],
+                        Files
+                    ),
+                    % If any deletions failed, return error
+                    case DeleteResult of
+                        [] ->
+                            % All files deleted, now delete the directory itself
+                            case file:del_dir(Dir) of
+                                ok -> ok;
+                                {error, enoent} -> ok; % Already deleted
+                                {error, enotempty} ->
+                                    % Directory still not empty, try again
+                                    delete_directory_recursive(Dir);
+                                Error -> Error
+                            end;
+                        Errors ->
+                            {error, {deletion_errors, Errors}}
+                    end;
+                Error ->
+                    Error
+            end;
+        false ->
+            ok
+    end.
+
+
+        %% ============================================================================
 %% AGENT FOLDER MANAGEMENT
 %% ============================================================================
 

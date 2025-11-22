@@ -42,12 +42,10 @@ start(Agent_Id,PM_PId)->
 	start(Agent_Id,PM_PId,gt).
 
 start(Agent_Id,PM_PId,OpMode)->
-	%io:format("Starting exoself:~n  Agent_Id: ~p~n  PM_PId: ~p~n  OpMode: ~p~n", [Agent_Id, PM_PId, OpMode]),
 	spawn(exoself,prep,[Agent_Id,PM_PId,OpMode]).
 %The start/3 function spawns a new Agent_Id exoself process, belonging to the population_monitor process with the pid PM_PId, and using the OpMode with which it was spawned.
 
 prep(Agent_Id,PM_PId,OpMode)->
-	%fx:log(io_lib:format("Preparing exoself:~p OpMode:~p~n",[Agent_Id,OpMode])),
 	random:seed(now()),
 	IdsNPIds = ets:new(idsNpids,[set,private]),
 	A = genotype:dirty_read({agent,Agent_Id}),
@@ -57,14 +55,10 @@ prep(Agent_Id,PM_PId,OpMode)->
 	AIds = Cx#cortex.actuator_ids,
 	NIds = Cx#cortex.neuron_ids,
 	ScapePIds = spawn_Scapes(IdsNPIds,SIds,AIds,Agent_Id,OpMode),
-	%fx:log(io_lib:format("ScapePIds:~p~n",[ScapePIds])),
-	%qlog:init_debug(self(), io_lib:format("Starting cerebral unit spawning | Cortex: 1 | Sensors: ~p | Actuators: ~p | Neurons: ~p", [length(SIds), length(AIds), length(NIds)])),
 	spawn_CerebralUnits(IdsNPIds,cortex,[Cx#cortex.id]),
 	spawn_CerebralUnits(IdsNPIds,sensor,SIds),
 	spawn_CerebralUnits(IdsNPIds,actuator,AIds),
 	spawn_CerebralUnits(IdsNPIds,neuron,NIds),
-	%qlog:init_debug(self(), io_lib:format("Completed cerebral unit spawning | NIds: ~p", [NIds])),
-	%fx:log(io_lib:format("1SIDs:~p AIDs:~p NIDs:~p~n",[SIds,AIds,NIds])),
 	case A#agent.encoding_type of
 		substrate ->
 			Substrate_Id=A#agent.substrate_id,
@@ -91,73 +85,50 @@ prep(Agent_Id,PM_PId,OpMode)->
 			CEP_PIds=[],
 			Substrate_PId = undefined
 	end,
-	%fx:log(io_lib:format("Substrate_PId:~p~n",[Substrate_PId])),
 	link_Sensors(SIds,IdsNPIds,OpMode),
-	%fx:log(io_lib:format("Linked Sensors for Agent:~p SIds:~p~n",[Agent_Id,SIds])),
 	link_Actuators(AIds,IdsNPIds,OpMode),
-	%fx:log(io_lib:format("Linked Actuators for Agent:~p AIds:~p~n",[Agent_Id,AIds])),
-	%qlog:init_debug(self(), io_lib:format("Starting neuron linking | NIds: ~p", [NIds])),
 	link_Neurons(NIds,IdsNPIds,HeredityType),
-	%qlog:init_debug(self(), io_lib:format("Completed neuron linking | NIds: ~p", [NIds])),
-	%fx:log(io_lib:format("2SIDs:~p AIDs:~p NIDs:~p~n",[SIds,AIds,NIds])),
 		{SPIds,NPIds,APIds}=link_Cortex(Cx,IdsNPIds),
-		%qlog:init_debug(self(), io_lib:format("Substrate initialized | SPIds: ~p | NPIds: ~p | APIds: ~p | CPP_PIds: ~p | CEP_PIds: ~p | Sensors: ~p | Actuators: ~p", [SPIds, NPIds, APIds, CPP_PIds, CEP_PIds, length(SPIds), length(APIds)])),
 	Cx_PId = ets:lookup_element(IdsNPIds,Cx#cortex.id,2),
-	%fx:log(io_lib:format("Cx_PId:~p~n",[Cx_PId])),
 	{TuningDurationFunction,Parameter} = A#agent.tuning_duration_f,
-	S = #state{
-		agent_id=Agent_Id,
-		generation=A#agent.generation,
-		pm_pid=PM_PId,
-		idsNpids=IdsNPIds,
-		cx_pid=Cx_PId,
-		specie_id=A#agent.specie_id,
-		spids=SPIds,
-		npids=NPIds,
-		nids=NIds,
-		apids=APIds,
-		substrate_pid=Substrate_PId,
-		cpp_pids = CPP_PIds,
-		cep_pids = CEP_PIds,
-		scape_pids=ScapePIds,
-		max_attempts= tuning_duration:TuningDurationFunction(Parameter,NIds,A#agent.generation),
-		tuning_selection_f=A#agent.tuning_selection_f,
-		annealing_parameter=A#agent.annealing_parameter,
-		tuning_duration_f=A#agent.tuning_duration_f,
-		perturbation_range=A#agent.perturbation_range,
-		opmode=OpMode
-	},
-	%io:format("S:~p~n",[{S,OpMode}]),
-	%fx:log(io_lib:format("Agent:~p Specie:~p Generation:~p~n",[S#state.agent_id,S#state.specie_id,S#state.generation])),	
-	%fx:log(io_lib:format("State:~p, OpMode:~p~n",[S,OpMode])),
-	%qlog:agent(self(), io_lib:format("Agent ~p initialized | Gen: ~p | Specie: ~p | Mode: ~p | Neurons: ~p | Sensors: ~p | Actuators: ~p | MaxAttempts: ~p", [Agent_Id, S#state.generation, S#state.specie_id, OpMode, length(NPIds), length(SPIds), length(APIds), S#state.max_attempts])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("RUN_START | Agent: ~p | Gen: ~p | Morphology: ~p | Encoding: ~p | Innovation: ~p | Sensors: ~p | Actuators: ~p | Neurons: ~p", [Agent_Id, A#agent.generation, A#agent.constraint#constraint.morphology, A#agent.encoding_type, A#agent.innovation_factor, length(SPIds), length(APIds), length(NPIds)])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("SensorDetails: ~p", [[{S_Rec#sensor.name, S_Rec#sensor.type, S_Rec#sensor.vl, length(S_Rec#sensor.fanout_ids), S_Rec#sensor.parameters, S_Rec#sensor.generation} || {S_Id, _} <- SPIds, S_Rec <- [genotype:dirty_read({sensor, S_Id})]]])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("ActuatorDetails: ~p", [[{A_Rec#actuator.name, A_Rec#actuator.type, A_Rec#actuator.vl, length(A_Rec#actuator.fanin_ids), A_Rec#actuator.parameters, A_Rec#actuator.generation} || {A_Id, _} <- APIds, A_Rec <- [genotype:dirty_read({actuator, A_Id})]]])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("SubstrateCPPs: ~p", [case A#agent.encoding_type of substrate -> Sub_RecCPP = genotype:dirty_read({substrate, A#agent.substrate_id}), [{CPP_Rec#sensor.name, CPP_Rec#sensor.type, CPP_Rec#sensor.vl} || CPP_Id <- Sub_RecCPP#substrate.cpp_ids, CPP_Rec <- [genotype:dirty_read({sensor, CPP_Id})]]; neural -> [] end])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("SubstrateCEPs: ~p", [case A#agent.encoding_type of substrate -> Sub_RecCEP = genotype:dirty_read({substrate, A#agent.substrate_id}), [{CEP_Rec#actuator.name, CEP_Rec#actuator.type, CEP_Rec#actuator.vl} || CEP_Id <- Sub_RecCEP#substrate.cep_ids, CEP_Rec <- [genotype:dirty_read({actuator, CEP_Id})]]; neural -> [] end])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("NeuronArchitecture: Pattern: ~p | AF_Distribution: ~p", [A#agent.pattern, dict:to_list(lists:foldl(fun(AF, Dict) -> dict:update_counter(AF, 1, Dict) end, dict:new(), [N_Rec#neuron.af || {N_Id, _} <- NPIds, N_Rec <- [genotype:dirty_read({neuron, N_Id})]]))])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("Architecture: ~p | Sensors: ~p | Neurons: ~p | Actuators: ~p", [A#agent.constraint#constraint.connection_architecture, length(Cx#cortex.sensor_ids), length(Cx#cortex.neuron_ids), length(Cx#cortex.actuator_ids)])),
-	%qlog:agent_morph(S#state.specie_id, io_lib:format("Substrate: ~p", [case A#agent.encoding_type of substrate -> Sub_Rec2 = genotype:dirty_read({substrate, A#agent.substrate_id}), {Sub_Rec2#substrate.plasticity, Sub_Rec2#substrate.linkform, Sub_Rec2#substrate.densities, length(Sub_Rec2#substrate.cpp_ids), length(Sub_Rec2#substrate.cep_ids)}; neural -> none end])),
+		S = #state{
+			agent_id=Agent_Id,
+			generation=A#agent.generation,
+			pm_pid=PM_PId,
+			idsNpids=IdsNPIds,
+			cx_pid=Cx_PId,
+			specie_id=A#agent.specie_id,
+			spids=SPIds,
+			npids=NPIds,
+			nids=NIds,
+			apids=APIds,
+			substrate_pid=Substrate_PId,
+			cpp_pids = CPP_PIds,
+			cep_pids = CEP_PIds,
+			scape_pids=ScapePIds,
+			max_attempts= tuning_duration:TuningDurationFunction(Parameter,NIds,A#agent.generation),
+			tuning_selection_f=A#agent.tuning_selection_f,
+			annealing_parameter=A#agent.annealing_parameter,
+			tuning_duration_f=A#agent.tuning_duration_f,
+			perturbation_range=A#agent.perturbation_range,
+			opmode=OpMode
+		},
+	Sensors2=[genotype:dirty_read({sensor,SId})||SId <- SIds],
+	%qlog:benchmarker(S#state.agent_id,io_lib:format("Agent Sensors Names: ~p, Sensor vl: ~p",[lists:map(fun(Sensor) -> Sensor#sensor.name end, Sensors2), lists:map(fun(Sensor) -> Sensor#sensor.vl end, Sensors2)])),
 	loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 
 loop(S,gt)->
 	receive
 		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
-			%io:format("E Msg:~p~n E S:~p~n",[{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag},S]),
-			%qlog:l1msg(self(), io_lib:format("Evaluation completed | Attempt: ~p | Fitness: ~p | PrevFitness: ~p | Cycles: ~p | Time: ~pms | Goal: ~p", [S#state.attempt, Fitness, S#state.highest_fitness, Cycles, Time, GoalReachedFlag])),
-			%qlog:training(self(), io_lib:format("Attempt ~p | Fitness: ~p | PrevBest: ~p | Cycles: ~p | Time: ~pms", [S#state.attempt, Fitness, S#state.highest_fitness, Cycles, Time])),
+			qlog:benchmarker(S#state.agent_id,io_lib:format("TRAIN_EVAL | attempt=~p | fitness=~p | cycles=~p | time=~p",[S#state.attempt,Fitness,Cycles,Time])),
 			IdsNPIds = S#state.idsNpids,
 			{U_HighestFitness,U_Attempt}=case Fitness > S#state.highest_fitness of
 				true ->
-					%qlog:l1msg(self(), io_lib:format("Weight backup | Attempt: ~p | CurrentFitness: ~p | Neurons: ~p", [S#state.attempt, Fitness, length(S#state.npids)])),
-					%qlog:training(self(), io_lib:format("Fitness improved! | Attempt: ~p | NewFitness: ~p | Neurons: ~p", [S#state.attempt, Fitness, length(S#state.npids)])),
 					[NPId ! {self(),weight_backup} || NPId <- S#state.npids],
 					{Fitness,0};
 				false ->
 					Perturbed_NIdPs=get(perturbed),
-					%qlog:l1msg(self(), io_lib:format("Weight restore | Attempt: ~p | BadFitness: ~p | GoodFitness: ~p | Perturbed neurons: ~p", [S#state.attempt, Fitness, S#state.highest_fitness, length(Perturbed_NIdPs)])),
 					[ets:lookup_element(IdsNPIds,NId,2) ! {self(),weight_restore} || {NId,_Spread} <- Perturbed_NIdPs],
 					{S#state.highest_fitness,S#state.attempt+1}
 			end,
@@ -188,13 +159,7 @@ loop(S,gt)->
 					A=genotype:dirty_read({agent,S#state.agent_id}),
 					genotype:write(A#agent{fitness=U_HighestFitness}),
 					backup_genotype(S#state.idsNpids,S#state.npids),
-					%qlog:agent_morph(S#state.specie_id, io_lib:format("RUN_END | Agent: ~p | Gen: ~p | Evolution: ~p mutations | ~s", [S#state.agent_id, A#agent.generation, length(A#agent.evo_hist), lists:flatten(lists:join(" -> ", lists:map(fun(Op) -> case Op of {{MutOp, _}, _, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _} -> atom_to_list(MutOp); {MutOp, _, _, _} -> atom_to_list(MutOp); {MutOp, _, _} -> atom_to_list(MutOp); {MutOp, _} -> atom_to_list(MutOp); {MutOp} -> atom_to_list(MutOp); _ -> "unknown" end end, A#agent.evo_hist)))])),
-					%qlog:agent_morph(S#state.specie_id, io_lib:format("Final: Sensors: ~p | Neurons: ~p | Actuators: ~p | Fitness: ~p | Innovation: ~p", [length(S#state.spids), length(S#state.npids), length(S#state.apids), A#agent.fitness, A#agent.innovation_factor])),
-					%qlog:agent_morph(S#state.specie_id, io_lib:format("Final_Substrate: CPPs: ~p | CEPs: ~p", [case A#agent.encoding_type of substrate -> Sub_Rec = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec#substrate.cpp_ids); neural -> 0 end, case A#agent.encoding_type of substrate -> Sub_Rec2 = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec2#substrate.cep_ids); neural -> 0 end])),
-					%qlog:agent(self(), io_lib:format("Agent completed | Mode: gt | Fitness: ~p | Cycles: ~p | Time: ~pms | Attempts: ~p", [U_HighestFitness, U_CycleAcc, U_TimeAcc, U_Attempt])),
 					terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-					%qlog:agent(self(), io_lib:format("Agent terminating | Reason: training_complete", [])),
-					%io:format("Agent:~p terminating. Genotype has been backed up.~n Fitness:~p~n TotEvaluations:~p~n TotCycles:~p~n TimeAcc:~p~n",[self(),U_HighestFitness,U_EvalAcc,U_CycleAcc,U_TimeAcc]),
 					case GoalReachedFlag of
 						true ->
 							gen_server:cast(S#state.pm_pid,{S#state.agent_id,goal_reached});
@@ -207,12 +172,8 @@ loop(S,gt)->
 					PerturbationRange = S#state.perturbation_range,
 					AnnealingParameter = S#state.annealing_parameter,
 					ChosenNIdPs=tuning_selection:TuningSelectionFunction(S#state.nids,S#state.generation,PerturbationRange,AnnealingParameter),
-					%qlog:l1msg(self(), io_lib:format("Weight perturb | Attempt: ~p | Perturbing neurons: ~p | Spreads: ~p", [U_Attempt, length(ChosenNIdPs), [Spread || {_NId, Spread} <- ChosenNIdPs]])),
-					%qlog:training(self(), io_lib:format("Weight perturbation | Attempt: ~p | Neurons: ~p | Spreads: ~p", [U_Attempt, length(ChosenNIdPs), [Spread || {_NId, Spread} <- ChosenNIdPs]])),
 					[ets:lookup_element(IdsNPIds,NId,2) ! {self(),weight_perturb,Spread} || {NId,Spread} <- ChosenNIdPs],
-					%io:format("ChosenNPIds:~p~n",[ChosenNIdPs]),
 					put(perturbed,ChosenNIdPs),
-					%qlog:l2msg(self(), io_lib:format("ExoSelf -> Cortex | MSG: {~p, reactivate} | Attempt: ~p", [self(), U_Attempt])),
 					Cx_PId ! {self(),reactivate},
 					U_S =S#state{
 						cycle_acc=U_CycleAcc,
@@ -229,24 +190,16 @@ loop(S,gt)->
 loop(S,benchmark)->
 	receive
 		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
-			A=genotype:dirty_read({agent,S#state.agent_id}), %qlog:agent_morph(S#state.specie_id, io_lib:format("RUN_END | Agent: ~p | Gen: ~p | Evolution: ~p mutations | ~s", [S#state.agent_id, A#agent.generation, length(A#agent.evo_hist), lists:flatten(lists:join(" -> ", lists:map(fun(Op) -> case Op of {{MutOp, _}, _, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _} -> atom_to_list(MutOp); {MutOp, _, _, _} -> atom_to_list(MutOp); {MutOp, _, _} -> atom_to_list(MutOp); {MutOp, _} -> atom_to_list(MutOp); {MutOp} -> atom_to_list(MutOp); _ -> "unknown" end end, A#agent.evo_hist)))])),
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("Final: Sensors: ~p | Neurons: ~p | Actuators: ~p | Fitness: ~p | Innovation: ~p", [length(S#state.spids), length(S#state.npids), length(S#state.apids), Fitness, A#agent.innovation_factor])),
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("Final_Substrate: CPPs: ~p | CEPs: ~p", [case A#agent.encoding_type of substrate -> Sub_Rec = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec#substrate.cpp_ids); neural -> 0 end, case A#agent.encoding_type of substrate -> Sub_Rec2 = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec2#substrate.cep_ids); neural -> 0 end])),
-			%qlog:agent(self(), io_lib:format("Agent completed | Mode: benchmark | Fitness: ~p | Cycles: ~p | Time: ~pms | Goal: ~p", [Fitness, Cycles, Time, GoalReachedFlag])),
+			A=genotype:dirty_read({agent,S#state.agent_id}),
 			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			%qlog:agent(self(), io_lib:format("Agent terminating | Reason: benchmark_complete", [])),
 			io:format("Benchmark complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
 			S#state.pm_pid ! {self(),benchmark_complete,S#state.specie_id,Fitness,Cycles,Time}
 	end;
 loop(S,test)->
 	receive
 		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
-			A=genotype:dirty_read({agent,S#state.agent_id}), %qlog:agent_morph(S#state.specie_id, io_lib:format("RUN_END | Agent: ~p | Gen: ~p | Evolution: ~p mutations | ~s", [S#state.agent_id, A#agent.generation, length(A#agent.evo_hist), lists:flatten(lists:join(" -> ", lists:map(fun(Op) -> case Op of {{MutOp, _}, _, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _} -> atom_to_list(MutOp); {MutOp, _, _, _} -> atom_to_list(MutOp); {MutOp, _, _} -> atom_to_list(MutOp); {MutOp, _} -> atom_to_list(MutOp); {MutOp} -> atom_to_list(MutOp); _ -> "unknown" end end, A#agent.evo_hist)))])),
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("Final: Sensors: ~p | Neurons: ~p | Actuators: ~p | Fitness: ~p | Innovation: ~p", [length(S#state.spids), length(S#state.npids), length(S#state.apids), Fitness, A#agent.innovation_factor])),
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("Final_Substrate: CPPs: ~p | CEPs: ~p", [case A#agent.encoding_type of substrate -> Sub_Rec = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec#substrate.cpp_ids); neural -> 0 end, case A#agent.encoding_type of substrate -> Sub_Rec2 = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec2#substrate.cep_ids); neural -> 0 end])),
-			%qlog:agent(self(), io_lib:format("Agent completed | Mode: test | Fitness: ~p | Cycles: ~p | Time: ~pms | Goal: ~p", [Fitness, Cycles, Time, GoalReachedFlag])),
+			A=genotype:dirty_read({agent,S#state.agent_id}),
 			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			%qlog:agent(self(), io_lib:format("Agent terminating | Reason: test_complete", [])),
 			io:format("Test complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
 			S#state.pm_pid ! {self(),benchmark_complete,S#state.specie_id,Fitness,Cycles,Time}
 	end;
@@ -254,24 +207,16 @@ loop(S,live_trading)->
 	receive
 		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
 			A=genotype:dirty_read({agent,S#state.agent_id}), 
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("RUN_END | Agent: ~p | Gen: ~p | Evolution: ~p mutations | ~s", [S#state.agent_id, A#agent.generation, length(A#agent.evo_hist), lists:flatten(lists:join(" -> ", lists:map(fun(Op) -> case Op of {{MutOp, _}, _, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _, _} -> atom_to_list(MutOp); {{MutOp, _}, _} -> atom_to_list(MutOp); {MutOp, _, _, _} -> atom_to_list(MutOp); {MutOp, _, _} -> atom_to_list(MutOp); {MutOp, _} -> atom_to_list(MutOp); {MutOp} -> atom_to_list(MutOp); _ -> "unknown" end end, A#agent.evo_hist)))])),
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("Final: Sensors: ~p | Neurons: ~p | Actuators: ~p | Fitness: ~p | Innovation: ~p", [length(S#state.spids), length(S#state.npids), length(S#state.apids), Fitness, A#agent.innovation_factor])),
-			%qlog:agent_morph(S#state.specie_id, io_lib:format("Final_Substrate: CPPs: ~p | CEPs: ~p", [case A#agent.encoding_type of substrate -> Sub_Rec = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec#substrate.cpp_ids); neural -> 0 end, case A#agent.encoding_type of substrate -> Sub_Rec2 = genotype:dirty_read({substrate, A#agent.substrate_id}), length(Sub_Rec2#substrate.cep_ids); neural -> 0 end])),
-			%qlog:agent(self(), io_lib:format("Agent completed | Mode: live_trading | Fitness: ~p | Cycles: ~p | Time: ~pms | Goal: ~p", [Fitness, Cycles, Time, GoalReachedFlag])),
 			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			%qlog:agent(self(), io_lib:format("Agent terminating | Reason: live_trading_complete", [])),
 			io:format("Live trading complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
 			S#state.pm_pid ! {self(),live_trading_complete,S#state.specie_id,Fitness,Cycles,Time}
 		end.
 %The exoself process' main loop awaits from its cortex proccess the evoluation_completed message. Once the message is received, based on the fitness achieved, exoself decides whether to continue tunning the weights or terminate the system. Exoself tries to improve the fitness by perturbing/tuning the weights of its neurons, after each tuning session, the Neural Network based system performs another evaluation by interacting with the scape until completion (the NN solves a problem, or dies within the scape or...). The order of events is important: When evaluation_completed message is received, the function first checks whether the newly achieved fitness is higher than the highest fitness achieved so far. If it is not, the function sends the neurons a message to restore their weights to previous state, during which it last acehived the highest fitness instead of their current state which yielded the current lower fitness score. If on the other hand the new fitness is higher than the previously highest achieved fitness, then the function tells the neurons to backup their current weights, as these weights represent the NN's best, most fit form yet. Exoself then tells all the neurons to prepare for a reset by sending each neuron the {self(),reset_prep} message. Since the NN can have recursive connections, and the manner in which initial recursive messages are sent, it is important for each neuron to flush their buffers to be reset into an initial fresh state, which is achieved after the neurons receive the reset_prep message. The function then sends the reset message to the neurons, which returns them into their main loop. Finally, the function checks whether exoself has already tried to improve the NN's fitness a maximum S#state.max_attempts number of times. If that is the case, the exoself process backs up the updated NN (the updated, tuned weights) to database using the backup_genotype/2 function, prints to screen that it is terminating, and sends to the population_monitor the acumulated statistics (highest fitness, evaluation count, cycle count...). On the other hand, if the exoself is not yet done tuning the neural weights, it has not yet reached its ending condition, it uses a tuning_selection_function to compose a list of tuples: [{NId,Spread}...] of neuron ids and the perturbation spread values, where the spread is the range from which the perturbation is randomly chosen. The spread itself is based on the age of the slected neuron, using the annealing_factor value, which when set to 1 implies that there is no annealing, and when set to a value less than 1, decreases the Spread. Once this list of elements is composed, the exoself sends each of the neurons a message to perturb their synaptic weights using the Spread value. The exoself then reactivates the cortex, and drops back into its main loop.
 
 spawn_CerebralUnits(IdsNPIds,CerebralUnitType,[Id|Ids])-> 
-	%qlog:spawn_debug(self(), io_lib:format("Spawning ~p | Id: ~p", [CerebralUnitType, Id])),
 	PId = CerebralUnitType:gen(self(),node()),
-	%qlog:spawn_debug(self(), io_lib:format("Spawned ~p | Id: ~p | PId: ~p", [CerebralUnitType, Id, PId])),
 	ets:insert(IdsNPIds,{Id,PId}), 
 	ets:insert(IdsNPIds,{PId,Id}), 
-	%qlog:ets_debug(self(), io_lib:format("ETS inserted ~p | Id: ~p | PId: ~p", [CerebralUnitType, Id, PId])),
 	spawn_CerebralUnits(IdsNPIds,CerebralUnitType,Ids); 
 spawn_CerebralUnits(IdsNPIds,_CerebralUnitType,[])-> 
 	ets:insert(IdsNPIds,{bias,bias}).
@@ -292,20 +237,14 @@ spawn_Scapes(IdsNPIds,Sensor_Ids,Actuator_Ids,Agent_Id,OpMode)->
                     {scape:gen(self(),node()), ScapeName}
             end
         || {private, ScapeName} <- Mapped_Scapes],
-        %fx:log(io_lib:format("Private_SN_Tuples:~p~n",[Private_SN_Tuples])),
-        %fx:log(io_lib:format("Mapped_Scapes:~p, OpMode:~p, Agent_Id:~p~n",[Mapped_Scapes,OpMode,Agent_Id])),
         [ets:insert(IdsNPIds,{ScapeName,PId}) || {PId,ScapeName} <- Private_SN_Tuples], 
         [ets:insert(IdsNPIds,{PId,ScapeName}) || {PId,ScapeName} <-Private_SN_Tuples],
-        %[%fx:log(io_lib:format("Sending to Scape:~p Message ~p~n", [PId, {self(), ScapeName}])) || {PId, ScapeName} <- Private_SN_Tuples],
         %% Send handshake to all scapes (live_scape exits init on this)
         [PId ! {self(), ScapeName} || {PId, ScapeName} <- Private_SN_Tuples],
-        %fx:log(io_lib:format("Spawned Scapes for Agent:~p Scapes:~p~n",[Agent_Id,Private_SN_Tuples])),
         [PId || {PId,_ScapeName} <-Private_SN_Tuples].
     map_live_scapes(Unique_Scapes, live_trading) ->
-        %fx:log(io_lib:format("Mapping live_trading scapes:~p~n",[Unique_Scapes])),
         [maybe_live(Sc) || Sc <- Unique_Scapes];
     map_live_scapes(Unique_Scapes, _Other) ->
-        %fx:log(io_lib:format("Not mapping scapes:~p~n",[Unique_Scapes])),
         Unique_Scapes.
 
     maybe_live({private, fx_sim}) -> {private, live_sim};
@@ -327,7 +266,6 @@ ensure_live_scape_started() ->
     end.
 
 		enter_PublicScape(IdsNPIds,Sensor_Ids,Actuator_Ids,Agent_Id)->
-			%io:format("SIds:~p AIds:~p~n",[Sensor_Ids,Actuator_Ids]),
 			A = genotype:dirty_read({agent,Agent_Id}),
 			Sensors = [genotype:dirty_read({sensor,Id}) || Id<-Sensor_Ids],
 			Actuators = [genotype:dirty_read({actuator,Id}) || Id<-Actuator_Ids],
@@ -336,7 +274,6 @@ ensure_live_scape_started() ->
 			Sensor_Scapes = [Sensor#sensor.scape || Sensor<-Sensors], 
 			Actuator_Scapes = [Actuator#actuator.scape || Actuator<-Actuators], 
 			Unique_Scapes = Sensor_Scapes++(Actuator_Scapes--Sensor_Scapes),
-			%io:format("Unique_Scapes:~p~n",[Unique_Scapes]),
 			Public_SN_Tuples=[{gen_server:call(polis,{get_scape,ScapeName}),ScapeName} || {public,ScapeName}<-Unique_Scapes],
 			[gen_server:call(PId,{enter,Morphology,Agent_Id,Sensors,Actuators,TotNeurons}) || {PId,ScapeName} <- Public_SN_Tuples].
 			
@@ -347,46 +284,33 @@ ensure_live_scape_started() ->
 			ok.
 
 	link_Sensors([SId|Sensor_Ids],IdsNPIds,OpMode) ->
-		%fx:log(io_lib:format("Linking Sensor SID:~p, Sensor_Ids:~p, IDsNPIds:~p, OpMode:~p~n",[SId,Sensor_Ids,IdsNPIds,OpMode])),
 		S=genotype:dirty_read({sensor,SId}),
 		SPId = ets:lookup_element(IdsNPIds,SId,2),
-		%fx:log(io_lib:format("Linking Sensor SId:~p to SPId:~p~n",[SId,SPId])),
 		Cx_PId = ets:lookup_element(IdsNPIds,S#sensor.cx_id,2),
-		%fx:log(io_lib:format("Linking Sensor SId:~p to Cx_PId:~p~n",[SId,Cx_PId])),	
 		SName = S#sensor.name,
 		Fanout_Ids = S#sensor.fanout_ids,
 		Fanout_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- Fanout_Ids],
-		%fx:log(io_lib:format("Linking Sensor SId:~p to Fanout_PIds:~p~n",[SId,Fanout_PIds])),
 		Scape=case S#sensor.scape of
 			{private,ScapeName}->
             MappedScapeName = maybe_map_scape_name(ScapeName, OpMode),
-				%fx:log(io_lib:format("IdsNPIds:~p, ScapeName:~p -> Mapped:~p~n",[IdsNPIds,ScapeName,MappedScapeName])),
 				ets:lookup_element(IdsNPIds,MappedScapeName,2)
     	end,
-		%fx:log(io_lib:format("Linking Sensor SId:~p to Scape:~p~n",[SId,Scape])),
 		SPId ! {self(),{SId,Cx_PId,Scape,SName,S#sensor.vl,S#sensor.parameters,Fanout_PIds,OpMode}},
-		%fx:log(io_lib:format("Linked Sensor SId:~p to SPId:~p, Cx_PId:~p, Scape:~p, Name:~p, VL:~p, Params:~p, Fanout_PIds:~p, OpMode:~p~n",[SId,SPId,Cx_PId,Scape,SName,S#sensor.vl,S#sensor.parameters,Fanout_PIds,OpMode])),
-		%fx:log(io_lib:format("Linking next Sensor Ids:~p, IDsNPIds:~p, OpMode:~p~n",[Sensor_Ids,IdsNPIds,OpMode])),
 		link_Sensors(Sensor_Ids,IdsNPIds,OpMode);
 	link_Sensors([],_IdsNPIds,_OpMode)->
-		%fx:log(io_lib:format("Finished linking sensors.~n",[])),
 		ok.
 %The link_Sensors/2 function sends to the already spawned and waiting sensors their states, composed of the PId lists and other information which are needed by the sensors to link up and interface with other elements in the distributed phenotype.
 
 	link_Actuators([AId|Actuator_Ids],IdsNPIds,OpMode) ->
-		%fx:log(io_lib:format("Linking Actuator AId:~p, Actuator_Ids:~p, IDsNPIds:~p, OpMode:~p~n",[AId,Actuator_Ids,IdsNPIds,OpMode])),
 		A=genotype:dirty_read({actuator,AId}),
-		%fx:log(io_lib:format("A record:~p~n",[A])),
 		APId = ets:lookup_element(IdsNPIds,AId,2),
 		Cx_PId = ets:lookup_element(IdsNPIds,A#actuator.cx_id,2),
 		AName = A#actuator.name,
 		Fanin_Ids = A#actuator.fanin_ids,
 		Fanin_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- Fanin_Ids],
-		%fx:log(io_lib:format("Link Actuator AId:~p to APId:~p, Actuator_Ids:~p, IDsNPIds:~p, OpMode:~p~n",[AId,APId,Actuator_Ids,IdsNPIds,OpMode])),
 		Scape=case A#actuator.scape of
 			{private,ScapeName}->
             MappedScapeName = maybe_map_scape_name(ScapeName, OpMode),
-				%fx:log(io_lib:format("Link Actuators: IdsNPIds:~p, ScapeName:~p -> Mapped:~p~n",[IdsNPIds,ScapeName,MappedScapeName])),
 				ets:lookup_element(IdsNPIds,MappedScapeName,2)
 		end,
 		APId ! {self(),{AId,Cx_PId,Scape,AName,A#actuator.parameters,Fanin_PIds,OpMode}},
@@ -423,15 +347,12 @@ ensure_live_scape_started() ->
 
 link_Neurons([NId|Neuron_Ids],IdsNPIds,HeredityType) ->
 	N=genotype:dirty_read({neuron,NId}),
-	%qlog:ets_debug(self(), io_lib:format("Looking up neuron in ETS | NId: ~p", [NId])),
 	NPId = try
 		ets:lookup_element(IdsNPIds,NId,2)
 	catch
 		error:badarg ->
-			%qlog:l1msg(self(), io_lib:format("CRITICAL: Neuron not found in ETS | NId: ~p | ETS Contents: ~p", [NId, ets:tab2list(IdsNPIds)])),
 			throw({neuron_not_found, NId, IdsNPIds})
 	end,
-	%qlog:ets_debug(self(), io_lib:format("Found neuron in ETS | NId: ~p | NPId: ~p", [NId, NPId])),
 	Cx_PId = ets:lookup_element(IdsNPIds,N#neuron.cx_id,2),
 		AFName = N#neuron.af,
 		PFName = N#neuron.pf,
@@ -466,7 +387,6 @@ link_Neurons([NId|Neuron_Ids],IdsNPIds,HeredityType) ->
 		NPIds = [ets:lookup_element(IdsNPIds,NId,2) || NId <- NIds],
 		APIds = [ets:lookup_element(IdsNPIds,AId,2) || AId <- AIds],
 		Cx_PId ! {self(),Cx_Id,SPIds,NPIds,APIds},
-		%fx:log(io_lib:format("Linked Cortex:~p SIds:~p AIds:~p NIds:~p~n",[Cx_PId,SIds,AIds,NIds])),
 		{SPIds,NPIds,APIds}.
 %The link_Cortex/2 function sends to the already spawned and waiting cortex its state, composed of the PId lists and other information which is needed by the cortex to link up and interface with other elements in the distributed phenotype.
 
@@ -491,7 +411,6 @@ backup_genotype(IdsNPIds,NPIds)->
 		Updated_MI_IdPs = convert_PIdPs2IdPs(IdsNPIds,MI_PIdPs,[]),
 		U_N = N#neuron{input_idps = Updated_SI_IdPs,input_idps_modulation=Updated_MI_IdPs},
 		genotype:write(U_N),
-		%io:format("N:~p~n U_N:~p~n Genotype:~p~n U_Genotype:~p~n",[N,U_N,Genotype,U_Genotype]),
 		update_genotype(IdsNPIds,WeightPs);
 	update_genotype(_IdsNPIds,[])->
 		ok.

@@ -40,7 +40,6 @@ init_scape() ->
     %% Enter main loop
     receive
         {ExoSelfPid, live_sim} ->
-            %fx:log(io_lib:format("Starting live simulation for: ~p~n", [ExoSelfPid])),
             live_sim(ExoSelfPid, PythonPort)
     end.
 
@@ -61,9 +60,7 @@ prep(ExoSelfPid) ->
 live_sim(ExoSelfPid, PythonPort) ->
     %% Default live table from config (e.g., 'EURUSD1_LIVE')
     DefaultTable = config:primary_currency_pair(),
-    %fx:log(io_lib:format("Ensure Live Table: ~p~n", [DefaultTable])),
     ensure_live_table(DefaultTable),
-    %fx:log("Live table ensured."),
     LiveState = #live_state{table_name = DefaultTable},
     State = #python_state{live_state = LiveState, python_port = PythonPort},
     loop(ExoSelfPid, State).
@@ -72,13 +69,9 @@ loop(ExoSelfPid, State = #python_state{}) ->
     receive
         %% Neural network sensor requests (maintain exact compatibility)
         {From, sense, TableName, Feature, Parameters, _Start, _Finish} ->
-            %fx:log(io_lib:format("Received sense request from Exoself: ~p, Table: ~p, Feature: ~p, Parameters: ~p~n",[From, TableName, Feature, Parameters])),
             {Result, NewState} = handle_sense(TableName, Feature, Parameters, State),
-            %fx:log(io_lib:format("Result: ~p, NewState: ~p~n", [Result, NewState])),
-            %fx:log(io_lib:format("recieved sense request: ~p ~p ~p~n", [TableName, Feature, Parameters])),
             %% Code for getting the data from the live table
             From ! {self(), Result},
-            %fx:log("Sent sense response."),
             loop(ExoSelfPid, NewState);
         {From, sense, internals, _Params} ->
             LiveState = State#python_state.live_state,
@@ -113,16 +106,12 @@ loop(ExoSelfPid, State = #python_state{}) ->
 %% ============================================================================
 
 handle_sense(TableName, _Feature, Parameters, State) ->
-    %fx:log(io_lib:format("handle_sense called: ~p ~p ~p~n", [TableName, _Feature, Parameters])),
     Table = resolve_table(TableName, State),
-    %fx:log(io_lib:format("Resolved table: ~p~n", [Table])),
     case Parameters of
         [HRes, list_sensor] ->
-            %fx:log(io_lib:format("Handling list_sensor with HRes: ~p~n", [HRes])),
             {PriceList, NewState} = get_price_list(Table, HRes, State),
             {[Close || {_O, Close, _H, _L} <- PriceList], NewState};
         [HRes, VRes, graph_sensor] ->
-            %fx:log(io_lib:format("Handling graph_sensor with HRes: ~p, VRes: ~p~n", [HRes, VRes])),
             {PriceList, NewState} = get_price_list(Table, HRes, State),
             {encode_to_plane(HRes, VRes, PriceList), NewState};
         _ ->
@@ -132,21 +121,13 @@ handle_sense(TableName, _Feature, Parameters, State) ->
 get_price_list(Table, HRes, State) ->
     LiveState = State#python_state.live_state,
     ensure_live_table(Table),
-    %fx:log(io_lib:format("Getting price list from table: ~p with HRes: ~p~n", [Table, HRes])),
-
     %% LastSent gating inside this function (non-blocking, mailbox-friendly)
     LastSentKey = {last_sent, Table, HRes},
-    %fx:log(io_lib:format("LastSentKey: ~p~n", [LastSentKey])),  
     LastSent = get(LastSentKey),
-    %fx:log(io_lib:format("LastSent: ~p~n", [LastSent])),
 
     Wait = fun Loop(StateAcc) ->
-        %fx:log(io_lib:format("Entering Wait loop..., StateAcc: ~p~n", [StateAcc])),
         Size = ets:info(Table, size),
-        %fx:log(io_lib:format("all Ets tables: ~p~n", [ets:all()])),
-        %fx:log(io_lib:format("Table size: ~p, Table: ~p~n", [Size, Table])),
         EnoughBars = (is_integer(Size) andalso Size >= HRes),
-        %fx:log(io_lib:format("EnoughBars: ~p~n", [EnoughBars])),
         {EnoughNew, LastKeyNow} =
             case ets:last(Table) of
                 '$end_of_table' -> {false, '$end_of_table'};
@@ -175,9 +156,7 @@ get_price_list(Table, HRes, State) ->
     ReadyState = Wait(State),
 
     %% Fetch latest bars from ETS
-    %fx:log(io_lib:format("Fetching last ~p bars from table ~p~n", [HRes, Table])),
     LastKey = ets:last(Table),
-    %fx:log(io_lib:format("Last key in table ~p is ~p~n", [Table, LastKey])),
     PriceList =
         case LastKey of
             '$end_of_table' ->
@@ -395,7 +374,6 @@ handle_python_message(Message) ->
         <<"ohlc_bar">> ->
             OhlcData = maps:get(<<"data">>, Message, #{}),
             %% Route to the registered process safely using ?MODULE
-            %fx:log(io_lib:format("[Python->Erlang] ohlc_bar: ~p~n", [OhlcData])),
             case whereis(?MODULE) of
                 undefined -> ok;
                 Pid -> Pid ! {python_data, OhlcData}
@@ -455,7 +433,6 @@ handle_ohlc_bar(OhlcData) ->
          end,
     Rec = #technical{id = Id, open = O, high = H, low = L, close = C, volume = Vol},
     log_ohlc_bar(Id, O, H, L, C, Vol),
-    %fx:log(io_lib:format("live_scape: Inserting into ~p: ~p~n", [Table, Rec])),
     ets:insert(Table, Rec).
 
 %% New arity that also updates live state (previous_pc, unrealized_pnl)
@@ -481,7 +458,6 @@ handle_ohlc_bar(OhlcData, State = #python_state{live_state = LS0}) ->
          end,
     Rec = #technical{id = Id, open = O, high = H, low = L, close = C, volume = Vol},
     log_ohlc_bar(Id, O, H, L, C, Vol),
-    %fx:log(io_lib:format("live_scape2: Inserting into ~p: ~p~n", [Table, Rec])),
     ets:insert(Table, Rec),
 
     %% Update internals when in position
@@ -737,10 +713,8 @@ get_json_object_blob(Bin, Key) ->
 ensure_live_table(Table) when is_atom(Table) ->
     case ets:info(Table) of
         undefined ->
-            %fx:log(io_lib:format("Creating ETS table: ~p~n", [Table])),
             ets:new(Table, [ordered_set, public, named_table, {keypos, 2}]);
         _ -> 
-            %fx:log(io_lib:format("ETS table already exists: ~p~n", [Table])),
             ok
     end.
 
@@ -762,10 +736,8 @@ resolve_table(TableName, State) when is_atom(TableName) ->
     Name = atom_to_list(TableName),
     case lists:reverse(Name) of
         [$E,$V,$I,$L,$_|_] -> 
-            %fx:log(io_lib:format("Table name ~p already ends with _LIVE:~p, Name: ~p~n", [TableName, Name, lists:reverse(Name)])),
             TableName;              %% ends with "_LIVE"
         _ -> 
-            %fx:log(io_lib:format("Table name ~p does not end with _LIVE, converting to ~p~n", [TableName, Name ++ "_LIVE"])),
             list_to_atom(Name ++ "_LIVE")
     end;
 resolve_table(_Other, State = #python_state{}) ->

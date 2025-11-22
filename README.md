@@ -21,7 +21,7 @@ launcher:start().
 # Inside container:
 make:all().
 make:all([load]).
-fx:clear_log().
+qlog:delete_all().
 mnesia:create_schema([node()]).
 mnesia:start().
 fx:init().

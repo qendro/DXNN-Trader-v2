@@ -87,7 +87,7 @@ go()->
 	
 market_properties()->
 	rand:seed(exsss),
-	market_properties(config:primary_currency_pair(),close,[config:internal_sensor_dimensions(),list_sensor],config:market_props_start(),config:market_props_end()).
+	market_properties(config:primary_currency_pair(),close,[config:internal_sensor_dimensions(),list_sensor],config:gt_start(),config:gt_end()).
 market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 	max(CurrencyPair,Feature,Parameters,StartIndex,EndIndex),
 	erase().
@@ -149,7 +149,6 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 				NextIndex = fx:next(CurrencyPair,Index),
 				NextT = fx:lookup(CurrencyPair,NextIndex),
 				NextClose = NextT#technical.close,
-%				io:format("Close:~p NextClose:~p~n",[Close,NextClose]),
 				case (NextClose - Close) > 0 of
 					true ->
 						find_next_flip(CurrencyPair,NextIndex,NextClose,EndIndex,long);
@@ -163,7 +162,6 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 				NextIndex = fx:next(CurrencyPair,Index),
 				NextT = fx:lookup(CurrencyPair,NextIndex),
 				NextClose = NextT#technical.close,
-%				io:format("Close:~p NextClose:~p Close*NextClose:~p~n",[Close,NextClose,Close*NextClose]),
 				case (NextClose - Close) < 0 of
 					true ->
 						find_next_flip(CurrencyPair,NextIndex,NextClose,EndIndex,short);
@@ -233,7 +231,6 @@ tt(PId,TradeSignal)->
 % Defines the initial state and account, and starts the simulation loop for this PID
 % Calls the recursive sim/3 function to handle the simulation logic.
 sim(ExoSelf)->io:format("Started~n"),
-	%fx:log("FX Simulation Started sim(ExoSelf)"),
 	put(prev_PC,0),
 	S = #state{},
 	A = create_account(),
@@ -251,7 +248,6 @@ sim(ExoSelf)->io:format("Started~n"),
 % The function also handles a timeout of 10 seconds to recheck the state.
 % If the simulation is over, it returns the total profit and resets the state and account.
 sim(ExoSelf,S,A)-> 
-	%fx:log("FX Simulation sim(ExoSelf,S,A)"),
 	receive
 		{From,sense,TableName,Feature,Parameters,Start,Finish}->%Parameters:{VL,SignalEncoding}
 			% This is the main sensing signal that starts the simulation.
@@ -263,22 +259,16 @@ sim(ExoSelf,S,A)->
 			% The result is a tuple of the form {Result,U_S}, where Result is the sensed data and U_S is the updated state.
 			% If the table name is undefined, it initializes the state with the given parameters.
 			%io:format("******************************STARTING TO PROCESS SENSE SIGNAL******************************~n"),
-			%fx:log(io_lib:format("Sense Signal Received From: ~p Table: ~p Feature: ~p Parameters: ~p Start: ~p End: ~p~n",[From, TableName, Feature, Parameters, Start, Finish])),
 			{Result,U_S}=case S#state.table_name of
 				undefined ->
-					%fx:log(io_lib:format("undefined table name, initializing state for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,Start,Finish])),
 					sense(init_state(S,TableName,Feature,Start,Finish),Parameters);
 				CurrentTableName when CurrentTableName =:= TableName ->
-					%fx:log(io_lib:format("Table name match, continuing with current state for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,Start,Finish])),
 					sense(S,Parameters);
 				_OtherTableName ->
 					%% Table name mismatch, reinitialize state
-					%fx:log(io_lib:format("Table name mismatch, reinitializing state for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,Start,Finish])),
 					sense(init_state(S,TableName,Feature,Start,Finish),Parameters)
 			end,
-			%fx:log(io_lib:format("Sense Result: ~p, sending to ~p~n",[Result, From])),
-			From ! {self(),Result},
-			%io:format("State:~p~n",[U_S]),
+		From ! {self(),Result},
 			%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
 			case config:sensor_debug_tag() of
 				true ->
@@ -302,7 +292,6 @@ sim(ExoSelf,S,A)->
 			% Parameters is a list that can contain the resolution and type of sensor (e.g., graph_sensor, list_sensor).
 			% The result is a list of three elements: [Position, Entry, Previous_Percentage_Change].
 			% If there is no order, it returns [0, 0, 0].
-			%fx:log("Sense Internals Signal Received"),
 			Result = case A#account.order of
 				undefined ->
 					[0,0,0];
@@ -325,7 +314,6 @@ sim(ExoSelf,S,A)->
 			% The result is a tuple of the form {Result,U_A}, where Result is the trade result and U_A is the updated account.
 			% If the table name is undefined, it initializes the state with the given parameters.
 			%io:format("************************a******STARTING TO PROCESS TRADE SIGNAL******************************~n"),
-			%fx:log(io_lib:format("Trade Signal Received Table: ~p TradeSignal: ~p~n",[TableName,TradeSignal])),
 			U_A = make_trade(S,A,TradeSignal),
 			Total_Profit = A#account.balance + A#account.unrealized_PL,
 			
@@ -370,7 +358,6 @@ sim(ExoSelf,S,A)->
 		terminate ->
 			ok
 		after 10000 ->
-			%fx:log("Timeout Rechecking State"),
 			fx:sim(ExoSelf,S,A)
 	end.
 
@@ -390,21 +377,13 @@ sim(ExoSelf,S,A)->
 % The state record contains the table name, feature, start index, end index, and current index.
 % The state record is used to keep track of the current state of the simulation.
 init_state(S,TableName,Feature,StartBL,EndBL)->
-	%fx:log(io_lib:format("Initializing State for Table: ~p Feature: ~p Start: ~p End: ~p~n",[TableName,Feature,StartBL,EndBL])),
 	Index_End = case EndBL of
 		last ->
-			%fx:log(io_lib:format("last~n",[])),
-			%fx:log(io_lib:format("Table: ~p~n",[TableName])),
-			%fx:log(io_lib:format("List all ets Tables: ~p~n",[ets:all() ])),
-			%fx:log(io_lib:format("ets:last(~p)~n",[ets:last(TableName)])),
 			ets:last(TableName);
 		_ ->
-			%fx:log(io_lib:format("_->~p~n",[EndBL])),
-			%%fx:log(io_lib:format("prev(TableName,ets:last(TableName),prev,EndBL)~n",[prev(TableName,ets:last(TableName),prev,EndBL)])),
 			prev(TableName,ets:last(TableName),prev,EndBL)
 	end,
 	Index_Start = prev(TableName,ets:last(TableName),prev,StartBL),
-	%log(io_lib:format("Table: ~p Start: ~p End: ~p~n",[TableName,Index_Start,Index_End])),
 	S#state{
 		table_name = TableName,
 		feature = Feature,
@@ -433,14 +412,11 @@ update_state(S)->
 % It then calculates the change in price, percentage change, profit, unrealized profit/loss, and net asset value.
 % It updates the order with the current price
 update_account(S,A)->
-%	io:format("update_account(S:~p,A:~p)~n",[S,A]),
 	case A#account.order of
 		undefined ->
 			nothing_to_update,
 			A;
 		O ->
-%			io:format("Current Account & Order:~n"),
-%				r(A),r(O),
 			TableName = S#state.table_name,
 			Index = S#state.index,
 			Row = fx:lookup(TableName,Index),
@@ -457,8 +433,6 @@ update_account(S,A)->
 			Net_Asset_Value = Balance + Unrealized_PL,
 			U_O = O#order{current=Close,change=Change,percentage_change=Percentage_Change,profit=Profit},
 			U_A = A#account{unrealized_PL=Unrealized_PL,net_asset_value=Net_Asset_Value,order=U_O},
-%			io:format("Updated Account & Order: Close:~p Units:~p ~n",[Close,Units]),
-%				r(U_A),r(U_O),
 			put(prev_PC,O#order.percentage_change),
 			U_A
 	end.
@@ -567,8 +541,6 @@ list_encoded(HRes,S)->
 			U_PList = [{R#technical.open,R#technical.close,R#technical.high,R#technical.low}|lists:sublist(PList,HRes-1)],
 			U_PriceListPs = lists:keyreplace(HRes, 2, PriceListPs, {U_PList,HRes})
 	end,
-	%io:format("PriceList:~p~n",[U_PList]),
-	%io:format("List:~p~n",[[Close||{_Open,Close,_High,_Low}<-U_PList]]),
 	U_S=S#state{price_list=U_PriceListPs},
 	{[Close||{_Open,Close,_High,_Low}<-U_PList],U_S}.
 
@@ -604,17 +576,14 @@ plane_encoded(HRes,VRes,S)->
 	{l2fx(HRes*VRes,{U_PList,U_PList},V_StartPos,VStep,[]),U_S}.
 	
 	fx_GetPriceList(_Table,EndKey,0,Acc)->
-%		io:format("EndKey:~p~n",[EndKey]),
 		Acc;
 	fx_GetPriceList(_Table,'end_of_table',_Index,Acc)->
 		exit("fx_GetPriceList, reached end_of_table");
 	fx_GetPriceList(Table,Key,Index,Acc) ->
 		R = fx:lookup(Table,Key),
-		%io:format("R:~p~n",[R]),
 		fx_GetPriceList(Table,fx:next(Table,Key),Index-1,[{R#technical.open,R#technical.close,R#technical.high,R#technical.low}|Acc]).
 		
 	l2fx(Index,{[{Open,Close,High,Low}|VList],MemList},VPos,VStep,Acc)->
-%		io:format("Index:~p {Open,Close,High,Low}:~p VPos:~p VStep:~p~n",[Index,{Open,Close,High,Low},VPos,VStep]),
 		{BHigh,BLow} = case Open > Close of
 			true ->
 				{Open,Close};
@@ -632,13 +601,10 @@ plane_encoded(HRes,VRes,S)->
 						-1
 				end
 		end,
-		%io:format("Val:~p VPos:~p VStep:~p O:~p~n",[O,VPos,VStep,O]),
 		l2fx(Index-1,{VList,MemList},VPos,VStep,[O|Acc]);
 	l2fx(0,{[],_MemList},_VPos,_VStep,Acc)->
-		%io:format("~p~n",[Acc]),
 		Acc;
 	l2fx(Index,{[],MemList},VPos,VStep,Acc)->
-		%io:format("Acc:~p~n",[Acc]),
 		l2fx(Index,{MemList,MemList},VPos+VStep,VStep,Acc).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FX ACTUATORS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -807,7 +773,6 @@ insert_ForexRaw(URL,Flag)->
 	{FileName,_FileExtension} = extract_filename(File),
 	{CurrencyPair,TimeFrame} = extract_cpair(FileName), 
 	TableName = CurrencyPair++TimeFrame,
-%	io:format("Inserting into table:~p~n",[TableName]),
 	case lists:member(TableName,[atom_to_list(TN) || TN<-?ALL_TABLES]) of
 		true ->
 			case file:read_file(URL) of
@@ -890,7 +855,6 @@ update_ForexDB(_TableName,_CurrencyPair,_SamplingRate,[])->
 
 
 update_ForexDB(TableName,CurrencyPair,SamplingRate,List)->
-%	io:format("TableName:~p CurrencyPair:~p SamplingRate:~p~n",[TableName,CurrencyPair,SamplingRate]),
 	% Expected CSV format per line (new):
 	% YYYY-MM-DD<space>HH:MM:SS,Open,High,Low,Close,Volume
 	% Example: 2024-09-02 21:15:00,1.10727,1.107275,1.1072,1.10725,-1.0\r\n
@@ -933,7 +897,6 @@ update_ForexDB(TableName,CurrencyPair,SamplingRate,List)->
 				false ->%{key,%%%key={Year,Month,Day,Hour,Minute,Second,sampling_rate},open,high,low,close,volume}).
 					Record = #technical{id=Id,open=Open,high=High,low=Low,close=Close,volume=Volume},
 					insert(TableName,Record),
-					%io:format("New record inserted into table:~p~n",[TableName]),
 					case get(new_id) of
 						undefined ->
 							put(new_id,Id);
@@ -941,7 +904,6 @@ update_ForexDB(TableName,CurrencyPair,SamplingRate,List)->
 							done
 					end;
 				true ->
-					%io:format("******** ERROR during FX data insertion.~n"),
 					done
 			end;
 		false ->
@@ -978,23 +940,3 @@ list_to_number(List)->
 table_size(TableName)->
 	[_,_,_,{size,Size},_,_,_,_,_] = ets:info(TableName),
 	Size.	
-
-
-
-
-
-%%===============================LOG File=======================================
-%% This module handles logging for the FX processing system.
-
-log(Msg) ->
-	{ok, F} = file:open("logs/fx_log.log", [append]),
-    io:format(F, "~s~n", [Msg]),
-    file:close(F).
-
-log(Format, Args) ->
-	Msg = io_lib:format(Format, Args),
-	log(Msg).
-
-clear_log() ->
-	{ok, F} = file:open("logs/fx_log.log", [write, raw]),
-	file:close(F).

@@ -18,12 +18,9 @@ loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds)->
 	receive
 		{Cx_PId,sync}->
 			SensoryVector = sensor:SensorName(ExoSelf_PId,VL,Parameters,Scape),
-			%qlog:l3msg(ExoSelf_PId, io_lib:format("Sensor(~p) -> Neurons | MSG: {~p, forward, [~p...~p]} | Length: ~p | Fanout to: ~p", [SensorName, self(), hd(SensoryVector), lists:last(SensoryVector), length(SensoryVector), Fanout_PIds])),
-			%qlog:l1msg(self(), "DEBUG: Sensor " ++ atom_to_list(SensorName) ++ " sending data to substrate: " ++ lists:flatten(io_lib:format("~p", [lists:sublist(SensoryVector, 5)])) ++ " (showing first 5 elements)"),
 			[Pid ! {self(),forward,SensoryVector} || Pid <- Fanout_PIds],
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds);
 		{ExoSelf_PId,terminate} ->
-			%io:format("Sensor:~p is terminating.~n",[Id]),
 			ok
 	end.
 %The sensor process accepts only 2 types of messages, both from the cortex. The sensor can either be triggered to begin gathering sensory data based on its sensory role, or terminate if the cortex requests so.
@@ -43,64 +40,50 @@ rng1(VL,Acc)->
 % -1 → Background.
 % 0 → Body of candlestick.
 % 1 → Key features (e.g., candle wicks, highlights).
-	fx_PCI(Exoself_Id,VL,Parameters,Scape)->
-		[HRes,VRes] = Parameters,
-		case get(opmode) of
-			gt	->
-				%Normal, assuming we have 10000 rows, we start from 1000 to 200
-				%qlog:l2msg(Exoself_Id, io_lib:format("Sensor(fx_PCI) -> Scape | MSG: {~p, sense, ~p, close, [~p,~p,graph_sensor], ~p, ~p}", [self(), config:primary_currency_pair(), HRes, VRes, config:data_start_index(), config:data_end_index()])),
-				Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_start_index(),config:data_end_index()};
+fx_PCI(Exoself_Id,VL,Parameters,Scape)->
+	[HRes,VRes] = Parameters,
+	case get(opmode) of
+		gt	->
+			%Normal, assuming we have 10000 rows, we start from 1000 to 200
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:gt_start(),config:gt_end()};
 		benchmark ->
-			%qlog:l2msg(Exoself_Id, io_lib:format("Sensor(fx_PCI) -> Scape | MSG: {~p, sense, ~p, close, [~p,~p,graph_sensor], ~p, ~p}", [self(), config:primary_currency_pair(), HRes, VRes, config:data_end_index(), config:benchmark_end_index()])),
-			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_end_index(),config:benchmark_end_index()};
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:bench_start(),config:bench_end()};
 		live_trading ->
 			% In live trading, use offsets relative to the latest bar: start=0 (last), end=1000 (1000 bars window)
-			%qlog:l2msg(Exoself_Id, io_lib:format("Sensor(fx_PCI) -> Scape | MSG: {~p, sense, ~p, close, [~p,~p,graph_sensor], 0, ~p}", [self(), config:primary_currency_pair(), HRes, VRes, config:benchmark_end_index()])),
-			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],0,config:benchmark_end_index()}
-	end,
-	receive 
-		{_From,Result}->
-			%fx:log(io_lib:format("***fx_PCI received: ~p~n", [{_From, Result}])),
-			%qlog:l2msg(Exoself_Id, io_lib:format("Scape -> Sensor(fx_PCI) | MSG: ~p | Length: ~p", [_From, length(Result)])),
-			%qlog:l1msg(Exoself_Id, io_lib:format("PCI sensor data | Length: ~p | Sample: ~p | Range: [~p,~p]", [length(Result), lists:sublist(Result, 5), lists:min(Result), lists:max(Result)])),
-			Result
-	end.
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],0,config:bench_end()}
+end,
+receive 
+	{_From,Result}->
+		Result
+end.
 
 %This function encodes the Price List Input (PLI) sensor data.
 % It retrieves the last 200 rows of the EURUSD1 table and outputs the close prices as a vector.
 % The function takes the Exoself_Id, VL (vector length), Parameters (which includes the resolution and type of data), and Scape (the process that handles the data
-	fx_PLI(Exoself_Id,VL,Parameters,Scape)->
-		[HRes,Type] = Parameters,%Type=open|close|high|low
-		case get(opmode) of
-			gt	->
-				%Normal, assuming we have 10000 rows, we start from 1000 to 200
-				%qlog:l2msg(Exoself_Id, io_lib:format("Sensor(fx_PLI) -> Scape | MSG: {~p, sense, ~p, close, [~p,list_sensor], ~p, ~p}", [self(), config:primary_currency_pair(), HRes, config:data_start_index(), config:data_end_index()])),
-				Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_start_index(),config:data_end_index()};
+fx_PLI(Exoself_Id,VL,Parameters,Scape)->
+	[HRes,Type] = Parameters,%Type=open|close|high|low
+	case get(opmode) of
+		gt	->
+			%Normal, assuming we have 10000 rows, we start from 1000 to 200
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:gt_start(),config:gt_end()};
 		benchmark ->
-			%qlog:l2msg(Exoself_Id, io_lib:format("Sensor(fx_PLI) -> Scape | MSG: {~p, sense, ~p, close, [~p,list_sensor], ~p, ~p}", [self(), config:primary_currency_pair(), HRes, config:data_end_index(), config:benchmark_end_index()])),
-			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_end_index(),config:benchmark_end_index()};
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:bench_start(),config:bench_end()};
 		live_trading ->
 			% In live trading, use offsets relative to the latest bar: start=0 (last), end=1000 (1000 bars window)
-			%qlog:l2msg(Exoself_Id, io_lib:format("Sensor(fx_PLI) -> Scape | MSG: {~p, sense, ~p, close, [~p,list_sensor], 0, ~p}", [self(), config:primary_currency_pair(), HRes, config:benchmark_end_index()])),
-			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],0,config:benchmark_end_index()}
-	end,
-	receive 
-		{_From,Result}->
-			%io:format("fx_PLI received: ~p~n", [{_From, Result}]),
-			%fx:log(io_lib:format("fx_PLI received: ~p~n", [{_From, Result}])),
-			%qlog:l2msg(Exoself_Id, io_lib:format("Scape -> Sensor(fx_PLI) | From: ~p | MSG: ~p | Length: ~p", [_From, Result, length(Result)])),
-			%qlog:l1msg(Exoself_Id, io_lib:format("PLI sensor data | Length: ~p | Sample: ~p | Range: [~p,~p]", [length(Result), lists:sublist(Result, 5), lists:min(Result), lists:max(Result)])),
-			normalize(Result)
-	end.
-	
-	normalize(Vector)->
-		Normalizer=math:sqrt(lists:sum([Val*Val||Val<-Vector])),
-		[Val/Normalizer || Val <- Vector].
+			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],0,config:bench_end()}
+end,
+receive 
+	{_From,Result}->
+		normalize(Result)
+end.
+
+normalize(Vector)->
+	Normalizer=math:sqrt(lists:sum([Val*Val||Val<-Vector])),
+	[Val/Normalizer || Val <- Vector].
 
 fx_Internals(Exoself_Id,VL,Parameters,Scape)->
 	Scape ! {self(),sense,internals,Parameters},
 	receive
 		{PId,Result}->
-			%qlog:l1msg(Exoself_Id, io_lib:format("Internal sensor data | Length: ~p | Sample: ~p | Range: [~p,~p]", [length(Result), lists:sublist(Result, 5), lists:min(Result), lists:max(Result)])),
 			Result
 	end.

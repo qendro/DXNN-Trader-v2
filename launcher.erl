@@ -7,7 +7,7 @@ start() ->
 
 start(BenchmarkId) ->
     fx:clear_log(),
-    fx:log("Launcher starting"),
+    qlog:benchmarker(BenchmarkId, "Launcher starting"),
     
     % Compile all modules
     case make:all([load]) of
@@ -18,19 +18,19 @@ start(BenchmarkId) ->
     
     % Initialize Mnesia
     maybe_create_schema(),
-    fx:log("Schema created"),
+    qlog:benchmarker(BenchmarkId, "Schema created"),
     mnesia:start(),
-    fx:log("Mnesia started"),
+    qlog:benchmarker(BenchmarkId, "Mnesia started"),
     
     % Initialize FX and Polis
     fx:init(),
-    fx:log("FX initialized"),
+    qlog:benchmarker(BenchmarkId, "FX initialized"),
     polis:create(),
-    fx:log("Polis created"),
+    qlog:benchmarker(BenchmarkId, "Polis created"),
     polis:start(),
-    fx:log("Polis started"),
+    qlog:benchmarker(BenchmarkId, "Polis started"),
     polis:sync(),
-    fx:log("Polis synced"),
+    qlog:benchmarker(BenchmarkId, "Polis synced"),
     
     ensure_fx_complete(BenchmarkId).
 
@@ -38,12 +38,12 @@ start(BenchmarkId) ->
 ensure_fx_complete(BenchmarkId) ->
     case whereis(fx) of
         undefined ->
-            fx:log("Starting FX process..."),
+            qlog:benchmarker(BenchmarkId, "Starting FX process..."),
             register(launcher, self()),     % <<< register this process as the launcher
             fx:start(),
             wait_fx_ready(BenchmarkId);
         _Pid ->
-            fx:log("FX process already running"),
+            qlog:benchmarker(BenchmarkId, "FX process already running"),
             benchmarker:start(BenchmarkId)
     end.
 
@@ -51,7 +51,7 @@ ensure_fx_complete(BenchmarkId) ->
 wait_fx_ready(BenchmarkId) ->
     receive
         fx_updated ->
-            fx:log("FX ready"),
+            qlog:benchmarker(BenchmarkId, "FX ready"),
             benchmarker:start(BenchmarkId)
     end.
 
