@@ -1,6 +1,6 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, delete_log_folder/0, delete_all/0]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, agent_trades/2, delete_log_folder/0, delete_all/0]).
 -include("records.hrl").
 
 %% ============================================================================
@@ -158,6 +158,15 @@ benchmarker(Run_Id, Msg) ->
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [RUN:~p] ~s~n", [Timestamp, Run_Id, Msg]),
+    file:close(File).
+
+agent_trades(Agent_Id, Msg) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_trades.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    io:format(File, "~s | [AGENT:~p] ~s~n", [Timestamp, Agent_Id, Msg]),
     file:close(File).
 
 %% Helper function to ensure directory exists

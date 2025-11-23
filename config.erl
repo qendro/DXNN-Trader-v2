@@ -82,6 +82,16 @@ heredity_types() -> [darwinian].               % Options: darwinian, lamarckian
 neural_activation_functions() -> [tanh,cos,gaussian,absolute]. % Options: tanh, cos, sin, gaussian, absolute, sigmoid, sqrt
 neural_plasticity_functions() -> [neuromodulation]. % Options: none, hebbian, hebbian_w, ojas, ojas_w, self_modulationV1-V6, neuromodulation
 
+%% ===================================================================
+%% Time-Weighted Fitness Configuration
+%% ===================================================================
+fitness_discount_rate() -> 0.000025.          % Discount rate per cycle for profits (0.000025 = 0.0025%)
+fitness_loss_discount_rate() -> 0.000025.     % Discount rate per cycle for losses (additive, 0.000025 = 0.0025%)
+fitness_realized_bonus() -> 1.25.             % Bonus multiplier for realized profits (1.25 = 25% bonus)
+fitness_loss_penalty() -> 1.5.                % Penalty multiplier for realized losses (1.5 = 50% penalty)
+fitness_unrealized_penalty() -> 0.75.         % Penalty multiplier for unrealized PL (0.75 = 75% of value)
+fitness_time_weighted_enabled() -> true.      % Enable/disable time-weighted fitness (true/false)
+
 %% --- Mutation Operators ---
 %% CPP (compositional pattern producing) and CEP (compositional encoding pattern) operators are listed explicitly.
 mutation_operators() -> [
@@ -107,6 +117,11 @@ mutation_operators() -> [
     {add_cep,10}
 ]. % Options: adjust weights and probabilities as needed
 
+
+%% ===================================================================
+%% Population Configuration
+%% ===================================================================
+population_id() -> test.                        % Options: test, or any atom/string identifier for the population
 
 %% ===================================================================
 %% System & Diagnostics

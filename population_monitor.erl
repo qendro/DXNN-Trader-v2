@@ -13,7 +13,7 @@ get_init_constraints() ->
     [#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(),neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]].
 -record(state,{
 	op_mode = gt,
-	population_id = test,
+	population_id = config:population_id(),
 	activeAgent_IdPs = [],
 	agent_ids = [],
 	tot_agents,

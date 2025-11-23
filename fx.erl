@@ -37,7 +37,7 @@
 % Debug tags now use direct config function calls (no macros needed)
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FX SIMULATION %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
--record(state,{table_name,feature,index_start,index_end,index,price_list=[]}).
+-record(state,{table_name,feature,index_start,index_end,index,price_list=[],cycle=0,realized_pl_by_cycle=[]}).
 -record(account,{leverage,lot,spread,margin,balance,net_asset_value,realized_PL=0,unrealized_PL=0,order}).
 -record(order,{pair,position,entry,current,units,change,percentage_change,profit}).
 
@@ -306,20 +306,10 @@ sim(ExoSelf,S,A)->
 			From ! {self(),Result},
 			fx:sim(ExoSelf,S,A);
 		{From,trade,TableName,TradeSignal}->
-			
-			% This is the main trading signal that executes a trade.
-			% It receives the table name, trade signal, and the current state and account.
-			% The function processes the trade signal and updates the account accordingly.
-			% It returns the result of the trading operation to the From process.
-			% The result is a tuple of the form {Result,U_A}, where Result is the trade result and U_A is the updated account.
-			% If the table name is undefined, it initializes the state with the given parameters.
-			%io:format("************************a******STARTING TO PROCESS TRADE SIGNAL******************************~n"),
-			U_A = make_trade(S,A,TradeSignal),
+			{U_S, U_A} = make_trade(S,A,TradeSignal),
 			Total_Profit = A#account.balance + A#account.unrealized_PL,
-			
 			case config:actuator_debug_tag() of
 				true ->
-					%timer:sleep(1000),
 					IndexT = S#state.index,
 					NextIndexT = fx:next(TableName,IndexT),
 					RowT = fx:lookup(TableName,IndexT),
@@ -334,23 +324,23 @@ sim(ExoSelf,S,A)->
 				true ->
 					From ! {self(),0,1},
 					io:format("Lost all money~n"),
-					%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
 					put(prev_PC,0),
 					fx:sim(ExoSelf,#state{},create_account());
 				false ->
-					case update_state(S) of
+					case update_state(U_S) of
 						sim_over ->
-							Total_Profit = A#account.balance + A#account.unrealized_PL,
-							From ! {self(),Total_Profit,1},
-							%io:format("Sim Over:~p~n",[Total_Profit]),
-							%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
+							TimeWeightedFitness = calculate_time_weighted_fitness(U_S, U_A),
+							RawTotalProfit = U_A#account.balance + U_A#account.unrealized_PL,
+							TotalRealizedPL = lists:sum([PL || {_,PL} <- U_S#state.realized_pl_by_cycle]),
+							TradesStr = case U_S#state.realized_pl_by_cycle of [] -> "none"; Trades -> string:join([io_lib:format("cycle:~p,pl:~.2f",[Cycle,PL]) || {Cycle,PL} <- Trades], " | ") end,
+							qlog:agent_trades(ExoSelf,io_lib:format("FITNESS_EVAL | fitness=~p | raw_total_profit=~p | balance=~p | realized_pl=~p | unrealized_pl=~p | realized_trades=~p | trades=[~s]",[TimeWeightedFitness,RawTotalProfit,U_A#account.balance,TotalRealizedPL,U_A#account.unrealized_PL,length(U_S#state.realized_pl_by_cycle),TradesStr])),
+							From ! {self(),TimeWeightedFitness,1},
 							put(prev_PC,0),
 							fx:sim(ExoSelf,#state{},create_account());
-						U_S ->
+						U_S2 ->
 							From ! {self(),0,0},
-							U_A2 = update_account(U_S,U_A),
-							%io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n"),
-							fx:sim(ExoSelf,U_S,U_A2)
+							U_A2 = update_account(U_S2,U_A),
+							fx:sim(ExoSelf,U_S2,U_A2)
 					end
 			end;
 		restart ->
@@ -389,7 +379,9 @@ init_state(S,TableName,Feature,StartBL,EndBL)->
 		feature = Feature,
 		index_start = Index_Start,
 		index_end = Index_End,
-		index = Index_Start	
+		index = Index_Start,
+		cycle = 0,
+		realized_pl_by_cycle = []
 	}.	
 
 
@@ -401,7 +393,10 @@ update_state(S)->
 		true ->
 			sim_over;
 		false ->
-			S#state{index=NextIndex}
+			case config:fitness_time_weighted_enabled() of
+				true -> S#state{index=NextIndex,cycle=S#state.cycle+1};
+				false -> S#state{index=NextIndex}
+			end
 	end.
 
 % This function updates the account based on the current state and order.
@@ -465,27 +460,45 @@ r(R)->
 determine_profit(A)->
 	_U_Realized_PL = A#account.realized_PL + A#account.unrealized_PL.
 
+calculate_time_weighted_fitness(S, A) ->
+	case config:fitness_time_weighted_enabled() of
+		false -> A#account.balance + A#account.unrealized_PL;
+		true ->
+			Starting_Balance = config:account_initial_balance(),
+			Discount_Rate = config:fitness_discount_rate(),
+			Loss_Discount_Rate = config:fitness_loss_discount_rate(),
+			Realized_Bonus = config:fitness_realized_bonus(),
+			Loss_Penalty = config:fitness_loss_penalty(),
+			Unrealized_Penalty = config:fitness_unrealized_penalty(),
+			Realized_By_Cycle = S#state.realized_pl_by_cycle,
+			Realized_Weighted = lists:sum([
+				case PL >= 0 of
+					true -> PL * (1 - Discount_Rate * Cycle) * Realized_Bonus;
+					false -> PL * (1 + Loss_Discount_Rate * Cycle) * Loss_Penalty
+				end
+				|| {Cycle, PL} <- Realized_By_Cycle
+			]),
+			Starting_Balance + Realized_Weighted + (A#account.unrealized_PL * Unrealized_Penalty)
+	end.
+
+
 make_trade(S,A,Action)->
 	case A#account.order of
 		undefined ->
 			case Action == 0 of
-				true ->%Do nothing
-					A;
-				false ->%Open new position
-					open_order(S,A,Action)
+				true -> {S, A};
+				false -> open_order(S,A,Action)
 			end;
 		O ->
 			case Action == 0 of
-				true ->%Close Order
-					close_order(S,A);
-				false ->%Modify Order
+				true -> close_order(S,A);
+				false ->
 					Current_Position = O#order.position,
 					case Current_Position == Action of
-						true ->
-							A;
+						true -> {S, A};
 						false ->
-							U_A=close_order(S,A),
-							open_order(S,U_A,Action)
+							{U_S, U_A} = close_order(S,A),
+							open_order(U_S,U_A,Action)
 					end
 			end
 	end.
@@ -507,12 +520,18 @@ open_order(S,A,Action)->
 	Profit=Action*Change*Units,
 	Unrealized_PL = Profit,
 	New_Order = #order{pair=TableName,position=Action,entry=Entry,current=Quote,units=Units,change=Change,percentage_change=PChange,profit=Profit},
-	A#account{unrealized_PL = Unrealized_PL,order=New_Order}.
+	U_A = A#account{unrealized_PL = Unrealized_PL,order=New_Order},
+	{S, U_A}.
 
 close_order(S,A)->
 	U_Balance = A#account.balance + A#account.unrealized_PL,
 	U_Realized_PL = A#account.realized_PL + A#account.unrealized_PL,
-	A#account{balance=U_Balance,realized_PL=U_Realized_PL,unrealized_PL = 0,order=undefined}.
+	RealizedPL_Delta = A#account.unrealized_PL,
+	U_S = case config:fitness_time_weighted_enabled() of
+		true -> S#state{realized_pl_by_cycle = [{S#state.cycle, RealizedPL_Delta} | S#state.realized_pl_by_cycle]};
+		false -> S
+	end,
+	{U_S, A#account{balance=U_Balance,realized_PL=U_Realized_PL,unrealized_PL = 0,order=undefined}}.
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FX SENSORS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sense(S,Parameters)->
 	case Parameters of

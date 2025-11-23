@@ -48,7 +48,7 @@
 
 -record(pmp,{
 	op_mode=gt,
-	population_id=test,
+	population_id=config:population_id(),
 	survival_percentage=0.5,
 	specie_size_limit=10,
 	init_specie_size=10,
