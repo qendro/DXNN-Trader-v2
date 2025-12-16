@@ -7,18 +7,22 @@ gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
 
 prep(ExoSelf_PId) ->
+		%qlog:xLog(pid_to_list(ExoSelf_PId), "Sensor: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 	receive 
 		{ExoSelf_PId,{Id,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds,OpMode}} ->
 			put(opmode,OpMode),
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Sensor: ~p recieved Init message from Exoself: ~p", [self(), ExoSelf_PId]),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds)
 	end.
 %When gen/2 is executed it spawns the sensor element and immediately begins to wait for its initial state message.
 
 loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds)->
 	receive
-		{Cx_PId,sync}->
+		{Cx_PId,sync}-> 
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Sensor: ~p received sync from Cortex: ~p. ExoSelf_Id: ~p", [self(), Cx_PId, ExoSelf_PId]),
 			SensoryVector = sensor:SensorName(ExoSelf_PId,VL,Parameters,Scape),
 			[Pid ! {self(),forward,SensoryVector} || Pid <- Fanout_PIds],
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Sensor: ~p sent forward to Neurons: ~p. ExoSelf_Id: ~p, SensoryVector: ~p", [self(), Fanout_PIds, ExoSelf_PId, SensoryVector]),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds);
 		{ExoSelf_PId,terminate} ->
 			ok
@@ -51,17 +55,17 @@ fx_PCI(Exoself_Id,VL,Parameters,Scape)->
 		live_trading ->
 			% In live trading, use offsets relative to the latest bar: start=0 (last), end=1000 (1000 bars window)
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],0,config:bench_end()}
-end,
-receive 
-	{_From,Result}->
-		Result
-end.
+	end,
+	receive 
+		{Scape,Result}->
+			Result
+	end.
 
 %This function encodes the Price List Input (PLI) sensor data.
 % It retrieves the last 200 rows of the EURUSD1 table and outputs the close prices as a vector.
 % The function takes the Exoself_Id, VL (vector length), Parameters (which includes the resolution and type of data), and Scape (the process that handles the data
 fx_PLI(Exoself_Id,VL,Parameters,Scape)->
-	[HRes,Type] = Parameters,%Type=open|close|high|low
+	[HRes,Type] = Parameters,%HRes= ; Type=open|close|high|low
 	case get(opmode) of
 		gt	->
 			%Normal, assuming we have 10000 rows, we start from 1000 to 200
@@ -71,11 +75,11 @@ fx_PLI(Exoself_Id,VL,Parameters,Scape)->
 		live_trading ->
 			% In live trading, use offsets relative to the latest bar: start=0 (last), end=1000 (1000 bars window)
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],0,config:bench_end()}
-end,
-receive 
-	{_From,Result}->
-		normalize(Result)
-end.
+	end,
+	receive 
+		{Scape,Result}->
+			normalize(Result)
+	end.
 
 normalize(Vector)->
 	Normalizer=math:sqrt(lists:sum([Val*Val||Val<-Vector])),
@@ -84,6 +88,6 @@ normalize(Vector)->
 fx_Internals(Exoself_Id,VL,Parameters,Scape)->
 	Scape ! {self(),sense,internals,Parameters},
 	receive
-		{PId,Result}->
+		{Scape,Result}->
 			Result
 	end.

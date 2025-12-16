@@ -14,7 +14,7 @@
 	nids=[],
 	apids=[],
 	scape_pids=[],
-	highest_fitness=-1,
+	highest_fitness=-2,
 	eval_acc=0,
 	cycle_acc=0,
 	time_acc=0,
@@ -49,6 +49,14 @@ prep(Agent_Id,PM_PId,OpMode)->
 	random:seed(now()),
 	IdsNPIds = ets:new(idsNpids,[set,private]),
 	A = genotype:dirty_read({agent,Agent_Id}),
+	case A of
+		undefined ->
+			ErrorMsg = io_lib:format("ERROR: Agent ~p not found in database. This may indicate a population reuse/transaction issue.", [Agent_Id]),
+			qlog:benchmarker(Agent_Id, ErrorMsg),
+			error({agent_not_found, Agent_Id, PM_PId, OpMode});
+		_ ->
+			ok
+	end,
 	HeredityType = A#agent.heredity_type,
 	Cx = genotype:dirty_read({cortex,A#agent.cx_id}),
 	SIds = Cx#cortex.sensor_ids,
@@ -85,7 +93,7 @@ prep(Agent_Id,PM_PId,OpMode)->
 			CEP_PIds=[],
 			Substrate_PId = undefined
 	end,
-	link_Sensors(SIds,IdsNPIds,OpMode),
+	link_Sensors(Agent_Id,SIds,IdsNPIds,OpMode),
 	link_Actuators(AIds,IdsNPIds,OpMode),
 	link_Neurons(NIds,IdsNPIds,HeredityType),
 		{SPIds,NPIds,APIds}=link_Cortex(Cx,IdsNPIds),
@@ -113,8 +121,8 @@ prep(Agent_Id,PM_PId,OpMode)->
 			perturbation_range=A#agent.perturbation_range,
 			opmode=OpMode
 		},
-	Sensors2=[genotype:dirty_read({sensor,SId})||SId <- SIds],
-	%qlog:benchmarker(S#state.agent_id,io_lib:format("Agent Sensors Names: ~p, Sensor vl: ~p",[lists:map(fun(Sensor) -> Sensor#sensor.name end, Sensors2), lists:map(fun(Sensor) -> Sensor#sensor.vl end, Sensors2)])),
+	%qlog:register_agent(self(), Agent_Id),
+	%qlog:xLog(pid_to_list(self()), "ExoSelf: ~p generated phenotype for Agent_Id: ~p, Gen: ~p, Specie_Id: ~p. Spawning main loop. Genotype: ~p", [self(), Agent_Id, A#agent.generation, A#agent.specie_id, A]),
 	loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 
@@ -282,6 +290,31 @@ ensure_live_scape_started() ->
 			reenter_PublicScape(PS_PIds,Sensors,Actuators,Agent_Id,Morphology,TotNeurons);
 		reenter_PublicScape([],_Sensors,_Actuators,_Agent_Id,_Morphology,_TotNeurons)->
 			ok.
+
+	% Wrapper that checks sensors and ensures at least one is connected
+	link_Sensors(Agent_Id, SIds, IdsNPIds, OpMode) when SIds =/= [] ->
+		case [SId || SId <- SIds, (genotype:dirty_read({sensor, SId}))#sensor.fanout_ids == []] of
+			SIds ->  % All sensors disconnected
+				case catch genome_mutator:add_sensorlink(Agent_Id) of
+					{atomic,_} -> link_Sensors(Agent_Id, SIds, IdsNPIds, OpMode);  % Retry
+					_ -> 
+						qlog:benchmarker(Agent_Id, io_lib:format("Error adding sensor link, proceeding anyway")),
+						link_Sensors(SIds, IdsNPIds, OpMode)  % Proceed anyway
+				end;
+			_ ->  % At least one sensor connected
+				link_Sensors(SIds, IdsNPIds, OpMode)
+		end;
+	link_Sensors(Agent_Id, [], IdsNPIds, OpMode) -> % No sensors, add a new sensor
+		case catch genome_mutator:add_sensor(Agent_Id) of
+			{atomic,_} -> 
+				% Re-read cortex to get updated sensor list
+				A = genotype:dirty_read({agent,Agent_Id}),
+				Cx = genotype:dirty_read({cortex,A#agent.cx_id}),
+				link_Sensors(Agent_Id, Cx#cortex.sensor_ids, IdsNPIds, OpMode);  % Retry with new sensors
+			_ -> 
+				qlog:benchmarker(Agent_Id, io_lib:format("Error adding sensor, no sensors available")),
+				ok  % Can't proceed without sensors
+		end.
 
 	link_Sensors([SId|Sensor_Ids],IdsNPIds,OpMode) ->
 		S=genotype:dirty_read({sensor,SId}),

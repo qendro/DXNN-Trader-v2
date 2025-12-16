@@ -29,7 +29,28 @@ fx:start().
 polis:create().
 polis:start().
 polis:sync().
+exp_runner:start(new_evo).
+exp_runner:start(fresh). 
+
+process_monitor:log_process_info([{limit, 20}, {sort_by, message_queue}, {format, per_line}]).
+process_monitor:log_process_info([{limit, 20}, {sort_by, memory}, {format, per_line}]).
+process_monitor:log_process_info([{limit, 20}, {sort_by, reductions}, {format, per_line}]).
+
+benchmarker:start(sliding_window_5, 
+bench_configs:get_run_configs()).
+
+benchmarker:start(sliding_window_5, 
+benchmarker:get_run_configs()).
+
+exp_runner:start(fresh).        % Uses configs from get_run_configs()
+exp_runner:start(new_evo)      % Uses configs from get_run_configs()
+exp_runner:start({evo, PopId})  % Uses configs from get_run_configs()
+
 benchmarker:start(sliding_window_5).
+
+benchmarker:start(sliding_window_5, []).
+
+benchmarker:start(sliding_window_5, benchmarker:get_run_configs()).
 
 benchmarker:start(chart_plane_5x10).
 # ... your neural network commands
@@ -55,10 +76,35 @@ launcher:start().
    ```erlang
   
    rr("records.hrl").
+   c(genotype_utils).
    % Print the best genotype from the default 'test' population
+   genotype_utils:get_active_agents().
+
+   genotype_utils:print_active_agent_genotypes().
+
+   genotype_utils:active_agents_process_check().
+   genotype_utils:active_agents_process_check({5.663284600923985e-10,agent}).
+
+
+
+   % Get total agents in database
+    genotype_utils:get_total_agents().
+
+    % Get total agents for a specific population
+    genotype_utils:get_total_agents_by_population(test).
+
+    % List all agents grouped by population
+    genotype_utils:list_agents_by_population().
+
    genotype_utils:print_best_genotype().
 
    genotype_utils:print_best_genotype(all).
+
+   mnesia:dirty_all_keys(agent).
+   genotype:print({5.668233514606392e-10,agent}).
+
+[{5.668784164536763e-10,agent},
+ {5.668784164526907e-10,agent}]
    
    % Or specify a population ID
    genotype_utils:print_best_genotype(your_population_id).

@@ -45,7 +45,10 @@ set_weight(Output,_Parameters,Substrate_PId)->
 
 set_abcn(Output,_Parameters,Substrate_PId)->
 	Substrate_PId ! {self(),set_abcn,Output}.
-	
+
+weight_expression(Output,_Parameters,Substrate_PId)->
+	Substrate_PId ! {self(),weight_expression,Output}.
+
 delta_weight(Output,_Parameters,Substrate_PId)->
 	[Val] = Output,
 	Threshold = 0.33,

@@ -40,6 +40,7 @@
 	trace_acc=[],
 	run_index=1,
 	tot_runs=10,
+	run_configs=[],
 	notes,
 	started={date(),time()},
 	completed,

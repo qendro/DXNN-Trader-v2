@@ -1,3 +1,15 @@
+-----
+- reformat qlog:delete_all(). so it deletes the folder instead of each item one by one
+- Agent cloning seems to be sequential taking alot of time at low CPU usage
+- Identify increase RAM memory ussage
+    - if a neuron has just a recurrent connection with no input from another neuron or sensor it will just send millions of complete messages to the actuator mailbox which is saved in RAM; grows with time.
+    
+-----
+
+
+
+
+
 GPU: 
 - Fixed Agent: Build 1 agent that has all the sensors, set substrate and actuator
     - Get weights for all connections from Neat
@@ -30,7 +42,7 @@ Benchmarker
 Fitness function
 - Modify fitness function
 
-FX Tables
+FX Tables [Done]
 -Need flexibility to configure such as adding RSI and Dates etc. 
 - Does column location matter?
 
@@ -47,4 +59,8 @@ Substrate:
     - Ability to add multiple CPP or CEP but no ability to delete 
 
 
-    
+Config Fixes
+- Recurrent, jordan recurrent
+- abcn 
+
+**There is an issue with 1 remaining agent indicating that something is crashing silently somewhere. 

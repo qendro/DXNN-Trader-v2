@@ -40,6 +40,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 	case Encoding_Type of
 		neural ->
 			Sensors = [S#sensor{id={{-1,generate_UniqueId()},sensor},cx_id=Cx_Id,generation=Generation}|| S<- morphology:get_InitSensors(Morphology)],
+			[case S#sensor.vl =< 0 of true -> qlog:xLog(qStatus, "sensor_zero_vl name=~p params=~p", [S#sensor.name, S#sensor.parameters]); false -> ok end || S <- Sensors],
 			Actuators = [A#actuator{id={{1,generate_UniqueId()},actuator},cx_id=Cx_Id,generation=Generation}||A<-morphology:get_InitActuators(Morphology)],
 			N_Ids=construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Sensors,Actuators,[],[]),
 			S_Ids = [S#sensor.id || S<-Sensors],
@@ -55,15 +56,20 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 		substrate ->
 			Substrate_Id={{void,generate_UniqueId()},substrate},
 			Sensors = [S#sensor{id={{-1,generate_UniqueId()},sensor},cx_id=Cx_Id,generation=Generation,fanout_ids=[Substrate_Id]}|| S<- morphology:get_InitSensors(Morphology)],
+			[case S#sensor.vl =< 0 of true -> qlog:xLog(qStatus, "sensor_zero_vl name=~p params=~p", [S#sensor.name, S#sensor.parameters]); false -> ok end || S <- Sensors],
 			%qlog:benchmarker(Agent_Id,io_lib:format("Construct Cortex - Sensors: ~p",[Sensors])),
 			Actuators = [A#actuator{id={{1,generate_UniqueId()},actuator},cx_id=Cx_Id,generation=Generation,fanin_ids=[Substrate_Id]}||A<-morphology:get_InitActuators(Morphology)],
 			[write(S) || S <- Sensors],
 			[write(A) || A <- Actuators],
-			Dimensions=calculate_OptimalSubstrateDimension(Sensors,Actuators),
+			% Calculate dimensions based on ALL possible sensors/actuators to allow for future mutation
+			AllSensors = morphology:get_Sensors(Morphology),
+			AllActuators = morphology:get_Actuators(Morphology),
+			Dimensions=calculate_OptimalSubstrateDimension(AllSensors,AllActuators),
 			Density = 5,
 			Depth = 1,
 			Densities = [Depth,1|lists:duplicate(Dimensions-2,Density)], %[X,Y,Z,T...]
 			Substrate_CPPs = [CPP#sensor{id={{-1,generate_UniqueId()},sensor},cx_id=Cx_Id,generation=Generation}|| CPP<- morphology:get_InitSubstrateCPPs(Dimensions,SPlasticity)],
+			[case CPP#sensor.vl =< 0 of true -> qlog:xLog(qStatus, "sensor_zero_vl name=~p params=~p", [CPP#sensor.name, CPP#sensor.parameters]); false -> ok end || CPP <- Substrate_CPPs],
 			Substrate_CEPs = [CEP#actuator{id={{1,generate_UniqueId()},actuator},cx_id=Cx_Id,generation=Generation}||CEP<-morphology:get_InitSubstrateCEPs(Dimensions,SPlasticity)],
 			N_Ids=construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Substrate_CPPs,Substrate_CEPs,[],[]),
 			S_Ids = [S#sensor.id || S<-Sensors],
@@ -121,7 +127,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 
 		construct_Neuron(Cx_Id,Generation,SpecCon,N_Id,Input_Specs,Output_Ids)-> 
 			PF = {PFName,NLParameters} = generate_NeuronPF(SpecCon#constraint.neural_pfns),
-			Input_IdPs = create_InputIdPs(PFName,Input_Specs,[]), 
+			Input_IdPs = create_InputIdPs(PFName,N_Id,Input_Specs,[]), 
 			Neuron=#neuron{
 				id=N_Id,
 				cx_id = Cx_Id,
@@ -135,10 +141,14 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 			},
 			write(Neuron).
 
-			create_InputIdPs(PF,[{Input_Id,Input_VL}|Input_IdPs],Acc) ->
+			create_InputIdPs(PF,N_Id,[{Input_Id,Input_VL}|Input_IdPs],Acc) ->
+				case Input_VL =< 0 of
+					true -> qlog:xLog(qStatus, "construct_Neuron ZERO/LT0 Input_VL Id=~p Input=~p", [N_Id, {Input_Id, Input_VL}]);
+					false -> ok
+				end,
 				WeightsP = create_NeuralWeightsP(PF,Input_VL,[]),
-				create_InputIdPs(PF,Input_IdPs,[{Input_Id,WeightsP}|Acc]); 
-			create_InputIdPs(_PF,[],Acc)-> 
+				create_InputIdPs(PF,N_Id,Input_IdPs,[{Input_Id,WeightsP}|Acc]); 
+			create_InputIdPs(_PF,_N_Id,[],Acc)-> 
 				Acc.
 			 
 				create_NeuralWeightsP(_PFName,0,Acc) ->
@@ -445,6 +455,7 @@ clone_Agent(Agent_Id,CloneAgent_Id)->
 		ets:delete(IdsNCloneIds)
 	end,
 	mnesia:transaction(F),
+	qlog:benchmarker(CloneAgent_Id, io_lib:format("AGENT_CLONED | source=~p | clone=~p", [Agent_Id, CloneAgent_Id])),
 	CloneAgent_Id.
 %clone_Agent/2 accepts Agent_Id, and CloneAgent_Id, and then clones the agent, giving the clone CloneAgent_Id. The function first creates an ETS table to which it writes the ids of all the elements of the genotype, and their corresponding clone ids. Once all ids and clone ids have been generated, the function then begins to clone the actual elements. clone_Agent/2 first clones the neurons using clone_neurons/2, then the sensors using clone_sensonrs/2, and finally the actuators using clone_actuators. Once these elements are cloned, the function writes to database the clone versions of the cortex and the agent records, by writing to databse the original records with updated ids.
 

@@ -86,7 +86,9 @@ mutate(Agent_Id)->
 			end.
 %apply_ESMutators/2 with uniform distribution chooses a random evolutionary strategy mutation operator from the ?ES_MUTATORS list of such functions, and applies it to the agent. Whether the mutation succcessful or not, the function counts down the total number of mutation operators left to apply. This is to ensure that if the researcher set for each such evolutionary strategy to be static, having only one available mutatable parameter for every agent, the system will eventually try to mutate the strategy TotMutations number of times, and then return to the caller.
 
-	apply_Mutators(_Agent_Id,0)->
+	apply_Mutators(Agent_Id,0)->
+		mutate_check:fix_connectivity_if_needed(Agent_Id),
+		%connectivity_fix:fix_connectivity_if_needed(Agent_Id),
 		done;
 	apply_Mutators(Agent_Id,MutationIndex)->
 		Result = apply_NeuralMutator(Agent_Id),
@@ -97,7 +99,7 @@ mutate(Agent_Id)->
 				%io:format("******** Error:~p~nRetrying with new Mutation...~n",[Error]),
 				apply_Mutators(Agent_Id,MutationIndex)
 		end.
-%apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented.
+%apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented. Connectivity is validated and fixed only after all mutations are complete (when MutationIndex reaches 0).
 
 		apply_NeuralMutator(Agent_Id)->
 			F = fun()->
@@ -340,7 +342,10 @@ mutate_pf(Agent_Id)->
 			New_NLParameters = plasticity:New_PFName(neural_parameters),
 			NewPF = {New_PFName,New_NLParameters},
 			InputIdPs = N#neuron.input_idps,
-			U_InputIdPs = [{Input_IdP,plasticity:New_PFName(weight_parameters)} || {Input_IdP,_OldPL} <- InputIdPs],
+			U_InputIdPs = [
+				{InputId,[{W,plasticity:New_PFName(weight_parameters)} || {W,_OldPL} <- WPs]}
+				|| {InputId,WPs} <- InputIdPs
+			],
 			U_N = N#neuron{pf=NewPF,input_idps = U_InputIdPs, generation=Generation},
 			EvoHist = A#agent.evo_hist,
 			U_EvoHist = [{mutate_pf,N_Id}|EvoHist],
@@ -439,20 +444,29 @@ link_FromNeuronToNeuron(Agent_Id,From_NeuronId,To_NeuronId)->
 %link_FromNeuron/4 updates the record of the neuron from whom the link is being created. FromN is the record of the neuron from whom the link/connection eminates, and ToId is the id of the element to whom the link is headed towards. The function extracts the layer index of the neuron FromN, and the layer index of the element with the id ToId. Then the two layer indecies are compared, and the ToId is either added only to the FromN's output_ids list, or if the connection is recursive, ToLayerIndex =< FromLayerIndex, to output_ids and ro_ids lists. The FromN's generation is updated to the value Generation, which is the current, most recent generation, since this neuron has just been modified. Finally, the updated neuron record is then returned to the caller. On the other hand, if ToId, the id of the element to which the connection is being established, is already a member of the FromN's output_ids list, then the function exits with error.
 
 	link_ToNeuron(FromId,FromOVL,ToN,Generation)->%TODO: Only allows a single connection from a presynaptic element.
+		case FromOVL of
+			0 -> qlog:xLog(qStatus, "link_ToNeuron ZERO OVL FromId=~p ToId=~p", [FromId, ToN#neuron.id]);
+			_ -> ok
+		end,
 		ToSI_IdPs = ToN#neuron.input_idps,
 		ToMI_IdPs = ToN#neuron.input_idps_modulation,
 		{PFName,_NLParameters}=ToN#neuron.pf,
 		case {lists:keymember(FromId,1,ToSI_IdPs),lists:keymember(FromId,1,ToMI_IdPs)} of
 			{false,false} ->
+				WeightsP = genotype:create_NeuralWeightsP(PFName,FromOVL,[]),
+				case length(WeightsP) =/= FromOVL of
+					true -> qlog:xLog(qStatus, "link_ToNeuron OVL mismatch FromId=~p ToId=~p FromOVL=~p WLen=~p", [FromId, ToN#neuron.id, FromOVL, length(WeightsP)]);
+					false -> ok
+				end,
 				case {PFName == neuromodulation, random:uniform(2)} of
 					{true,2} ->
-						U_ToMI_IdPs = [{FromId, genotype:create_NeuralWeightsP(PFName,FromOVL,[])}|ToMI_IdPs],
+						U_ToMI_IdPs = [{FromId, WeightsP}|ToMI_IdPs],
 						ToN#neuron{
 							input_idps = U_ToMI_IdPs,
 							generation = Generation
 						};
 					_ ->
-						U_ToSI_IdPs = [{FromId, genotype:create_NeuralWeightsP(PFName,FromOVL,[])}|ToSI_IdPs],
+						U_ToSI_IdPs = [{FromId, WeightsP}|ToSI_IdPs],
 						ToN#neuron{
 							input_idps = U_ToSI_IdPs,
 							generation = Generation

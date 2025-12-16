@@ -26,52 +26,96 @@ gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
 
 prep(ExoSelf_PId) ->
+	random:seed(now()),
 	try
-		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
-		random:seed(now()),
 		receive 
 			{ExoSelf_PId,{Id,Cx_PId,AF,PF,AggrF,HeredityType,SI_PIdPs,MI_PIdPs,Output_PIds,RO_PIds}} ->
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p recieved init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
-				fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]}),
-				SI_PIds = lists:append([IPId || {IPId,_W} <- SI_PIdPs, IPId =/= bias],[ok]),
-				MI_PIds = lists:append([IPId || {IPId,_W} <- MI_PIdPs, IPId =/= bias],[ok]),
-				S=#state{
-					id=Id,
-					cx_pid=Cx_PId,
-					af=AF,
-					pf=PF,
-					aggrf=AggrF,
-					heredity_type = HeredityType,
-					si_pids=SI_PIds,
-					si_pidps_bl = SI_PIdPs,
-					si_pidps_current=SI_PIdPs,
-					si_pidps_backup=SI_PIdPs,
-					mi_pids=MI_PIds,
-					mi_pidps_current=MI_PIdPs,
-					mi_pidps_backup=MI_PIdPs,
-					output_pids=Output_PIds,
-					ro_pids=RO_PIds
-				},
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "NEURON_INIT NeuronId=~p | SI_PIds count=~p (~p) | Output_PIds count=~p (~p) | RO_PIds count=~p (~p)", [Id, length(SI_PIds)-1, SI_PIds, length(Output_PIds), Output_PIds, length(RO_PIds), RO_PIds]),
-				loop(S,ExoSelf_PId,SI_PIds,MI_PIds,[],[])
+				try
+					fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]}),
+					SI_PIds = lists:append([IPId || {IPId,_W} <- SI_PIdPs, IPId =/= bias],[ok]),
+					MI_PIds = lists:append([IPId || {IPId,_W} <- MI_PIdPs, IPId =/= bias],[ok]),
+					S=#state{
+						id=Id,
+						cx_pid=Cx_PId,
+						af=AF,
+						pf=PF,
+						aggrf=AggrF,
+						heredity_type = HeredityType,
+						si_pids=SI_PIds,
+						si_pidps_bl = SI_PIdPs,
+						si_pidps_current=SI_PIdPs,
+						si_pidps_backup=SI_PIdPs,
+						mi_pids=MI_PIds,
+						mi_pidps_current=MI_PIdPs,
+						mi_pidps_backup=MI_PIdPs,
+						output_pids=Output_PIds,
+						ro_pids=RO_PIds
+					},
+					connectivity_check_loop(S,ExoSelf_PId,SI_PIds,MI_PIds)
+				catch
+					Err1:Reason1:Stack1 ->
+						qlog:xLog(qStatus, "NEURON CRASH in prep after init msg: ~p | Neuron ID: ~p | Error: ~p:~p | Stack: ~p", 
+							[self(), Id, Err1, Reason1, Stack1]),
+						io:format("NEURON CRASH in prep after init msg: ~p | Neuron ID: ~p | Error: ~p:~p~n", 
+							[self(), Id, Err1, Reason1]),
+						erlang:error({neuron_prep_crash, Err1, Reason1, Id})
+				end
 		end
 	catch
-		Error:Reason ->
-			qlog:xLog(qStatus, "Neuron ~p crashed in prep: ~p:~p", [self(), Error, Reason]),
-			erlang:error(Error, Reason)
+		Err2:Reason2:Stack2 ->
+			qlog:xLog(qStatus, "NEURON CRASH in prep (receive): ~p | Error: ~p:~p | Stack: ~p", 
+				[self(), Err2, Reason2, Stack2]),
+			io:format("NEURON CRASH in prep (receive): ~p | Error: ~p:~p~n", 
+				[self(), Err2, Reason2]),
+			erlang:error({neuron_prep_crash, Err2, Reason2})
 	end.
 %When gen/2 is executed, it spawns the neuron element and immediately begins to wait for its initial state message from the exoself. Once the state message arrives, the neuron sends out the default forward signals to any elements in its ro_ids list, if any. Afterwards, prep drops into the neuron's main loop.
 
-loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
+connectivity_check_loop(S,ExoSelf_PId,SI_PIds,MI_PIds)->
+	% Filter out 'ok' sentinel from SI_PIds and MI_PIds
+	Valid_SI_PIds = [PId || PId <- SI_PIds, PId =/= ok],
+	Valid_MI_PIds = [PId || PId <- MI_PIds, PId =/= ok],
+	NId = S#state.id,  % Extract before try for safe access in catch
 	try
-		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in secondary loop SI_PIds and MI_PIds empty. ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
+		receive
+			{From,connectivity_check}-> 
+				try
+					case lists:member(From, Valid_SI_PIds) orelse lists:member(From, Valid_MI_PIds) of
+						true ->
+							[Pid ! {self(),connectivity_check} || Pid <- S#state.output_pids], 
+							loop(S,ExoSelf_PId,SI_PIds,MI_PIds,[],[]);
+						false ->
+							connectivity_check_loop(S,ExoSelf_PId,SI_PIds,MI_PIds) % Discard from unknown sources
+					end
+				catch
+					Err1:Reason1:Stack1 ->
+						qlog:xLog(qStatus, "NEURON CRASH in connectivity_check_loop: ~p | Neuron ID: ~p | Error: ~p:~p | Stack: ~p", 
+							[self(), NId, Err1, Reason1, Stack1]),
+						io:format("NEURON CRASH in connectivity_check_loop: ~p | Neuron ID: ~p | Error: ~p:~p~n", 
+							[self(), NId, Err1, Reason1]),
+						erlang:error({neuron_connectivity_crash, Err1, Reason1, NId})
+				end;
+			{ExoSelf_PId,terminate}-> 
+				ok
+		end
+	catch
+		Err2:Reason2:Stack2 ->
+			qlog:xLog(qStatus, "NEURON CRASH in connectivity_check_loop (receive): ~p | Neuron ID: ~p | Error: ~p:~p | Stack: ~p", 
+				[self(), NId, Err2, Reason2, Stack2]),
+			io:format("NEURON CRASH in connectivity_check_loop (receive): ~p | Neuron ID: ~p | Error: ~p:~p~n", 
+				[self(), NId, Err2, Reason2]),
+			erlang:error({neuron_connectivity_crash, Err2, Reason2, NId})
+	end.
+
+loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
+	NId = S#state.id,  % Extract before try for safe access in catch
+	try
 		PF = S#state.pf,
 		AF = S#state.af,
 		AggrF = S#state.aggrf,
 		{PFName,PFParameters} = PF,
 		Ordered_SIAcc = lists:reverse(SIAcc),
 		SI_PIdPs = S#state.si_pidps_current,
-		[begin case lists:keyfind(IPId,1,SI_PIdPs) of {IPId,WeightsP} -> case {WeightsP, length(InputVec), length(WeightsP)} of {[], InLen, _} -> qlog:xLog(qStatus, "dot_input EMPTY_WEIGHTS Neuron=~p IPId=~p InputLen=~p", [S#state.id, IPId, InLen]); {_WPs, InLen, WLen} when InLen =/= WLen -> qlog:xLog(qStatus, "dot_input LEN_MISMATCH Neuron=~p IPId=~p InputLen=~p WLen=~p", [S#state.id, IPId, InLen, WLen]); _ -> ok end; _ -> ok end end || {IPId,InputVec} <- Ordered_SIAcc],
 		SAggregation_Product = sat(signal_aggregator:AggrF(Ordered_SIAcc,SI_PIdPs),?SAT_LIMIT),
 		SOutput = functions:AF(SAggregation_Product),
 		
@@ -95,24 +139,22 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 		MI_PIds = S#state.mi_pids,
 		neuron:loop(U_S,ExoSelf_PId,SI_PIds,MI_PIds,[],[])
 	catch
-		Error:Reason ->
-			NeuronId = case S#state.id of
-				undefined -> self();
-				Id -> Id
-			end,
-			qlog:xLog(qStatus, "Neuron ~p (id: ~p) crashed in loop: ~p:~p", [self(), NeuronId, Error, Reason]),
-			erlang:error(Error, Reason)
+		Err:Reason:Stack ->
+			qlog:xLog(qStatus, "NEURON CRASH in loop (processing): ~p | Neuron ID: ~p | Error: ~p:~p | Stack: ~p", 
+				[self(), NId, Err, Reason, Stack]),
+			io:format("NEURON CRASH in loop (processing): ~p | Neuron ID: ~p | Error: ~p:~p~n", 
+				[self(), NId, Err, Reason]),
+			erlang:error({neuron_loop_crash, Err, Reason, NId})
 	end;
 loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
+	NId = S#state.id,  % Extract before try for safe access in catch
 	try
-		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in main loop SI_PId: ~p, SI_PIds: ~p, MI_PId: ~p, MI_PIds: ~p. ExoSelf_Id: ~p", [self(), SI_PId, SI_PIds, MI_PId, MI_PIds, ExoSelf_PId]),
 		receive
-			{SI_PId,forward,Input}->
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p received forward from SI_PId: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), SI_PId, ExoSelf_PId, Input]),
+			{SI_PId,forward,Input}-> 
 				loop(S,ExoSelf_PId,SI_PIds,[MI_PId|MI_PIds],[{SI_PId,Input}|SIAcc],MIAcc);
-			{MI_PId,forward,Input}->
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p received forward from MI_PId: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), MI_PId, ExoSelf_PId, Input]),
+			{MI_PId,forward,Input}-> 
 				loop(S,ExoSelf_PId,[SI_PId|SI_PIds],MI_PIds,SIAcc,[{MI_PId,Input}|MIAcc]);
+			{_From,connectivity_check}-> loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 			{ExoSelf_PId,weight_backup}->
 				U_S=case S#state.heredity_type of
 					darwinian ->
@@ -159,17 +201,16 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 			{ExoSelf_PId,terminate}->
 				%io:format("Neuron:~p is terminating.~n",[self()])
 				ok
-	%		after 10000 ->
-				%io:format("neuron:~p stuck.~n",[S#state.id])
+%		after 10000 ->
+			%io:format("neuron:~p stuck.~n",[S#state.id])
 		end
 	catch
-		Error:Reason ->
-			NeuronId = case S#state.id of
-				undefined -> self();
-				Id -> Id
-			end,
-			qlog:xLog(qStatus, "Neuron ~p (id: ~p) crashed in loop: ~p:~p", [self(), NeuronId, Error, Reason]),
-			erlang:error(Error, Reason)
+		Err:Reason:Stack ->
+			qlog:xLog(qStatus, "NEURON CRASH in loop (receive): ~p | Neuron ID: ~p | Error: ~p:~p | Stack: ~p", 
+				[self(), NId, Err, Reason, Stack]),
+			io:format("NEURON CRASH in loop (receive): ~p | Neuron ID: ~p | Error: ~p:~p~n", 
+				[self(), NId, Err, Reason]),
+			erlang:error({neuron_loop_crash, Err, Reason, NId})
 	end.
 %The neuron process waits for vector signals from all the processes that it's connected from, taking the dot product of the input and weight vectors, and then adding it to the accumulator. Once all the signals from Input_PIds are received, the accumulator contains the dot product to which the neuron then adds the bias and executes the activation function. After fanning out the output signal, the neuron again returns to waiting for incoming signals. When the neuron receives the {ExoSelf_PId,get_backup} message, it forwards to the exoself its full MInput_PIdPs list, and its Id. The MInput_PIdPs contains the modified, tuned and most effective version of the input_idps. The neuron process is also accepts weight_backup signal, when receiving it the neuron saves to process dictionary the current MInput_PIdPs. When the neuron receives the weight_restore signal, it reads back from the process dictionary the stored Input_PIdPs, and switches over to using it as its active Input_PIdPs list. When the neuron receives the weight_perturb signal from the exoself, it perturbs the weights by executing the perturb_Lipids/1 function, which returns the updated list. Finally, the neuron can also accept a reset_prep signal, which makes the neuron flush its buffer in the off chance that it has a recursively sent signal in its inbox. After flushing its buffer, the neuron waits for the exoself to send it the reset signal, at which point the neuron, now fully refreshed after the flush_buffer/0, outputs a default forward signal to its recursively connected elements, if any, and then drops back into the main loop.
 

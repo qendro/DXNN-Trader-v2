@@ -6,12 +6,16 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Get Init Standard Actuators/Sensors %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 get_InitSensors(Morphology)->
 	Sensors = morphology:Morphology(sensors),
-	[lists:nth(random:uniform(length(Sensors)),Sensors)].	%random sensor from list of sensors
+	% Exclude fx_Internals sensor from initial sensor selection
+	% fx_Internals should only be added via mutation, not during initialization
+	FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
+	[lists:nth(random:uniform(length(FilteredSensors)),FilteredSensors)].
 	%[lists:nth(1,Sensors)].
 
 get_InitActuators(Morphology)->
 	Actuators = morphology:Morphology(actuators),
-	[lists:nth(1,Actuators)].
+	[lists:nth(random:uniform(length(Actuators)),Actuators)].
+	%[lists:nth(1,Actuators)].
 
 get_Sensors(Morphology)->
 	morphology:Morphology(sensors).
@@ -22,16 +26,18 @@ get_Actuators(Morphology)->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Get Init Substrate_CPPs/Substrate_CEPs %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 get_InitSubstrateCPPs(Dimensions,Plasticity)->
 	Substrate_CPPs = get_SubstrateCPPs(Dimensions,Plasticity),
-	[lists:nth(1,Substrate_CPPs)].
+	[lists:nth(random:uniform(length(Substrate_CPPs)),Substrate_CPPs)].
+	%[lists:nth(1,Substrate_CPPs)].
 
 get_InitSubstrateCEPs(Dimensions,Plasticity)->
 	Substrate_CEPs = get_SubstrateCEPs(Dimensions,Plasticity),
-	[lists:nth(1,Substrate_CEPs)].
+	[lists:nth(random:uniform(length(Substrate_CEPs)),Substrate_CEPs)].
+	%[lists:nth(1,Substrate_CEPs)].
 
 get_SubstrateCPPs(Dimensions,Plasticity)->
 	%io:format("Dimensions:~p, Plasticity:~p~n",[Dimensions,Plasticity]),
 	if
-		(Plasticity == iterative) or (Plasticity == abcn) ->
+		(Plasticity == iterative) or (Plasticity == abcn) or (Plasticity == modular_none) or (Plasticity == hebbian) or (Plasticity == ojas) ->
 			Std=[
 				#sensor{name=cartesian,type=substrate,vl=Dimensions*2+3},%{cartesian,Dimensions*2+3},
 				#sensor{name=centripital_distances,type=substrate,vl=2+3},%{centripital_distances,2+3},
@@ -49,7 +55,7 @@ get_SubstrateCPPs(Dimensions,Plasticity)->
 					[]
 			end,
 			lists:append(Std,Adt);
-		(Plasticity == none) or (Plasticity == modular_none) or (Plasticity == hebbian) or (Plasticity == ojas)->
+		(Plasticity == none) ->
 			Std=[
 				#sensor{name=cartesian,type=substrate,vl=Dimensions*2},%{cartesian,Dimensions*2},
 				#sensor{name=centripital_distances,type=substrate,vl=2},%{centripital_distances,2},
@@ -106,6 +112,7 @@ forex_trader(sensors)->
 	InternalSensors = [#sensor{name=fx_Internals,type=standard,scape={private,fx_sim},format=no_geo,vl=config:internal_sensor_dimensions(),parameters=[config:internal_sensor_dimensions()]}],%[Long|Short|Void],Value
 	PLI_Sensors.
 	%PCI_Sensors. %Inital state [BASE]
+	%PLI_Sensors++PCI_Sensors++InternalSensors.
 	%PCI_Sensors++PLI_Sensors++InternalSensors.
 	%PLI_Sensors.%++InternalSensors. %qq
 	%PLI_Sensors++InternalSensors. % qq - Enable internal sensors for more mutation options

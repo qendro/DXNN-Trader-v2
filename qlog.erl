@@ -1,7 +1,20 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, agent_trades/2, delete_log_folder/0, delete_all/0]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1]).
 -include("records.hrl").
+
+-define(AGENT_PID_MAP, agent_pid_map).
+
+init_ets() ->
+    case ets:whereis(?AGENT_PID_MAP) of
+        undefined -> 
+            try 
+                ets:new(?AGENT_PID_MAP, [set, public, named_table])
+            catch
+                error:badarg -> ?AGENT_PID_MAP  % Table created by another process concurrently
+            end;
+        TableId -> TableId
+    end.
 
 %% ============================================================================
 %% SIMPLE LOGGING - One log per ExoSelf
@@ -70,6 +83,17 @@ training(ExoSelf_PId, Msg) ->
 %% Trading tracking (decisions, outcomes, market interactions)
 trading(ExoSelf_PId, Msg) ->
     write_log(ExoSelf_PId, "[TRADE] " ++ Msg).
+
+%% Agent trades tracking (fitness evaluation with trade details)
+%% Writes to a single consolidated log file: logs/Benchmarker/agent_trades.log
+agent_trades(Agent_Id, Msg) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_trades.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    io:format(File, "~s | [AGENT:~p] ~s~n", [Timestamp, Agent_Id, Msg]),
+    file:close(File).
 
 %% ============================================================================
 %% GENOTYPE EVOLUTION LOGGING - Complete genotype tracking over time
@@ -160,14 +184,111 @@ benchmarker(Run_Id, Msg) ->
     io:format(File, "~s | [RUN:~p] ~s~n", [Timestamp, Run_Id, Msg]),
     file:close(File).
 
-agent_trades(Agent_Id, Msg) ->
+%% Process monitoring logging (writes to Benchmarker folder)
+process_monitor(Msg) ->
     Dir = filename:join(get_log_root_dir(), "Benchmarker"),
     ensure_directory_exists(Dir),
-    Filename = filename:join(Dir, "agent_trades.log"),
+    Filename = filename:join(Dir, "process_monitor.log"),
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
-    io:format(File, "~s | [AGENT:~p] ~s~n", [Timestamp, Agent_Id, Msg]),
+    io:format(File, "~s | ~s~n", [Timestamp, Msg]),
     file:close(File).
+
+%% ============================================================================
+%% EXP RUNNER LOGGING - Human-readable experiment run logging
+%% ============================================================================
+
+%% Exp Runner logging - human-readable, max ~5 lines per run
+exp_runner(Event, Data) ->
+    Dir = filename:join(get_log_root_dir(), "exp_runner"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "exp_runner.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_iso8601_for_log(erlang:timestamp()),
+    
+    case Event of
+        experiment_start ->
+            {RunId, PopId, TotRuns, ConfigCount} = Data,
+            io:format(File, "~n=== EXPERIMENT START ===~n", []),
+            io:format(File, "ts: ~s | experiment: ~p | population: ~p | tot_runs: ~p | config_count: ~p~n",
+                [Timestamp, RunId, PopId, TotRuns, ConfigCount]);
+            
+        run_start ->
+            {RunId, RunIndex, PopId, Mode, ConfigStr} = Data,
+            % ConfigStr is pre-formatted by exp_runner
+            ModeHeader = case Mode of
+                fresh -> "=== FRESH RUN START ===";
+                new_evo -> "=== CONTINUE EVO ===";
+                {evo, _} -> "=== CONTINUE EVO ==="
+            end,
+            io:format(File, "~n~s~n", [ModeHeader]),
+            io:format(File, "ts: ~s | experiment: ~p | run: ~p | population: ~p | mode: ~p~n",
+                [Timestamp, RunId, RunIndex, PopId, Mode]),
+            io:format(File, "config: ~s~n", [ConfigStr]);
+            
+        run_end ->
+            {RunId, RunIndex, PopId, Trace} = Data,
+            % Extract stats directly from trace and population (no record needed)
+            TotEvals = Trace#trace.tot_evaluations,
+            % Read population and collect agent stats
+            P = genotype:dirty_read({population, PopId}),
+            {AgentIds, Agents, Fitnesses, Generations} = case P of
+                undefined ->
+                    {[], [], [], []};
+                _ ->
+                    AIds = lists:flatten([
+                        Specie#specie.agent_ids 
+                        || SId <- P#population.specie_ids,
+                           Specie <- [genotype:dirty_read({specie, SId})],
+                           Specie =/= undefined
+                    ]),
+                    % Read all agents once and extract stats
+                    Ags = [A || AId <- AIds, A <- [genotype:dirty_read({agent, AId})], A =/= undefined],
+                    Fits = [A#agent.fitness || A <- Ags, A#agent.fitness =/= undefined],
+                    Gens = [A#agent.generation || A <- Ags],
+                    {AIds, Ags, Fits, Gens}
+            end,
+            BestFitness = case Fitnesses of [] -> 0.0; _ -> lists:max(Fitnesses) end,
+            AvgFitness = case Fitnesses of [] -> 0.0; _ -> lists:sum(Fitnesses) / length(Fitnesses) end,
+            MaxGen = case Generations of [] -> 0; _ -> lists:max(Generations) end,
+            AgentCount = length(AgentIds),
+            
+            io:format(File, "ts: ~s | status: completed | best_fitness: ~.4f | avg_fitness: ~.4f~n",
+                [Timestamp, BestFitness, AvgFitness]),
+            io:format(File, "generations: ~p | tot_evaluations: ~p | agent_count: ~p~n",
+                [MaxGen, TotEvals, AgentCount]);
+            
+        run_failed ->
+            {RunId, RunIndex, Reason} = Data,
+            io:format(File, "ts: ~s | status: failed | reason: ~p~n",
+                [Timestamp, Reason]);
+            
+        config_loaded ->
+            {RunId, RunIndex, ConfigCount} = Data,
+            io:format(File, "ts: ~s | config_loaded | run: ~p | config_count: ~p~n",
+                [Timestamp, RunIndex, ConfigCount]);
+            
+        experiment_complete ->
+            {RunId, TotRuns} = Data,
+            io:format(File, "~n=== EXPERIMENT COMPLETE ===~n", []),
+            io:format(File, "ts: ~s | experiment: ~p | total_runs: ~p~n",
+                [Timestamp, RunId, TotRuns]);
+            
+        experiment_terminate ->
+            {RunId, PopId} = Data,
+            io:format(File, "ts: ~s | experiment: ~p | population: ~p | status: terminated~n",
+                [Timestamp, RunId, PopId])
+    end,
+    file:close(File).
+
+format_iso8601_for_log({MegaSecs, Secs, _MicroSecs}) ->
+    % Convert Unix epoch to Gregorian seconds
+    UnixEpoch = MegaSecs * 1000000 + Secs,
+    GregorianEpoch = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+    TotalSecs = GregorianEpoch + UnixEpoch,
+    {{Y,Mo,D},{H,Mi,S}} = calendar:gregorian_seconds_to_datetime(TotalSecs),
+    lists:flatten(io_lib:format("~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
+        [Y,Mo,D,H,Mi,S])).
 
 %% Helper function to ensure directory exists
 ensure_directory_exists(Dir) ->
@@ -242,23 +363,73 @@ log_comment(Agent_Id, Comment) ->
     file:close(File).
 
 %% ============================================================================
+%% xLog - Legacy per-agent logging function
+%% Supports both per-agent logging (PID string) and system status (qStatus)
+%% ============================================================================
+xLog(PidString, Format, Args) when is_list(PidString) ->
+    case PidString of
+        "qStatus" ->
+            write_status_log(io_lib:format(Format, Args));
+        _ ->
+            % Convert PID string back to PID: "<0.123.0>" -> <0.123.0>
+            try
+                ExoSelf_PId = list_to_pid(PidString),
+                FormattedMsg = io_lib:format(Format, Args),
+                write_log(ExoSelf_PId, lists:flatten(FormattedMsg))
+            catch
+                _:_ ->
+                    % If conversion fails, write to status log with safe formatting
+                    % Convert all Args to safe string representations
+                    SafeArgs = [safe_format_arg(A) || A <- Args],
+                    try
+                        SafeFormat = "xLog ERROR: Invalid PID string ~s | " ++ Format,
+                        write_status_log(io_lib:format(SafeFormat, [PidString | SafeArgs]))
+                    catch
+                        _:_ ->
+                            % Ultimate fallback: minimal error message
+                            write_status_log_safe("xLog ERROR: Failed to log message (PID: " ++ PidString ++ ")")
+                    end
+            end
+    end;
+xLog(qStatus, Format, Args) ->
+    write_status_log(io_lib:format(Format, Args));
+xLog(Other, Format, Args) ->
+    % Convert Other and Args to safe string representations
+    SafeOther = safe_format_arg(Other),
+    SafeArgs = [safe_format_arg(A) || A <- Args],
+    try
+        write_status_log(io_lib:format("xLog ERROR: Invalid first arg ~s | " ++ Format, [SafeOther | SafeArgs]))
+    catch
+        _:_ ->
+            write_status_log_safe("xLog ERROR: Failed to log message (Invalid first arg)")
+    end.
+
+%% ============================================================================
 %% HELPER
 %% ============================================================================
+
+register_agent(ExoSelf_PId, Agent_Id) ->
+    init_ets(),
+    ets:insert(?AGENT_PID_MAP, {ExoSelf_PId, Agent_Id}).
 
 write_log(ExoSelf_PId, Msg) ->
     LogFile = get_logfile(ExoSelf_PId),
     {ok, F} = file:open(LogFile, [append]),
     Timestamp = format_timestamp(),
-    io:format(F, "~s | ~s~n", [Timestamp, Msg]),
+    io:format(F, "~s ~s~n", [Timestamp, Msg]),
     file:close(F).
 
 get_logfile(ExoSelf_PId) ->
-    % Convert PID to string: <0.123.0> -> "0.123.0"
-    PidStr = pid_to_list(ExoSelf_PId),
-    CleanPid = lists:filter(fun(C) -> C =/= $< andalso C =/= $> end, PidStr),
-    % Ensure logs/Agents/Exoself directory exists
-    filelib:ensure_dir("logs/Agents/Exoself/"),
-    lists:flatten(io_lib:format("logs/Agents/Exoself/~s.log", [CleanPid])).
+    init_ets(),
+    case ets:lookup(?AGENT_PID_MAP, ExoSelf_PId) of
+        [{ExoSelf_PId, Agent_Id}] ->
+            get_agent_logfile(Agent_Id);
+        [] ->
+            PidStr = pid_to_list(ExoSelf_PId),
+            CleanPid = lists:filter(fun(C) -> C =/= $< andalso C =/= $> end, PidStr),
+            filelib:ensure_dir("logs/Agents/Exoself/"),
+            lists:flatten(io_lib:format("logs/Agents/Exoself/~s.log", [CleanPid]))
+    end.
 
 write_specie_log(Specie_Id, Msg) ->
     LogFile = get_specie_logfile(Specie_Id),
@@ -309,18 +480,91 @@ get_architecture_logfile(Agent_Id) ->
     lists:flatten(io_lib:format("logs/Agents/Architecture/~s.arch.log", [CleanId])).
 
 get_agent_logfile(Agent_Id) ->
-    % Agent_Id can be atom or tuple - convert to safe filename
     IdStr = lists:flatten(io_lib:format("~p", [Agent_Id])),
-    % Remove unsafe characters, keep alphanumeric, dots, underscores, hyphens
     CleanId = lists:filter(fun(C) -> (C >= $0 andalso C =< $9) orelse (C >= $a andalso C =< $z) orelse (C >= $A andalso C =< $Z) orelse C == $_ orelse C == $- end, IdStr),
-    % Ensure logs/Agents directory exists
-    filelib:ensure_dir("logs/Agents/"),
-    lists:flatten(io_lib:format("logs/Agents/~s.log", [CleanId])).
+    Dir = filename:join(get_log_root_dir(), "agents"),
+    ensure_directory_exists(Dir),
+    filename:join(Dir, lists:flatten(io_lib:format("~s.log", [CleanId]))).
 
 format_timestamp() ->
     {{Y,Mo,D},{H,Mi,S}} = calendar:local_time(),
-    lists:flatten(io_lib:format("~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B",
+    lists:flatten(io_lib:format("[~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B]",
         [Y,Mo,D,H,Mi,S])).
+
+write_status_log(Msg) ->
+    Dir = filename:join(get_log_root_dir(), "System"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "qStatus.log"),
+    case file:open(Filename, [append]) of
+        {ok, F} ->
+            try
+                Timestamp = format_timestamp(),
+                % Safely flatten and convert Msg to string
+                FlatMsg = case is_list(Msg) of
+                    true ->
+                        try
+                            lists:flatten(io_lib:format("~s", [Msg]))
+                        catch
+                            _:_ ->
+                                % If flatten fails, try to format as term
+                                lists:flatten(io_lib:format("~p", [Msg]))
+                        end;
+                    false ->
+                        lists:flatten(io_lib:format("~p", [Msg]))
+                end,
+                io:format(F, "~s | ~s~n", [Timestamp, FlatMsg]),
+                file:close(F)
+            catch
+                Error:Reason ->
+                    file:close(F),
+                    % Fallback: try to log the error to stderr
+                    try
+                        io:format(standard_error, "qlog:write_status_log error: ~p:~p~n", [Error, Reason])
+                    catch
+                        _:_ -> ok
+                    end
+            end;
+        {error, Reason} ->
+            % If file open fails, try to log to stderr
+            try
+                io:format(standard_error, "qlog:write_status_log failed to open file: ~p~n", [Reason])
+            catch
+                _:_ -> ok
+            end
+    end.
+
+%% Safe fallback function for critical error logging
+write_status_log_safe(Msg) when is_list(Msg) ->
+    try
+        Dir = filename:join(get_log_root_dir(), "System"),
+        ensure_directory_exists(Dir),
+        Filename = filename:join(Dir, "qStatus.log"),
+        {ok, F} = file:open(Filename, [append]),
+        Timestamp = format_timestamp(),
+        io:format(F, "~s | ~s~n", [Timestamp, Msg]),
+        file:close(F)
+    catch
+        _:_ -> ok  % Silently fail if even this doesn't work
+    end;
+write_status_log_safe(_) -> ok.
+
+%% Helper function to safely convert arguments to string format
+safe_format_arg(Arg) ->
+    try
+        case Arg of
+            P when is_pid(P) -> pid_to_list(P);
+            A when is_atom(A) -> atom_to_list(A);
+            T when is_tuple(T) -> lists:flatten(io_lib:format("~p", [T]));
+            L when is_list(L) ->
+                case io_lib:printable_list(L) of
+                    true -> L;
+                    false -> lists:flatten(io_lib:format("~p", [L]))
+                end;
+            _ -> lists:flatten(io_lib:format("~p", [Arg]))
+        end
+    catch
+        _:_ -> "<unprintable>"
+    end.
 
 %% ============================================================================
 %% LOG FOLDER MANAGEMENT
@@ -718,4 +962,3 @@ delete_agent_folder(Agent_Identifier) ->
                     Error
             end
     end.
-

@@ -13,19 +13,25 @@ get_init_constraints() ->
 %-define(INIT_CONSTRAINTS,[#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=generational, neural_pfns=[none],agent_encoding_types=[substrate]} || Morphology<-[forex_trader_1m],CA<-[feedforward]]).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Starts and ends Neural Networks with various preset parameters and options, and polls the logger for information about each run.			
-start(Id)->
+%Starts and ends Neural Networks with various preset parameters and options, and polls the logger for information about each run.
+start(Id, RunConfigs) ->
+	config:init(),
+	apply_run_config(Id, 1, RunConfigs),
 	PMP = #pmp{
 		op_mode=benchmark,
-		population_id=test,
+		population_id=config:population_id(),
 		survival_percentage=config:survival_percentage(),
-		specie_size_limit=config:specie_size_limit(), %qChangeFrom 10,
-		init_specie_size=config:init_specie_size(), %qChangeFrom 10,
+		specie_size_limit=config:specie_size_limit(),
+		init_specie_size=config:init_specie_size(),
 		polis_id = mathema,
 		generation_limit = config:generation_limit(),
-		evaluations_limit = config:evaluations_limit(), %qChangeFrom 10000, optimized from 10
+		evaluations_limit = config:evaluations_limit(),
 		fitness_goal = inf
 	},
+	TotRuns = case RunConfigs of
+		[] -> config:tot_runs();
+		_ -> lists:max([RunIndex || {RunIndex, _} <- RunConfigs])
+	end,
 	E=#experiment{
 		id = Id,
 		backup_flag = true,
@@ -33,13 +39,35 @@ start(Id)->
 		init_constraints=get_init_constraints(),
 		progress_flag=in_progress,
 		run_index=1,
-		tot_runs=config:tot_runs(), %qChangeFrom 20,
+		tot_runs=TotRuns,
+		run_configs=RunConfigs,
 		started={date(),time()},
 		interruptions=[]
 	},
-	qlog:benchmarker(Id,io_lib:format("EXPERIMENT_START | op_mode=~p | population_id=~p | tot_runs=~p",[PMP#pmp.op_mode, PMP#pmp.population_id, E#experiment.tot_runs])),
+	qlog:benchmarker(Id,io_lib:format("EXPERIMENT_START | op_mode=~p | population_id=~p | tot_runs=~p | run_configs=~p",[PMP#pmp.op_mode, PMP#pmp.population_id, E#experiment.tot_runs, length(RunConfigs)])),
 	genotype:write(E),
 	register(benchmarker,spawn(benchmarker,prep,[E])).
+
+%% Run configurations - one line per run, easy to add more runs
+%% Usage: benchmarker:start(my_exp, get_run_configs()).
+get_run_configs() ->
+	%% Example: [{1, [{population_id, test}, {evaluations_limit, 10000000}, {generation_limit, 1}, {specie_size_limit, 2}, {init_specie_size, 2}, {survival_percentage, 0.5}, {account_leverage, 50}, {account_initial_balance, 300}, {account_lot_size, 10000}, {account_margin, 0}, {account_spread, 0.000150}, {primary_currency_pair, 'EURUSD1'}, {gt_start, 1000}, {gt_end, 200}, {bench_start, 200}, {bench_end, last}, {morphology, forex_trader}, {connection_architecture, recurrent}]}],
+	[{1, [{population_id, test}, {tuning_duration, {const,1}}, {gt_start, 5000}, {gt_end, 4000}, {specie_size_limit, 300}, {init_specie_size, 100}, {evaluations_limit, 10000000}, {generation_limit, 5}]},
+	{2, [{population_id, test2}, {tuning_duration, {const,1}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 300}, {init_specie_size, 250}, {evaluations_limit, 20000000}, {generation_limit, 5}]}].
+
+	
+apply_run_config(ExperimentId, RunIndex, RunConfigs) ->
+	case RunConfigs of
+		[] -> ok;
+		_ ->
+			case lists:keyfind(RunIndex, 1, RunConfigs) of
+				{RunIndex, ConfigList} when is_list(ConfigList) ->
+					config:clear(),
+					config:load_from_list(ConfigList),
+					qlog:benchmarker(ExperimentId, io_lib:format("CONFIG_LOADED | run=~p | items=~p | ITEMS=~p", [RunIndex, length(ConfigList), ConfigList]));
+				false -> ok
+			end
+	end.
 
 continue(Id)->
 	case genotype:dirty_read({experiment,Id}) of
@@ -50,6 +78,9 @@ continue(Id)->
 				completed ->
 					io:format("Experiment:~p already completed:~p~n",[Id,E#experiment.trace_acc]);
 				in_progress ->
+					config:init(),
+					CurrentRunIndex = E#experiment.run_index,
+					apply_run_config(Id, CurrentRunIndex, E#experiment.run_configs),
 					Interruptions = E#experiment.interruptions,
 					U_Interruptions = [now()|Interruptions],
 					U_E = E#experiment{
@@ -61,12 +92,20 @@ continue(Id)->
 	end.
 
 prep(E)->
-	PMP = E#experiment.pm_parameters,
-	U_PMP = PMP#pmp{benchmarker_pid=self()},
+	Old_PMP = E#experiment.pm_parameters,
+	PMP = Old_PMP#pmp{
+		population_id=config:population_id(),
+		survival_percentage=config:survival_percentage(),
+		specie_size_limit=config:specie_size_limit(),
+		init_specie_size=config:init_specie_size(),
+		generation_limit=config:generation_limit(),
+		evaluations_limit=config:evaluations_limit(),
+		benchmarker_pid=self()
+	},
 	Constraints = E#experiment.init_constraints,
 	Population_Id = PMP#pmp.population_id,
-	population_monitor:prep_PopState(U_PMP,Constraints),
-	loop(E#experiment{pm_parameters=U_PMP},Population_Id).
+	population_monitor:prep_PopState(PMP,Constraints),
+	loop(E#experiment{pm_parameters=PMP},Population_Id).
 	
 loop(E,P_Id)->
 	receive
@@ -75,7 +114,7 @@ loop(E,P_Id)->
 			U_RunIndex = E#experiment.run_index+1,
 			case U_RunIndex > E#experiment.tot_runs of
 				true ->
-					% All training runs for this experiment are complete
+					config:clear(),
 					qlog:benchmarker(E#experiment.id,io_lib:format("TRAINING_COMPLETE | population_id=~p | runs=~p",[P_Id, U_RunIndex-1])),
 					U_E = E#experiment{
 						trace_acc = U_TraceAcc,
@@ -87,17 +126,29 @@ loop(E,P_Id)->
 					qlog:benchmarker(E#experiment.id,io_lib:format("EXPERIMENT_COMPLETE | final_runs=~p", [U_E#experiment.run_index-1])),
 					report(U_E#experiment.id,"report"),
 					checkpoint_and_exit();
-				false ->
-					U_E = E#experiment{
-						trace_acc = U_TraceAcc,
-						run_index = U_RunIndex
-					},
-					genotype:write(U_E),
-					PMP = U_E#experiment.pm_parameters,
-					Constraints = U_E#experiment.init_constraints,
-					population_monitor:prep_PopState(PMP,Constraints),
-					checkpoint(),
-					loop(U_E,P_Id)
+			false ->
+				apply_run_config(E#experiment.id, U_RunIndex, E#experiment.run_configs),
+				Old_PMP = E#experiment.pm_parameters,
+				U_PMP = Old_PMP#pmp{
+					population_id=config:population_id(),
+					survival_percentage=config:survival_percentage(),
+					specie_size_limit=config:specie_size_limit(),
+					init_specie_size=config:init_specie_size(),
+					generation_limit=config:generation_limit(),
+					evaluations_limit=config:evaluations_limit(),
+					benchmarker_pid=self()
+				},
+				U_E = E#experiment{
+					trace_acc = U_TraceAcc,
+					run_index = U_RunIndex,
+					pm_parameters=U_PMP
+				},
+				genotype:write(U_E),
+				Constraints = U_E#experiment.init_constraints,
+				Population_Id = U_PMP#pmp.population_id,
+				population_monitor:prep_PopState(U_PMP,Constraints),
+				checkpoint(),
+				loop(U_E,Population_Id)
 			end;
 		terminate ->
 			qlog:benchmarker(E#experiment.id,io_lib:format("BENCHMARKER_TERMINATE | population_id=~p",[P_Id])),

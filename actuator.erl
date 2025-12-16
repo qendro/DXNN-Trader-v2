@@ -7,9 +7,11 @@ gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
 
 prep(ExoSelf_PId) -> 
+		%qlog:xLog(pid_to_list(ExoSelf_PId), "Actuator: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 	receive 
 		{ExoSelf_PId,{Id,Cx_PId,Scape,ActuatorName,Parameters,Fanin_PIds,OpMode}} ->
 			put(opmode,OpMode),
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Actuator: ~p recieved init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,ActuatorName,Parameters,{Fanin_PIds,Fanin_PIds},[])
 	end.
 %When gen/2 is executed it spawns the actuator element and immediately begins to wait for its initial state message.
@@ -17,6 +19,7 @@ prep(ExoSelf_PId) ->
 loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[From_PId|Fanin_PIds],MFanin_PIds},Acc) ->
 	receive
 		{From_PId,forward,Input} ->
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Actuator: ~p received forward from Neuron: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), From_PId, ExoSelf_PId, Input]),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{Fanin_PIds,MFanin_PIds},lists:append(Input,Acc));
 		{ExoSelf_PId,terminate} ->
 			ok

@@ -268,22 +268,22 @@ sim(ExoSelf,S,A)->
 					%% Table name mismatch, reinitialize state
 					sense(init_state(S,TableName,Feature,Start,Finish),Parameters)
 			end,
-		From ! {self(),Result},
-			%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
-			case config:sensor_debug_tag() of
-				true ->
-					%timer:sleep(10000),
-					IndexT = U_S#state.index,
-					NextIndexT = fx:next(TableName,IndexT),
-					RowT = fx:lookup(TableName,IndexT),
-					NextRowT = fx:lookup(TableName,NextIndexT),
-					QuoteT = RowT#technical.close,
-					NextQuoteT = NextRowT#technical.close,
-					io:format("Sense~n Index:~p~n Quote:~p~n Next Index:~p~n Next Quote:~p~n NetWorth:~p~n",[IndexT,QuoteT,NextIndexT,NextQuoteT,A#account.balance + A#account.unrealized_PL]);
-				false ->
-					ok
-			end,
-			fx:sim(ExoSelf,U_S,A);
+			From ! {self(),Result},
+				%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
+				case config:sensor_debug_tag() of
+					true ->
+						%timer:sleep(10000),
+						IndexT = U_S#state.index,
+						NextIndexT = fx:next(TableName,IndexT),
+						RowT = fx:lookup(TableName,IndexT),
+						NextRowT = fx:lookup(TableName,NextIndexT),
+						QuoteT = RowT#technical.close,
+						NextQuoteT = NextRowT#technical.close,
+						io:format("Sense~n Index:~p~n Quote:~p~n Next Index:~p~n Next Quote:~p~n NetWorth:~p~n",[IndexT,QuoteT,NextIndexT,NextQuoteT,A#account.balance + A#account.unrealized_PL]);
+					false ->
+						ok
+				end,
+				fx:sim(ExoSelf,U_S,A);
 		{From,sense,internals,_Parameters}->
 			%Internals are the current long/short/nothing position, the buy price (or -1 if in do nothing state)
 			%io:format("A#account.order: ~p~n",[A#account.order]),
@@ -306,41 +306,50 @@ sim(ExoSelf,S,A)->
 			From ! {self(),Result},
 			fx:sim(ExoSelf,S,A);
 		{From,trade,TableName,TradeSignal}->
-			{U_S, U_A} = make_trade(S,A,TradeSignal),
-			Total_Profit = A#account.balance + A#account.unrealized_PL,
-			case config:actuator_debug_tag() of
-				true ->
-					IndexT = S#state.index,
-					NextIndexT = fx:next(TableName,IndexT),
-					RowT = fx:lookup(TableName,IndexT),
-					NextRowT = fx:lookup(TableName,NextIndexT),
-					QuoteT = RowT#technical.close,
-					NextQuoteT = NextRowT#technical.close,
-					io:format("Trade~n Index:~p~n Quote:~p~n Next Index:~p~n Next Quote:~p~n TradeSignal:~p~n NetWorth:~p~n",[IndexT,QuoteT,NextIndexT,NextQuoteT,TradeSignal,Total_Profit]);
-				false ->
-					ok
-			end,
-			case (U_A#account.balance + U_A#account.unrealized_PL) =< 100 of
-				true ->
-					From ! {self(),0,1},
-					io:format("Lost all money~n"),
-					put(prev_PC,0),
-					fx:sim(ExoSelf,#state{},create_account());
-				false ->
-					case update_state(U_S) of
-						sim_over ->
-							TimeWeightedFitness = calculate_time_weighted_fitness(U_S, U_A),
-							RawTotalProfit = U_A#account.balance + U_A#account.unrealized_PL,
-							TotalRealizedPL = lists:sum([PL || {_,PL} <- U_S#state.realized_pl_by_cycle]),
-							TradesStr = case U_S#state.realized_pl_by_cycle of [] -> "none"; Trades -> string:join([io_lib:format("cycle:~p,pl:~.2f",[Cycle,PL]) || {Cycle,PL} <- Trades], " | ") end,
-							qlog:agent_trades(ExoSelf,io_lib:format("FITNESS_EVAL | fitness=~p | raw_total_profit=~p | balance=~p | realized_pl=~p | unrealized_pl=~p | realized_trades=~p | trades=[~s]",[TimeWeightedFitness,RawTotalProfit,U_A#account.balance,TotalRealizedPL,U_A#account.unrealized_PL,length(U_S#state.realized_pl_by_cycle),TradesStr])),
-							From ! {self(),TimeWeightedFitness,1},
+			case S#state.table_name of
+				undefined ->
+					% State not initialized - ignore early trade (likely from recurrent network)
+					From ! {self(),0,0},
+					fx:sim(ExoSelf,S,A);
+				_ ->
+					% Process trade normally
+					{U_S, U_A} = make_trade(S,A,TradeSignal),
+					Total_Profit = A#account.balance + A#account.unrealized_PL,
+					case config:actuator_debug_tag() of
+						true ->
+							IndexT = S#state.index,
+							NextIndexT = fx:next(TableName,IndexT),
+							RowT = fx:lookup(TableName,IndexT),
+							NextRowT = fx:lookup(TableName,NextIndexT),
+							QuoteT = RowT#technical.close,
+							NextQuoteT = NextRowT#technical.close,
+							io:format("Trade~n Index:~p~n Quote:~p~n Next Index:~p~n Next Quote:~p~n TradeSignal:~p~n NetWorth:~p~n",[IndexT,QuoteT,NextIndexT,NextQuoteT,TradeSignal,Total_Profit]);
+						false ->
+							ok
+					end,
+					case (U_A#account.balance + U_A#account.unrealized_PL) =< 100 of
+						true ->
+							From ! {self(),0,1},
+							io:format("Lost all money~n"),
 							put(prev_PC,0),
 							fx:sim(ExoSelf,#state{},create_account());
-						U_S2 ->
-							From ! {self(),0,0},
-							U_A2 = update_account(U_S2,U_A),
-							fx:sim(ExoSelf,U_S2,U_A2)
+						false ->
+							case update_state(U_S) of
+								sim_over ->
+									Fitness = fitness_functions:calculate_fitness(U_S, U_A),
+									RawTotalProfit = U_A#account.balance + U_A#account.unrealized_PL,
+									TotalRealizedPL = lists:sum([PL || {_,PL} <- U_S#state.realized_pl_by_cycle]),
+									TradesStr = case U_S#state.realized_pl_by_cycle of [] -> "none"; Trades -> string:join([io_lib:format("cycle:~p,pl:~.2f",[Cycle,PL]) || {Cycle,PL} <- Trades], " | ") end,
+									FitnessFunctionName = config:fitness_function(),
+									qlog:agent_trades(ExoSelf,io_lib:format("FITNESS_EVAL | fitness_function=~p | fitness=~p | raw_total_profit=~p | balance=~p | realized_pl=~p | unrealized_pl=~p | realized_trades=~p | trades=[~s]",[FitnessFunctionName,Fitness,RawTotalProfit,U_A#account.balance,TotalRealizedPL,U_A#account.unrealized_PL,length(U_S#state.realized_pl_by_cycle),TradesStr])),
+									From ! {self(),Fitness,1},
+									put(prev_PC,0),
+									fx:sim(ExoSelf,#state{},create_account());
+								U_S2 ->
+									From ! {self(),0,0},
+									U_A2 = update_account(U_S2,U_A),
+									fx:sim(ExoSelf,U_S2,U_A2)
+							end
 					end
 			end;
 		restart ->
@@ -460,27 +469,9 @@ r(R)->
 determine_profit(A)->
 	_U_Realized_PL = A#account.realized_PL + A#account.unrealized_PL.
 
-calculate_time_weighted_fitness(S, A) ->
-	case config:fitness_time_weighted_enabled() of
-		false -> A#account.balance + A#account.unrealized_PL;
-		true ->
-			Starting_Balance = config:account_initial_balance(),
-			Discount_Rate = config:fitness_discount_rate(),
-			Loss_Discount_Rate = config:fitness_loss_discount_rate(),
-			Realized_Bonus = config:fitness_realized_bonus(),
-			Loss_Penalty = config:fitness_loss_penalty(),
-			Unrealized_Penalty = config:fitness_unrealized_penalty(),
-			Realized_By_Cycle = S#state.realized_pl_by_cycle,
-			Realized_Weighted = lists:sum([
-				case PL >= 0 of
-					true -> PL * (1 - Discount_Rate * Cycle) * Realized_Bonus;
-					false -> PL * (1 + Loss_Discount_Rate * Cycle) * Loss_Penalty
-				end
-				|| {Cycle, PL} <- Realized_By_Cycle
-			]),
-			Starting_Balance + Realized_Weighted + (A#account.unrealized_PL * Unrealized_Penalty)
-	end.
-
+%% NOTE: calculate_time_weighted_fitness/2 has been moved to fitness_functions.erl
+%% Use fitness_functions:calculate_fitness/2 instead, which dispatches to the
+%% function specified in config:fitness_function()
 
 make_trade(S,A,Action)->
 	case A#account.order of

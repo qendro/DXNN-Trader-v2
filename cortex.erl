@@ -10,9 +10,12 @@ gen(ExoSelf_PId,Node)->
 prep(ExoSelf_PId) ->
 	{V1,V2,V3} = now(),
 	random:seed(V1,V2,V3),
+		%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 	receive 
 		{ExoSelf_PId,Id,SPIds,NPIds,APIds} ->
 			put(start_time,now()),
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p recieved init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p send sync message to Sensors: ~p. ExoSelf_Id: ~p", [self(), SPIds, ExoSelf_PId]),
 			[SPId ! {self(),sync} || SPId <- SPIds],
 			loop(Id,ExoSelf_PId,SPIds,{APIds,APIds},NPIds,1,0,0,active)
 	end.
@@ -21,6 +24,7 @@ prep(ExoSelf_PId) ->
 loop(Id,ExoSelf_PId,SPIds,{[APId|APIds],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,active) ->
 	receive 
 		{APId,sync,Fitness,EndFlag} ->
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p received sync from Actuator: ~p.ExoSelf_Id: ~p", [self(), APId,ExoSelf_PId]),
 			case Fitness == goal_reached of
 				true ->
 					put(goal_reached,true),
@@ -40,12 +44,14 @@ loop(Id,ExoSelf_PId,SPIds,{[],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,active)->
 			ExoSelf_PId ! {self(),evaluation_completed,FitnessAcc,CycleAcc,TimeDif,get(goal_reached)},
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,inactive);
 		false ->
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p send sync message to Sensors: ~p. ExoSelf_Id: ~p", [self(), SPIds, ExoSelf_PId]),
 			[PId ! {self(),sync} || PId <- SPIds],
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,CycleAcc+1,FitnessAcc,EFAcc,active)
 	end;
 loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,_CycleAcc,_FitnessAcc,_EFAcc,inactive)->
 	receive
 		{ExoSelf_PId,reactivate}->
+			%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p received reactivate message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 			put(start_time,now()),
 			[SPId ! {self(),sync} || SPId <- SPIds],
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,1,0,0,active);

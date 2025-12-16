@@ -179,25 +179,28 @@ test_OS(SubstrateDimension)->
 	],
 	compose_OSubstrate(Actuators,SubstrateDimension,[w1,w2,w3]).
 	
-create_substrate(Sensors,Densities,Actuators,LinkForm)->
-	[Depth|SubDensities] = Densities,
-	Substrate_I = compose_ISubstrate(Sensors,length(Densities)),
-	I_VL = length(Substrate_I),
-	case LinkForm of
-		l2l_feedforward ->
-			Weight = 0,
-			H = mult(SubDensities),
-			IWeights = lists:duplicate(I_VL,Weight),
-			HWeights = lists:duplicate(H,Weight);
-		fully_interconnected ->
-			Output_Neurodes = tot_ONeurodes(Actuators,0),
-			Weight = 0,
-			Tot_HiddenNeurodes = mult([Depth-1|SubDensities]),
-			Tot_Weights = Tot_HiddenNeurodes + I_VL + Output_Neurodes,
-			IWeights = lists:duplicate(Tot_Weights,Weight),
-			HWeights = lists:duplicate(Tot_Weights,Weight);
-		jordan_recurrent ->
-			Output_Neurodes = tot_ONeurodes(Actuators,0),
+	create_substrate(Sensors,Densities,Actuators,LinkForm)->
+		[Depth|SubDensities] = Densities,
+		Substrate_I = compose_ISubstrate(Sensors,length(Densities)),
+		I_VL = length(Substrate_I),
+		case LinkForm of
+			l2l_feedforward ->
+				Weight = 0,
+				H = mult(SubDensities),
+				IWeights = lists:duplicate(I_VL,Weight),
+				HWeights = lists:duplicate(H,Weight);
+			fully_interconnected ->
+				Output_Neurodes = tot_ONeurodes(Actuators,0),
+				Weight = 0,
+				%% Depth is "layers including input/output"; for fully_interconnected we still need
+				%% a full weight vector even when Depth=1, so clamp hidden layer count to at least 1.
+				HiddenLayers = case Depth of 0 -> 0; 1 -> 1; _ -> Depth-1 end,
+				Tot_HiddenNeurodes = HiddenLayers * mult(SubDensities),
+				Tot_Weights = Tot_HiddenNeurodes + I_VL + Output_Neurodes,
+				IWeights = lists:duplicate(Tot_Weights,Weight),
+				HWeights = lists:duplicate(Tot_Weights,Weight);
+			jordan_recurrent ->
+				Output_Neurodes = tot_ONeurodes(Actuators,0),
 			Weight = 0,
 			H = mult(SubDensities),
 			IWeights = lists:duplicate(I_VL+Output_Neurodes,Weight),
@@ -453,44 +456,50 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 				populate_PHyperlayers_nsr(IHyperlayer,PHyperlayer,RemSubstrate,CPP_PIds,CEP_PIds,Plasticity,[],[])
 		end.
 	
-		populate_PHyperlayers_l2l(PrevHyperlayer,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
-			NewWeights = case Plasticity of
-				none -> 
-					get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[]);
-				_ ->
-					get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
-			end,
-			populate_PHyperlayers_l2l(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
-		populate_PHyperlayers_l2l(_PrevHyperlayer,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
-			PrevHyperlayer = lists:reverse(Acc1),
-			populate_PHyperlayers_l2l(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[],[PrevHyperlayer|Acc2]);
-		populate_PHyperlayers_l2l(_PrevHyperlayer,[],[],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+	populate_PHyperlayers_l2l(PrevHyperlayer,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+	NewWeights = case Plasticity of
+		none -> 
+			get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[]);
+		modular_none ->
+			get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
+		_ ->
+			get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
+	end,
+	populate_PHyperlayers_l2l(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
+	populate_PHyperlayers_l2l(_PrevHyperlayer,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+		PrevHyperlayer = lists:reverse(Acc1),
+		populate_PHyperlayers_l2l(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[],[PrevHyperlayer|Acc2]);
+	populate_PHyperlayers_l2l(_PrevHyperlayer,[],[],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
 			lists:reverse([lists:reverse(Acc1)|Acc2]).
 
-		populate_PHyperlayers_fi(FlatSubstrate,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
-			NewWeights = case Plasticity of
-				none -> 
-					get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[]);
-				_ ->
-					get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
-			end,
-			populate_PHyperlayers_fi(FlatSubstrate,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
-		populate_PHyperlayers_fi(FlatSubstrate,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
-			populate_PHyperlayers_fi(FlatSubstrate,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[],[lists:reverse(Acc1)|Acc2]);
-		populate_PHyperlayers_fi(_FlatSubstrate,[],[],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
-			lists:reverse([lists:reverse(Acc1)|Acc2]).
+	populate_PHyperlayers_fi(FlatSubstrate,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+	NewWeights = case Plasticity of
+		none -> 
+			get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[]);
+		modular_none ->
+			get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
+		_ ->
+			get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
+	end,
+	populate_PHyperlayers_fi(FlatSubstrate,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
+	populate_PHyperlayers_fi(FlatSubstrate,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+		populate_PHyperlayers_fi(FlatSubstrate,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[],[lists:reverse(Acc1)|Acc2]);
+	populate_PHyperlayers_fi(_FlatSubstrate,[],[],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+		lists:reverse([lists:reverse(Acc1)|Acc2]).
 
-		populate_PHyperlayers_nsr(PrevHyperlayer,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+			populate_PHyperlayers_nsr(PrevHyperlayer,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
 			NewWeights = case Plasticity of
 				none -> 
 					get_weights([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[]);
+				modular_none ->
+					get_weights([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
 				_ ->
 					get_weights([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
 			end,
 			populate_PHyperlayers_nsr(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
-		populate_PHyperlayers_nsr(_PrevHyperlayer,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
-			PrevHyperlayer = lists:reverse(Acc1),
-			populate_PHyperlayers_nsr(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[],[PrevHyperlayer|Acc2]);
+	populate_PHyperlayers_nsr(_PrevHyperlayer,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
+		PrevHyperlayer = lists:reverse(Acc1),
+		populate_PHyperlayers_nsr(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[],[PrevHyperlayer|Acc2]);
 		populate_PHyperlayers_nsr(_PrevHyperlayer,[],[],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
 			lists:reverse([lists:reverse(Acc1)|Acc2]).
 						
@@ -513,15 +522,25 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 							U_W=substrate:Command(Signal,W)
 					end,
 					fanin(CEP_PIds,U_W);
-				fanin([],W)->
-					W.
+			fanin([],W)->
+				W.
 				
-			get_weights([{I_Coord,I,_I_Weights}|I_Neurodes],Coord,CPP_PIds,CEP_PIds,Acc,[W|Weights],O)->
-				plasticity_fanout(CPP_PIds,I_Coord,Coord,[I,O,W]),
-				U_W=fanin(CEP_PIds,W),
-				get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[U_W|Acc],Weights,O);
-			get_weights([],_Coord,CPP_PIds,CEP_PIds,Acc,[],_O)->
-				lists:reverse(Acc).
+	get_weights([{I_Coord,I,_I_Weights}|I_Neurodes],Coord,CPP_PIds,CEP_PIds,Acc,[{W,_LF,_Params}|Weights],O)->
+		plasticity_fanout(CPP_PIds,I_Coord,Coord,[I,O,W]),
+		U_W=fanin(CEP_PIds,W),
+		get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[U_W|Acc],Weights,O);
+	get_weights([{I_Coord,I,_I_Weights}|I_Neurodes],Coord,CPP_PIds,CEP_PIds,Acc,[W|Weights],O)->
+		plasticity_fanout(CPP_PIds,I_Coord,Coord,[I,O,W]),
+		U_W=fanin(CEP_PIds,W),
+		get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[U_W|Acc],Weights,O);
+	get_weights([{_I_Coord,_I,_I_Weights}|_I_Neurodes],Coord,_CPP_PIds,_CEP_PIds,_Acc,[W|_],_O)->
+		qlog:xLog(qStatus, "get_weights UNEXPECTED weight shape ~p for Coord ~p", [W, Coord]),
+		exit({unexpected_weight_shape,W,Coord});
+	get_weights([{_I_Coord,_I,_I_Weights}|_I_Neurodes],Coord,_CPP_PIds,_CEP_PIds,_Acc,[],_O)->
+		qlog:xLog(qStatus, "get_weights EMPTY weight list for Coord ~p", [Coord]),
+		exit({empty_weight_list,Coord});
+	get_weights([],_Coord,CPP_PIds,CEP_PIds,Acc,[],_O)->
+		lists:reverse(Acc).
 
 				plasticity_fanout([CPP_PId|CPP_PIds],I_Coord,Coord,IOW)->
 					CPP_PId ! {self(),I_Coord,Coord,IOW},
@@ -557,7 +576,7 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 				fully_interconnected ->
 					calculate_output_fi(lists:flatten([IHyperlayer|PHyperlayer]),PHyperlayer,Plasticity,CPP_PIds,CEP_PIds,[]);
 				jordan_recurrent ->
-					[OHyperlayer|_] = lists:reverse(PHyperlayer,Plasticity),
+					[OHyperlayer|_] = lists:reverse(PHyperlayer),
 					calculate_output_std(lists:flatten([IHyperlayer|OHyperlayer]),PHyperlayer,Plasticity,CPP_PIds,CEP_PIds,[]);
 				neuronself_recurrent ->
 					calculate_output_nsr(IHyperlayer,PHyperlayer,Plasticity,CPP_PIds,CEP_PIds,[])
@@ -567,21 +586,87 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 			U_CurHyperlayer = [calculate_output(I_Neurodes,Neurode,Plasticity,CPP_PIds,CEP_PIds) || Neurode <- Cur_Hyperlayer],
 			calculate_output_std(U_CurHyperlayer,Substrate,Plasticity,CPP_PIds,CEP_PIds,[U_CurHyperlayer|Acc]);
 		calculate_output_std(Output_Hyperlayer,[],_Plasticity,CPP_PIds,CEP_PIds,Acc)->
-			{[Output || {_Coord,Output,_Weights} <- Output_Hyperlayer],lists:reverse(Acc)}.
+				{[Output || {_Coord,Output,_Weights} <- Output_Hyperlayer],lists:reverse(Acc)}.
 			
 			calculate_output(I_Neurodes,Neurode,Plasticity,CPP_PIds,CEP_PIds)->
-				{Coord,_Prev_O,Weights} = Neurode,
+				{Coord,Prev_O,Weights} = Neurode,
 				case Plasticity of
 					none ->
 						Output=calculate_neurode_output_std(I_Neurodes,Neurode,0),
 						{Coord,Output,Weights};
-					iterative ->
+					modular_none ->
 						Output=calculate_neurode_output_std(I_Neurodes,Neurode,0),
-						U_Weights = get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[],Weights,Output),
+						{Coord,Output,Weights};
+					iterative ->
+						FanIn = length(I_Neurodes),
+						FixedWeights = case length(Weights) =:= FanIn of
+							true -> Weights;
+							false ->
+								qlog:xLog(qStatus, "iterative weight_len_mismatch Coord=~p weights=~p fanin=~p", [Coord, length(Weights), FanIn]),
+								get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[])
+						end,
+						Output = calculate_neurode_output_std(I_Neurodes,{Coord,Prev_O,FixedWeights},0),
+						U_Weights = get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[],FixedWeights,Output),
 						{Coord,Output,U_Weights};
 					abcn ->
-						Output=calculate_neurode_output_plast(I_Neurodes,Neurode,0),
-						update_neurode(I_Neurodes,{Coord,Output,Weights},[])
+						NormW = normalize_plastic_weights(Weights, abcn),
+						Output=calculate_neurode_output_plast(I_Neurodes,{Coord,Prev_O,NormW},0),
+						update_neurode(I_Neurodes,{Coord,Output,NormW},[]);
+					hebbian ->
+						NormW = normalize_plastic_weights(Weights, hebbian),
+						Output=calculate_neurode_output_plast(I_Neurodes,{Coord,Prev_O,NormW},0),
+						update_neurode(I_Neurodes,{Coord,Output,NormW},[]);
+					ojas ->
+						NormW = normalize_plastic_weights(Weights, ojas),
+						Output=calculate_neurode_output_plast(I_Neurodes,{Coord,Prev_O,NormW},0),
+						update_neurode(I_Neurodes,{Coord,Output,NormW},[])
+				end.
+			
+			normalize_plastic_weights(Weights, Plasticity)->
+				Params = case erlang:function_exported(plasticity,Plasticity,1) of
+					true -> plasticity:Plasticity(weight_parameters);
+					false -> []
+				end,
+				[case W of
+					{_Val,_LF,_Ps} ->
+						W;
+					Val when is_number(Val) ->
+						{Val,Plasticity,Params};
+					{Val,_Ps} when is_number(Val) ->
+						{Val,Plasticity,Params}
+				end || W <- Weights].
+			
+			hebbian(Input,Output,W,_Ps)->
+				H = case _Ps of [H1] -> H1; _ -> 0.01 end,
+				functions:sat(W + H*Input*Output,3.1415,-3.1415).
+			
+			ojas(Input,Output,W,_Ps)->
+				H = case _Ps of [H1] -> H1; _ -> 0.01 end,
+				Delta = H * Output * (Input - Output*W),
+				functions:sat(W + Delta,3.1415,-3.1415).
+			
+			default_weight(Plasticity)->
+				case Plasticity of
+					abcn ->
+						Params = case erlang:function_exported(plasticity,abcn,1) of
+							true -> plasticity:abcn(weight_parameters);
+							false -> []
+						end,
+						{0,abcn,Params};
+					hebbian ->
+						Params = case erlang:function_exported(plasticity,hebbian,1) of
+							true -> plasticity:hebbian(weight_parameters);
+							false -> []
+						end,
+						{0,hebbian,Params};
+					ojas ->
+						Params = case erlang:function_exported(plasticity,ojas,1) of
+							true -> plasticity:ojas(weight_parameters);
+							false -> []
+						end,
+						{0,ojas,Params};
+					_ ->
+						0
 				end.
 			
 					calculate_neurode_output_std([{_I_Coord,O,_I_Weights}|I_Neurodes],{Coord,Prev_O,[Weight|Weights]},Acc)->
@@ -606,9 +691,15 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 			
 		calculate_output_fi(I_Neurodes,[Cur_Hyperlayer|Substrate],Plasticity,CPP_PIds,CEP_PIds,Acc)->
 			U_CurHyperlayer = [calculate_output(I_Neurodes,Neurode,Plasticity,CPP_PIds,CEP_PIds) || Neurode <- Cur_Hyperlayer],
-			calculate_output_fi([I_Neurodes|U_CurHyperlayer],Substrate,Plasticity,CPP_PIds,CEP_PIds,[U_CurHyperlayer|Acc]);
-		calculate_output_fi(Output_Hyperlayer,[],_Plasticity,CPP_PIds,CEP_PIds,Acc)->
-			{[Output || {_Coord,Output,_Weights} <- Output_Hyperlayer],lists:reverse(Acc)}.
+			U_I_Neurodes = replace_hyperlayer(I_Neurodes,U_CurHyperlayer),
+			calculate_output_fi(U_I_Neurodes,Substrate,Plasticity,CPP_PIds,CEP_PIds,[U_CurHyperlayer|Acc]);
+		calculate_output_fi(_Output_Hyperlayer,[],_Plasticity,_CPP_PIds,_CEP_PIds,[OutputLayer|RestAcc])->
+			Outputs = [Output || {[1|_],Output,_Weights} <- OutputLayer],
+			{Outputs,lists:reverse([OutputLayer|RestAcc])}.
+			
+		replace_hyperlayer(I_Neurodes,UpdatedHyperlayer)->
+			Map = maps:from_list([{Coord,Neurode} || Neurode={Coord,_,_} <- UpdatedHyperlayer]),
+			[maps:get(Coord,Map,Neurode) || Neurode={Coord,_,_} <- I_Neurodes].
 			
 		calculate_output_nsr(I_Neurodes,[Cur_Hyperlayer|Substrate],Plasticity,CPP_PIds,CEP_PIds,Acc)->
 			U_CurHyperlayer = [calculate_output([Neurode|I_Neurodes],Neurode,Plasticity,CPP_PIds,CEP_PIds) || Neurode <- Cur_Hyperlayer],
