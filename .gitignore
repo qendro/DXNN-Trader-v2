@@ -91,6 +91,7 @@ outputs/
 graphs/
 reports/
 .ReadMe_Files/
+logs/
 
 # OS generated files
 .DS_Store
