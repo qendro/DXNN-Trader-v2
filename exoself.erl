@@ -62,6 +62,17 @@ prep(Agent_Id,PM_PId,OpMode)->
 	SIds = Cx#cortex.sensor_ids,
 	AIds = Cx#cortex.actuator_ids,
 	NIds = Cx#cortex.neuron_ids,
+	% Set max computations per neuron per evaluation based on actual OpMode
+	TotalCycles = case OpMode of
+		gt -> config:gt_start() - config:gt_end();
+		benchmark -> 
+			case config:bench_end() of
+				last -> config:bench_start();  % Use bench_start when end is unknown
+				N -> config:bench_start() - N
+			end;
+		_ -> config:gt_start() - config:gt_end()  % Default to gt calculation
+	end,
+	config:set(max_neuron_computations_per_eval, TotalCycles),
 	ScapePIds = spawn_Scapes(IdsNPIds,SIds,AIds,Agent_Id,OpMode),
 	spawn_CerebralUnits(IdsNPIds,cortex,[Cx#cortex.id]),
 	spawn_CerebralUnits(IdsNPIds,sensor,SIds),

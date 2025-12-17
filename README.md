@@ -32,9 +32,9 @@ polis:sync().
 exp_runner:start(new_evo).
 exp_runner:start(fresh). 
 
-process_monitor:log_process_info([{limit, 20}, {sort_by, message_queue}, {format, per_line}]).
-process_monitor:log_process_info([{limit, 20}, {sort_by, memory}, {format, per_line}]).
-process_monitor:log_process_info([{limit, 20}, {sort_by, reductions}, {format, per_line}]).
+process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, message_queue}, {format, per_line}]).
+process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, memory}, {format, per_line}]).
+process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, reductions}, {format, per_line}]).
 
 benchmarker:start(sliding_window_5, 
 bench_configs:get_run_configs()).

@@ -10,6 +10,7 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 	Invalid_AgentSummaries = ProperlySorted_AgentSummaries -- Valid_AgentSummaries,
 	{_,_,Invalid_AgentIds} = lists:unzip3(Invalid_AgentSummaries),
 	[genotype:delete_Agent(Agent_Id) || Agent_Id <- Invalid_AgentIds],
+
 	io:format("Valid_AgentSummaries:~p~n",[Valid_AgentSummaries]),
 	io:format("Invalid_AgentSummaries:~p~n",[Invalid_AgentSummaries]),
 	TopAgentSummaries = lists:sublist(Valid_AgentSummaries,3),
@@ -21,6 +22,7 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 		0 -> 1.0;  % Prevent division by zero
 		_ -> abs(NextGenSize_Estimate)/PopulationLimit
 	end,
+	qlog:benchmarker(self,io_lib:format("Population size normalizer=~p",[Normalizer])),
 	io:format("Population size normalizer:~p~n",[Normalizer]),
 	NewGenAgent_Ids = gather_survivors(AlotmentsP,Normalizer,PopulationLimit,[]),
 	{NewGenAgent_Ids,TopAgent_Ids}.
@@ -59,12 +61,14 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 				[Agent_Id|MutantAgent_Ids];
 			false ->
 				io:format("Deleting agent:~p~n",[Agent_Id]),
+				qlog:benchmarker(self,io_lib:format("Deleting agent=~p",[Agent_Id])),
 				genotype:delete_Agent(Agent_Id),
 				[]
 		end,
 		gather_survivors(AlotmentsP,Normalizer,PopulationLimit,lists:append(SurvivingAgent_Ids,Acc));
 	gather_survivors([],_Normalizer,_PopulationLimit,Acc)->
 		io:format("New Population:~p PopSize:~p~n",[Acc,length(Acc)]),
+		qlog:benchmarker(self,io_lib:format("New Population Size=~p",[length(Acc)])),
 		Acc.
 %The gather_survivors/3 function accepts the list composed of the alotment tuples and a population normalizer value calculated by the competition/3 function, and from those values calculates the actual number of offspring that each agent should produce, creating those mutant offspring and accumulating the new generation agent ids. FOr each Agent_Id the function first calculates the noramlized offspring alotment value, to ensure that the final nubmer of agents in the specie is within the popualtion limit of that specie. If the offspring alotment value is less than 0, the agent is killed. If the offspring alotment is 1, the parent agent is allowed to survive to the next generation, but is not allowed to create any new offspring. If the offspring alotment is greater than one, then the Normalized_MutantAlotment-1 offspring are created from this fit agent, by calling upon the create_MutantAgentCopy/1 function, which rerns the id of the new mutant offspring. Once all the offspring have been created, the function returns to the caller a list of ids, composed of the surviving parent agent ids, and their offspring.
 

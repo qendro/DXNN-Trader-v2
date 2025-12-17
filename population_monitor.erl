@@ -138,7 +138,6 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 	AgentsLeft = S#state.agents_left,
 			case (AgentsLeft-1) =< 0 of
 		true ->
-			qlog:benchmarker(Population_Id,io_lib:format("ALL_AGENTS_COMPLETE | population_id=~p | generation=~p | starting_mutation",[Population_Id, S#state.pop_gen])),
 			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm),
 			U_PopGen = S#state.pop_gen+1,
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, S#state.tot_agents])),
@@ -159,9 +158,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 							{stop,normal,U_S};
 						false ->%IN_PROGRESS
 							Agent_Ids = extract_AgentIds(Population_Id,all),
-							qlog:benchmarker(Population_Id,io_lib:format("SPAWNING_NEXT_GENERATION | population_id=~p | generation=~p | agent_count=~p",[Population_Id,U_PopGen,length(Agent_Ids)])),
 							U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
-							qlog:benchmarker(Population_Id,io_lib:format("NEXT_GENERATION_SPAWNED | population_id=~p | generation=~p | active_agents=~p",[Population_Id,U_PopGen,length(U_ActiveAgent_IdPs)])),
 							TotAgents=length(Agent_Ids),
 							U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
 							{noreply,U_S}
@@ -292,9 +289,7 @@ handle_cast({From,evaluations,Specie_Id,AEA,AgentCycleAcc,AgentTimeAcc},S)->
 	end,
 	U_S=case U_EvalAcc >= S#state.step_size of 
 		true ->
-			qlog:benchmarker(S#state.population_id,io_lib:format("GATHERING_STATS_START | population_id=~p | eval_acc=~p",[S#state.population_id,U_EvalAcc])),
 			gather_STATS(S#state.population_id,U_EvalAcc,S#state.op_mode),
-			qlog:benchmarker(S#state.population_id,io_lib:format("GATHERING_STATS_COMPLETE | population_id=~p",[S#state.population_id])),
 			Population_Id = S#state.population_id,
 			P = genotype:dirty_read({population,Population_Id}),
 			T = P#population.trace,
@@ -378,7 +373,6 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal functions
 %%--------------------------------------------------------------------
 extract_AgentIds(Population_Id,AgentType)->
-	qlog:benchmarker(Population_Id, io_lib:format("EXTRACT_AGENTS | type=~p", [AgentType])),
 	P = genotype:dirty_read({population,Population_Id}),
 	Specie_Ids = P#population.specie_ids,
 	%io:format("Specie_Ids:~p~n",[Specie_Ids]),
@@ -406,13 +400,18 @@ extract_AgentIds(Population_Id,AgentType)->
 		
 extract_SpecieAgentIds(Specie_Id)->
 	S = genotype:dirty_read({specie,Specie_Id}),
-	qlog:benchmarker(Specie_Id, io_lib:format("EXTRACT_SPECIE | claimed_agents=~p", [length(S#specie.agent_ids)])),
 	S#specie.agent_ids.
 %extract_SpecieAgentIds/1 returns a list of agent ids to the caller.
 
 summon_agents(OpMode,Agent_Ids)->
+	% Set global max computations per neuron per evaluation (before spawning agents)
+	% Note: exoself:start(Agent_Id,self()) defaults to 'gt' mode regardless of OpMode passed here
+	% So always use gt calculation since that's what agents actually run in
+	TotalCycles = config:gt_start() - config:gt_end(),
+	config:set(max_neuron_computations_per_eval, TotalCycles),
 	io:format("Summoning agents:~p with OpMode:~p~n",[Agent_Ids,OpMode]),
-	qlog:benchmarker(self(),io_lib:format("SUMMONING_AGENTS | op_mode=~p | agent_ids=~p",[OpMode,Agent_Ids])),
+	qlog:benchmarker(self(),io_lib:format("SUMMONING_AGENTS | op_mode=~p | agent_ids=~p | max_computations=~p",[OpMode,Agent_Ids,TotalCycles])),
+	qlog:xLog(qStatus, "SUMMONING_AGENTS | op_mode=~p | max_computations=~p", [OpMode, TotalCycles]),
 	summon_agents(OpMode,Agent_Ids,[]).
 summon_agents(OpMode,[Agent_Id|Agent_Ids],Acc)->
 	Agent_PId = exoself:start(Agent_Id,self()),
@@ -447,35 +446,10 @@ init_population(Init_State,Specie_Constraints)->
 	F = fun()->
 		case genotype:read({population,Population_Id}) of
 			undefined ->
-				qlog:benchmarker(Population_Id,io_lib:format("POPULATION_NOT_EXISTS__Creating new population | population_id=~p",[Population_Id])),
 				create_Population(Population_Id,Init_State#state.init_specie_size,Specie_Constraints);
-			ExistingPop ->
-				% Check if population already has agents (was cloned)
-				% If it has specie_ids with agents, preserve it; otherwise delete and recreate
-				qlog:benchmarker(Population_Id,io_lib:format("POPULATION_EXISTS_CHECK | population_id=~p | specie_count=~p",[Population_Id,length(ExistingPop#population.specie_ids)])),
-				case ExistingPop#population.specie_ids of
-					[] ->
-						% Empty population, delete and recreate
-						delete_population(Population_Id),
-						create_Population(Population_Id,Init_State#state.init_specie_size,Specie_Constraints);
-					SpecieIds ->
-						% Population has species, check if they have agents
-						HasAgents = lists:any(fun(SpecieId) ->
-							case genotype:read({specie, SpecieId}) of
-								undefined -> false;
-								Specie -> length(Specie#specie.agent_ids) > 0
-							end
-						end, SpecieIds),
-						case HasAgents of
-							true ->
-								% Population was cloned and has agents, preserve it
-								ok;
-							false ->
-								% Empty species, delete and recreate
-								delete_population(Population_Id),
-								create_Population(Population_Id,Init_State#state.init_specie_size,Specie_Constraints)
-						end
-				end
+			_ ->
+				delete_population(Population_Id),
+				create_Population(Population_Id,Init_State#state.init_specie_size,Specie_Constraints)
 		end
 	end,
 	Result = mnesia:transaction(F),
@@ -533,35 +507,25 @@ continue(Population_Id)->
 
 mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorithm)->
 	qlog:benchmarker(Population_Id,io_lib:format("MUTATING_POPULATION | population_id=~p | keep_total=~p | fitness_postprocessor=~p | selection_algorithm=~p",[Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorithm])),
-	qlog:benchmarker(Population_Id,io_lib:format("CALCULATING_ENERGY_COST | population_id=~p",[Population_Id])),
 	NeuralEnergyCost = calculate_EnergyCost(Population_Id),
 	F = fun()->
 		P = genotype:read({population,Population_Id}),
 		Specie_Ids = P#population.specie_ids,
 		[mutate_Specie(Specie_Id,KeepTot,NeuralEnergyCost,Fitness_Postprocessor,Selection_Algorithm) || Specie_Id <- Specie_Ids]
 	end,
-	{atomic,_} = mnesia:transaction(F),
-	P = genotype:dirty_read({population,Population_Id}),
-	Specie_Ids = P#population.specie_ids,
-	qlog:benchmarker(Population_Id,io_lib:format("MUTATION_COMPLETE | population_id=~p | specie_count=~p",[Population_Id,length(Specie_Ids)])).
+	{atomic,_} = mnesia:transaction(F).
 %The function mutate_population/3 mutates the agents within every specie in its specie_ids list, maintianing each specie within the size of KeepTot. The function first calculates the average cost of each neuron, and then calls each specie seperately with the Fitness_Postprocessor and Selection_Algorithm parameters, which are used to mutate the species.
 
 	mutate_Specie(Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name)->
 		qlog:benchmarker(Specie_Id,io_lib:format("MUTATING_SPECIE | specie_id=~p | population_limit=~p | neural_energy_cost=~p | fitness_postprocessor=~p | selection_algorithm=~p",[Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name])),
 		S = genotype:dirty_read({specie,Specie_Id}),
 		{AvgFitness,Std,MaxFitness,MinFitness} = calculate_SpecieFitness({specie,S}),
-		qlog:benchmarker(Specie_Id,io_lib:format("FITNESS_STATS_CALCULATED | specie_id=~p | avg=~p | max=~p | min=~p",[Specie_Id,AvgFitness,MaxFitness,MinFitness])),
-		qlog:population_summary(Specie_Id, lists:flatten(io_lib:format("Specie ~p | Agents: ~p | Fitness: Avg=~p Max=~p Min=~p", [Specie_Id, length(S#specie.agent_ids), AvgFitness, MaxFitness, MinFitness]))),
+		qlog:benchmarker(Specie_Id,io_lib:format("Specie=~p | Agents: ~p | Population_limit=~p | Avg Fitness=~p Max=~p Min=~p | Neural Energy Cost=~p",[Specie_Id,length(S#specie.agent_ids),PopulationLimit,AvgFitness,MaxFitness,MinFitness,NeuralEnergyCost])),
 		Agent_Ids = S#specie.agent_ids,
 		Sorted_AgentSummaries = lists:reverse(lists:sort(construct_AgentSummaries(Agent_Ids,[]))),
-		qlog:benchmarker(Specie_Id,io_lib:format("AGENT_SUMMARIES_CONSTRUCTED | specie_id=~p | agent_count=~p",[Specie_Id,length(Sorted_AgentSummaries)])),
 		io:format("Using: Fitness Postprocessor:~p Selection Algorirthm:~p~n",[Fitness_Postprocessor_Name,Selection_Algorithm_Name]),
 		ProperlySorted_AgentSummaries = fitness_postprocessor:Fitness_Postprocessor_Name(Sorted_AgentSummaries),
-		qlog:benchmarker(Specie_Id,io_lib:format("FITNESS_POSTPROCESSOR_COMPLETE | specie_id=~p | postprocessor=~p",[Specie_Id,Fitness_Postprocessor_Name])),
 		{NewGenAgent_Ids,TopAgent_Ids} = selection_algorithm:Selection_Algorithm_Name(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit),
-		qlog:benchmarker(Specie_Id,io_lib:format("SELECTION_COMPLETE | specie_id=~p | selection=~p | new_gen_count=~p | champions=~p",[Specie_Id,Selection_Algorithm_Name,length(NewGenAgent_Ids),length(TopAgent_Ids)])),
-		qlog:benchmarker(Specie_Id,io_lib:format("CHAMPION_IDS_SET | specie_id=~p | champion_ids=~p",[Specie_Id,TopAgent_Ids])),
-		[case genotype:dirty_read({agent,ChampId}) of undefined -> qlog:benchmarker(Specie_Id,io_lib:format("CHAMPION_NOT_FOUND_AT_SET | specie_id=~p | champion_id=~p",[Specie_Id,ChampId])); _ -> ok end || ChampId <- TopAgent_Ids],
 		{FList,_TNList,_AgentIds}=lists:unzip3(Sorted_AgentSummaries),
 		[TopFitness|_] = FList,
 		{Factor,Fitness}=S#specie.innovation_factor,
@@ -575,8 +539,7 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 			agent_ids = NewGenAgent_Ids,
 			champion_ids = TopAgent_Ids,
 			fitness = {AvgFitness,Std,MaxFitness,MinFitness},
-			innovation_factor = U_InnovationFactor}),
-		qlog:benchmarker(Specie_Id,io_lib:format("SPECIE_UPDATED | specie_id=~p | innovation_factor=~p",[Specie_Id,U_InnovationFactor])).
+			innovation_factor = U_InnovationFactor}).
 %The function mutate_Specie/5 calls the selection algorithm function to seperate the fit from the unfit organisms in the specie, and then mutates the fit organisms to produce offspring, maintaning the total specie size within PopulationLimit. The function first calls the fitness_postprocessor which sorts the agent summaries. Then, the resorted updated summaries are split into a valid (fit) and invalid (unfit) lists of agents by the selection algorithm. The invalid agents are deleted, and the valid agents are used to create offspring using the particular Selection_Algorithm_Name function. The agent ids belonging to the next generation (the valid agents and their offspring) are then produced by the selection function. Finally, the innovation factor (the last time the specie's top fitness improved) is updated, the ids of the 3 top agents within the species are noted, and the updated specie record is written to database.
 
 	construct_AgentSummaries([Agent_Id|Agent_Ids],Acc)->
@@ -738,17 +701,7 @@ gather_STATS(Population_Id,EvaluationsAcc,OpMode)->
 		STAT.
 
 	run_GenTest(S,benchmark)->
-		ValidChampions = [ChampId || ChampId <- S#specie.champion_ids, genotype:dirty_read({agent,ChampId}) =/= undefined],
-		U_ChampionIds = case ValidChampions of
-			[] ->
-				Sorted_AgentSummaries = lists:reverse(lists:sort(construct_AgentSummaries(S#specie.agent_ids,[]))),
-				TopAgentSummaries = lists:sublist(Sorted_AgentSummaries,3),
-				{_TopFitnessList,_TopTotNs,NewChampionIds} = lists:unzip3(TopAgentSummaries),
-				genotype:write(S#specie{champion_ids = NewChampionIds}),
-				NewChampionIds;
-			_ -> ValidChampions
-		end,
-		TopAgent_Id = case U_ChampionIds of
+		TopAgent_Id = case S#specie.champion_ids of
 			[Id] ->
 				Id;
 			[Id|_] ->
@@ -756,19 +709,26 @@ gather_STATS(Population_Id,EvaluationsAcc,OpMode)->
 			[]->
 				void
 		end,
-		qlog:benchmarker(S#specie.id,io_lib:format("RUNTEST_CHAMPION_IDS | specie_id=~p | champion_ids=~p | selected_top=~p",[S#specie.id,U_ChampionIds,TopAgent_Id])),
 		case TopAgent_Id of
 			void ->
 				0;
 			_ ->
-				qlog:benchmarker(S#specie.id,io_lib:format("BENCHMARK_START | top_agent=~p", [TopAgent_Id])), Agent_PId=exoself:start(TopAgent_Id,self(),benchmark),
-				receive
-					{Agent_PId,benchmark_complete,Specie_Id,Fitness,Cycles,Time}->
-						qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_COMPLETE | fitness=~p | cycles=~p | time=~p", [Fitness, Cycles, Time])),
-						genotype:print(TopAgent_Id),
-						Fitness
-					%Msg ->
-						%io:format("Msg:~p~n",[Msg])
+				case genotype:dirty_read({agent,TopAgent_Id}) of
+					undefined ->
+						qlog:xLog(qStatus, "BENCHMARK_SKIP | agent_not_found=~p", [TopAgent_Id]),
+						0;
+					_ ->
+						% Log that we are entering a benchmark evaluation for the current top agent
+						qlog:benchmarker(S#specie.id,io_lib:format("BENCHMARK_START | top_agent=~p", [TopAgent_Id])),
+						Agent_PId=exoself:start(TopAgent_Id,self(),benchmark),
+						receive
+							{Agent_PId,benchmark_complete,Specie_Id,Fitness,Cycles,Time}->
+								qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_COMPLETE | fitness=~p | cycles=~p | time=~p", [Fitness, Cycles, Time])),
+								genotype:print(TopAgent_Id),
+								Fitness
+							%Msg ->
+							%	io:format("Msg:~p~n",[Msg])
+						end
 				end
 		end;
 	run_GenTest(_S,_)->

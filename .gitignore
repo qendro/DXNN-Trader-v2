@@ -90,7 +90,7 @@ results/
 outputs/
 graphs/
 reports/
-logs/
+.ReadMe_Files/
 
 # OS generated files
 .DS_Store

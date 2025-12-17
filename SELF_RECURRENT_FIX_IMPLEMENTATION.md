@@ -8,26 +8,30 @@ Limit the number of computations each neuron can perform per evaluation to the t
 
 ## Implementation Changes
 
-### 1. exoself.erl
+### 1. population_monitor.erl
 
-**Location**: After line 122, before `loop(S,OpMode)`
+**Location**: In `summon_agents/2` function, before spawning agents (around line 413)
 
 **Add**:
 ```erlang
-% Set global max computations per neuron per evaluation
-TotalCycles = case OpMode of
-    gt -> config:gt_start() - config:gt_end();
-    benchmark -> 
-        case config:bench_end() of
-            last -> 0;  % Safe: unknown cycles = 0 (prevents infinite loops)
-            N -> config:bench_start() - N
-        end;  % Safe: unknown cycles = 0
-    _ -> 100000
-end,
-config:set(max_neuron_computations_per_eval, TotalCycles),
+summon_agents(OpMode,Agent_Ids)->
+	% Set global max computations per neuron per evaluation (before spawning agents)
+	TotalCycles = case OpMode of
+		gt -> config:gt_start() - config:gt_end();
+		benchmark -> 
+			case config:bench_end() of
+				last -> 0;  % Safe: unknown cycles = 0 (prevents infinite loops)
+				N -> config:bench_start() - N
+			end;
+		_ -> 10000
+	end,
+	config:set(max_neuron_computations_per_eval, TotalCycles),
+	io:format("Summoning agents:~p with OpMode:~p~n",[Agent_Ids,OpMode]),
+	qlog:benchmarker(self(),io_lib:format("SUMMONING_AGENTS | op_mode=~p | agent_ids=~p | max_computations=~p",[OpMode,Agent_Ids,TotalCycles])),
+	summon_agents(OpMode,Agent_Ids,[]).
 ```
 
-**Lines**: 10 lines added
+**Lines**: 11 lines added (replaces existing summon_agents/2 function)
 
 ---
 
@@ -177,13 +181,13 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 ## Summary
 
 ### Total Lines Changed: 22 lines
-- **exoself.erl**: 10 lines added
+- **population_monitor.erl**: 11 lines added (replaces existing function)
 - **neuron.erl**: 10 lines added, 3 lines modified
 
 ### Changes by File:
 
-**exoself.erl**:
-- 10 lines added: TotalCycles calculation and config:set()
+**population_monitor.erl**:
+- 11 lines added: TotalCycles calculation and config:set() in summon_agents/2 (before spawning agents)
 
 **neuron.erl**:
 - 1 line added: `computation_count=0` in state record
@@ -193,6 +197,7 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 - 1 line modified: Use U_S instead of S in reset_prep
 
 ### Key Points:
+- Config set in population_monitor: Avoids race conditions when multiple agents spawn concurrently
 - No hardcoded values: Uses `config:get_val()` with default fallback
 - Safe buffer: Adds 100 computations to the config value as a safety margin
 - Safe defaults: `last -> 0` prevents infinite loops when cycle count is unknown
@@ -208,4 +213,10 @@ The implementation uses the correct syntax:
 MaxComputations = config:get_val(max_neuron_computations_per_eval, 100000) + 100,
 ```
 This correctly retrieves the value from config with a default fallback, then adds a 100-computation buffer for safety. The key is passed as an atom, not a computed expression.
+
+### Config Setting Location: population_monitor vs exoself
+The config is set in `population_monitor:summon_agents/2` instead of `exoself:prep/3` to avoid race conditions:
+- **Problem**: If set in exoself, concurrent agents could overwrite each other's config values
+- **Solution**: Set once in population_monitor before spawning any agents, ensuring all agents use the same value
+- **Benefit**: Guarantees consistent limit across all agents in a population
 
