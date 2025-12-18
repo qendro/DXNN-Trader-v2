@@ -373,7 +373,7 @@ curriculum_risk_penalty(State, Account, Generation) ->
             
             Fitness_Final = Base_Fitness_Adjusted * Risk_Penalty,
             
-            Fitness_Final
+            Fitness_Final + 300.0
     end.
 
 %% Helper function to build equity curve from state
