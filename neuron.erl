@@ -21,7 +21,8 @@
 	mi_pidps_backup=[],
 	output_pids=[],
 	ro_pids=[],
-	computation_count=0
+	computation_count=0,
+	max_computations=0
 }).
 gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
@@ -31,7 +32,7 @@ prep(ExoSelf_PId) ->
 		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 		random:seed(now()),
 		receive 
-			{ExoSelf_PId,{Id,Cx_PId,AF,PF,AggrF,HeredityType,SI_PIdPs,MI_PIdPs,Output_PIds,RO_PIds}} ->
+			{ExoSelf_PId,{Id,Cx_PId,AF,PF,AggrF,HeredityType,SI_PIdPs,MI_PIdPs,Output_PIds,RO_PIds,MaxComputations}} ->
 				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p recieved init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 				fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]}),
 				SI_PIds = lists:append([IPId || {IPId,_W} <- SI_PIdPs, IPId =/= bias],[ok]),
@@ -51,7 +52,8 @@ prep(ExoSelf_PId) ->
 					mi_pidps_current=MI_PIdPs,
 					mi_pidps_backup=MI_PIdPs,
 					output_pids=Output_PIds,
-					ro_pids=RO_PIds
+					ro_pids=RO_PIds,
+					max_computations=MaxComputations
 				},
 				%qlog:xLog(pid_to_list(ExoSelf_PId), "NEURON_INIT NeuronId=~p | SI_PIds count=~p (~p) | Output_PIds count=~p (~p) | RO_PIds count=~p (~p)", [Id, length(SI_PIds)-1, SI_PIds, length(Output_PIds), Output_PIds, length(RO_PIds), RO_PIds]),
 				loop(S,ExoSelf_PId,SI_PIds,MI_PIds,[],[])
@@ -65,46 +67,38 @@ prep(ExoSelf_PId) ->
 
 loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 	try
-		%MaxComputations = config:get_val(max_neuron_computations_per_eval, 100000) + 100,
-		MaxComputations = 2000,
-		case S#state.computation_count >= MaxComputations of
-			true ->
-				qlog:xLog(qStatus, "Neuron ~p hit computation limit: count=~p max=~p", [S#state.id, S#state.computation_count, MaxComputations]),
-				neuron:loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc);
-			false ->
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in secondary loop SI_PIds and MI_PIds empty. ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
-				PF = S#state.pf,
-				AF = S#state.af,
-				AggrF = S#state.aggrf,
-				{PFName,PFParameters} = PF,
-				Ordered_SIAcc = lists:reverse(SIAcc),
-				SI_PIdPs = S#state.si_pidps_current,
-				[begin case lists:keyfind(IPId,1,SI_PIdPs) of {IPId,WeightsP} -> case {WeightsP, length(InputVec), length(WeightsP)} of {[], InLen, _} -> qlog:xLog(qStatus, "dot_input EMPTY_WEIGHTS Neuron=~p IPId=~p InputLen=~p", [S#state.id, IPId, InLen]); {_WPs, InLen, WLen} when InLen =/= WLen -> qlog:xLog(qStatus, "dot_input LEN_MISMATCH Neuron=~p IPId=~p InputLen=~p WLen=~p", [S#state.id, IPId, InLen, WLen]); _ -> ok end; _ -> ok end end || {IPId,InputVec} <- Ordered_SIAcc],
-				SAggregation_Product = sat(signal_aggregator:AggrF(Ordered_SIAcc,SI_PIdPs),?SAT_LIMIT),
-				SOutput = functions:AF(SAggregation_Product),
-				
-				Output_PIds = S#state.output_pids,
-				[Output_PId ! {self(),forward,[SOutput]} || Output_PId <- Output_PIds],
-				
-				U_ComputationCount = S#state.computation_count + 1,
-				case PFName of
-					none ->
-						U_S = S#state{computation_count=U_ComputationCount};
-					_ ->
-						Ordered_MIAcc = lists:reverse(MIAcc),
-						MI_PIdPs = S#state.mi_pidps_current,
-						MAggregation_Product = sat(signal_aggregator:dot_product(Ordered_MIAcc,MI_PIdPs),?SAT_LIMIT),
-						MOutput = functions:tanh(MAggregation_Product),
-						U_SI_PIdPs = plasticity:PFName([MOutput|PFParameters],Ordered_SIAcc,SI_PIdPs,SOutput),
-						U_S = S#state{
-							si_pidps_current = U_SI_PIdPs,
-							computation_count = U_ComputationCount
-						}
-				end,
-				SI_PIds = S#state.si_pids,
-				MI_PIds = S#state.mi_pids,
-				neuron:loop(U_S,ExoSelf_PId,SI_PIds,MI_PIds,[],[])
-		end
+		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in secondary loop SI_PIds and MI_PIds empty. ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
+		PF = S#state.pf,
+		AF = S#state.af,
+		AggrF = S#state.aggrf,
+		{PFName,PFParameters} = PF,
+		Ordered_SIAcc = lists:reverse(SIAcc),
+		SI_PIdPs = S#state.si_pidps_current,
+		[begin case lists:keyfind(IPId,1,SI_PIdPs) of {IPId,WeightsP} -> case {WeightsP, length(InputVec), length(WeightsP)} of {[], InLen, _} -> qlog:xLog(qStatus, "dot_input EMPTY_WEIGHTS Neuron=~p IPId=~p InputLen=~p", [S#state.id, IPId, InLen]); {_WPs, InLen, WLen} when InLen =/= WLen -> qlog:xLog(qStatus, "dot_input LEN_MISMATCH Neuron=~p IPId=~p InputLen=~p WLen=~p", [S#state.id, IPId, InLen, WLen]); _ -> ok end; _ -> ok end end || {IPId,InputVec} <- Ordered_SIAcc],
+		SAggregation_Product = sat(signal_aggregator:AggrF(Ordered_SIAcc,SI_PIdPs),?SAT_LIMIT),
+		SOutput = functions:AF(SAggregation_Product),
+		
+		Output_PIds = S#state.output_pids,
+		[Output_PId ! {self(),forward,[SOutput]} || Output_PId <- Output_PIds],
+		
+		U_ComputationCount = S#state.computation_count + 1,
+		case PFName of
+			none ->
+				U_S = S#state{computation_count=U_ComputationCount};
+			_ ->
+				Ordered_MIAcc = lists:reverse(MIAcc),
+				MI_PIdPs = S#state.mi_pidps_current,
+				MAggregation_Product = sat(signal_aggregator:dot_product(Ordered_MIAcc,MI_PIdPs),?SAT_LIMIT),
+				MOutput = functions:tanh(MAggregation_Product),
+				U_SI_PIdPs = plasticity:PFName([MOutput|PFParameters],Ordered_SIAcc,SI_PIdPs,SOutput),
+				U_S = S#state{
+					si_pidps_current = U_SI_PIdPs,
+					computation_count = U_ComputationCount
+				}
+		end,
+		SI_PIds = S#state.si_pids,
+		MI_PIds = S#state.mi_pids,
+		neuron:loop(U_S,ExoSelf_PId,SI_PIds,MI_PIds,[],[])
 	catch
 		Error:Reason ->
 			NeuronId = case S#state.id of
@@ -116,63 +110,125 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 	end;
 loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 	try
-		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in main loop SI_PId: ~p, SI_PIds: ~p, MI_PId: ~p, MI_PIds: ~p. ExoSelf_Id: ~p", [self(), SI_PId, SI_PIds, MI_PId, MI_PIds, ExoSelf_PId]),
-		receive
-			{SI_PId,forward,Input}->
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p received forward from SI_PId: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), SI_PId, ExoSelf_PId, Input]),
-				loop(S,ExoSelf_PId,SI_PIds,[MI_PId|MI_PIds],[{SI_PId,Input}|SIAcc],MIAcc);
-			{MI_PId,forward,Input}->
-				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p received forward from MI_PId: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), MI_PId, ExoSelf_PId, Input]),
-				loop(S,ExoSelf_PId,[SI_PId|SI_PIds],MI_PIds,SIAcc,[{MI_PId,Input}|MIAcc]);
-			{ExoSelf_PId,weight_backup}->
-				U_S=case S#state.heredity_type of
-					darwinian ->
-						S#state{
-							si_pidps_backup=S#state.si_pidps_bl,
-							mi_pidps_backup=S#state.mi_pidps_current
-						};
-					lamarckian ->
-						S#state{
-							si_pidps_backup=S#state.si_pidps_current,
-							mi_pidps_backup=S#state.mi_pidps_current
-						}
-				end,
-				loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
-			{ExoSelf_PId,weight_restore}->
-				U_S = S#state{
-					si_pidps_bl=S#state.si_pidps_backup,
-					si_pidps_current=S#state.si_pidps_backup,
-					mi_pidps_current=S#state.mi_pidps_backup
-				},
-				loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
-			{ExoSelf_PId,weight_perturb,Spread}->
-				Perturbed_SIPIdPs=perturb_IPIdPs(Spread,S#state.si_pidps_backup),
-				Perturbed_MIPIdPs=perturb_IPIdPs(Spread,S#state.mi_pidps_backup),
-				U_S=S#state{
-					si_pidps_bl=Perturbed_SIPIdPs,
-					si_pidps_current=Perturbed_SIPIdPs,
-					mi_pidps_current=Perturbed_MIPIdPs
-				},
-				loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
-			{ExoSelf_PId,reset_prep}->
-				neuron:flush_buffer(),
-				ExoSelf_PId ! {self(),ready},
-				RO_PIds = S#state.ro_pids,
-				receive 
-					{ExoSelf_PId, reset}->
-						fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]})
-				end,
-				U_S = S#state{computation_count=0},
-				loop(U_S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
-			{ExoSelf_PId,get_backup}->
-				NId = S#state.id,
-				ExoSelf_PId ! {self(),NId,S#state.si_pidps_backup,S#state.mi_pidps_backup},
-				loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
-			{ExoSelf_PId,terminate}->
-				%io:format("Neuron:~p is terminating.~n",[self()])
-				ok
+		MaxComputations = S#state.max_computations + 100,
+		case S#state.computation_count >= MaxComputations of
+			true ->
+				% Limit hit - ignore forward messages, but handle control messages
+				qlog:xLog(qStatus, "Neuron ~p hit computation limit (in collection): count=~p max=~p", [S#state.id, S#state.computation_count, MaxComputations]),
+				receive
+					{SI_PId,forward,_Input}->
+						% Ignore forward message, loop back
+						loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{MI_PId,forward,_Input}->
+						% Ignore forward message, loop back
+						loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,weight_backup}->
+						U_S=case S#state.heredity_type of
+							darwinian ->
+								S#state{
+									si_pidps_backup=S#state.si_pidps_bl,
+									mi_pidps_backup=S#state.mi_pidps_current
+								};
+							lamarckian ->
+								S#state{
+									si_pidps_backup=S#state.si_pidps_current,
+									mi_pidps_backup=S#state.mi_pidps_current
+								}
+						end,
+						loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,weight_restore}->
+						U_S = S#state{
+							si_pidps_bl=S#state.si_pidps_backup,
+							si_pidps_current=S#state.si_pidps_backup,
+							mi_pidps_current=S#state.mi_pidps_backup
+						},
+						loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,weight_perturb,Spread}->
+						Perturbed_SIPIdPs=perturb_IPIdPs(Spread,S#state.si_pidps_backup),
+						Perturbed_MIPIdPs=perturb_IPIdPs(Spread,S#state.mi_pidps_backup),
+						U_S=S#state{
+							si_pidps_bl=Perturbed_SIPIdPs,
+							si_pidps_current=Perturbed_SIPIdPs,
+							mi_pidps_current=Perturbed_MIPIdPs
+						},
+						loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,reset_prep}->
+						neuron:flush_buffer(),
+						ExoSelf_PId ! {self(),ready},
+						RO_PIds = S#state.ro_pids,
+						receive 
+							{ExoSelf_PId, reset}->
+								fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]})
+						end,
+						U_S = S#state{computation_count=0},
+						loop(U_S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
+					{ExoSelf_PId,get_backup}->
+						NId = S#state.id,
+						ExoSelf_PId ! {self(),NId,S#state.si_pidps_backup,S#state.mi_pidps_backup},
+						loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,terminate}->
+						ok
+				end;
+			false ->
+				% Normal operation - process forward messages
+				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in main loop SI_PId: ~p, SI_PIds: ~p, MI_PId: ~p, MI_PIds: ~p. ExoSelf_Id: ~p", [self(), SI_PId, SI_PIds, MI_PId, MI_PIds, ExoSelf_PId]),
+				receive
+					{SI_PId,forward,Input}->
+						%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p received forward from SI_PId: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), SI_PId, ExoSelf_PId, Input]),
+						loop(S,ExoSelf_PId,SI_PIds,[MI_PId|MI_PIds],[{SI_PId,Input}|SIAcc],MIAcc);
+					{MI_PId,forward,Input}->
+						%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p received forward from MI_PId: ~p. ExoSelf_Id: ~p, Input: ~p", [self(), MI_PId, ExoSelf_PId, Input]),
+						loop(S,ExoSelf_PId,[SI_PId|SI_PIds],MI_PIds,SIAcc,[{MI_PId,Input}|MIAcc]);
+					{ExoSelf_PId,weight_backup}->
+						U_S=case S#state.heredity_type of
+							darwinian ->
+								S#state{
+									si_pidps_backup=S#state.si_pidps_bl,
+									mi_pidps_backup=S#state.mi_pidps_current
+								};
+							lamarckian ->
+								S#state{
+									si_pidps_backup=S#state.si_pidps_current,
+									mi_pidps_backup=S#state.mi_pidps_current
+								}
+						end,
+						loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,weight_restore}->
+						U_S = S#state{
+							si_pidps_bl=S#state.si_pidps_backup,
+							si_pidps_current=S#state.si_pidps_backup,
+							mi_pidps_current=S#state.mi_pidps_backup
+						},
+						loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,weight_perturb,Spread}->
+						Perturbed_SIPIdPs=perturb_IPIdPs(Spread,S#state.si_pidps_backup),
+						Perturbed_MIPIdPs=perturb_IPIdPs(Spread,S#state.mi_pidps_backup),
+						U_S=S#state{
+							si_pidps_bl=Perturbed_SIPIdPs,
+							si_pidps_current=Perturbed_SIPIdPs,
+							mi_pidps_current=Perturbed_MIPIdPs
+						},
+						loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,reset_prep}->
+						neuron:flush_buffer(),
+						ExoSelf_PId ! {self(),ready},
+						RO_PIds = S#state.ro_pids,
+						receive 
+							{ExoSelf_PId, reset}->
+								fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]})
+						end,
+						U_S = S#state{computation_count=0},
+						loop(U_S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
+					{ExoSelf_PId,get_backup}->
+						NId = S#state.id,
+						ExoSelf_PId ! {self(),NId,S#state.si_pidps_backup,S#state.mi_pidps_backup},
+						loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
+					{ExoSelf_PId,terminate}->
+						%io:format("Neuron:~p is terminating.~n",[self()])
+						ok
 	%		after 10000 ->
 				%io:format("neuron:~p stuck.~n",[S#state.id])
+				end
 		end
 	catch
 		Error:Reason ->

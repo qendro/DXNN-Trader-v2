@@ -404,14 +404,9 @@ extract_SpecieAgentIds(Specie_Id)->
 %extract_SpecieAgentIds/1 returns a list of agent ids to the caller.
 
 summon_agents(OpMode,Agent_Ids)->
-	% Set global max computations per neuron per evaluation (before spawning agents)
-	% Note: exoself:start(Agent_Id,self()) defaults to 'gt' mode regardless of OpMode passed here
-	% So always use gt calculation since that's what agents actually run in
-	TotalCycles = config:gt_start() - config:gt_end(),
-	config:set(max_neuron_computations_per_eval, TotalCycles),
 	io:format("Summoning agents:~p with OpMode:~p~n",[Agent_Ids,OpMode]),
-	qlog:benchmarker(self(),io_lib:format("SUMMONING_AGENTS | op_mode=~p | agent_ids=~p | max_computations=~p",[OpMode,Agent_Ids,TotalCycles])),
-	qlog:xLog(qStatus, "SUMMONING_AGENTS | op_mode=~p | max_computations=~p", [OpMode, TotalCycles]),
+	qlog:benchmarker(self(),io_lib:format("SUMMONING_AGENTS | op_mode=~p | agent_ids=~p",[OpMode,Agent_Ids])),
+	qlog:xLog(qStatus, "SUMMONING_AGENTS | op_mode=~p", [OpMode]),
 	summon_agents(OpMode,Agent_Ids,[]).
 summon_agents(OpMode,[Agent_Id|Agent_Ids],Acc)->
 	Agent_PId = exoself:start(Agent_Id,self()),
@@ -723,9 +718,7 @@ gather_STATS(Population_Id,EvaluationsAcc,OpMode)->
 						Agent_PId=exoself:start(TopAgent_Id,self(),benchmark),
 						receive
 							{Agent_PId,benchmark_complete,Specie_Id,Fitness,Cycles,Time}->
-								qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_COMPLETE | fitness=~p | cycles=~p | time=~p", [Fitness, Cycles, Time])),
-								genotype:print(TopAgent_Id),
-								Fitness
+								qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_COMPLETE | fitness=~p | cycles=~p | time=~p", [Fitness, Cycles, Time])), genotype:print(TopAgent_Id), Fitness
 							%Msg ->
 							%	io:format("Msg:~p~n",[Msg])
 						end
