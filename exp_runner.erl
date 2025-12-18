@@ -351,8 +351,8 @@ generate_run_id() ->
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
 get_run_configs() ->
     [
-        {1, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 150}, {evaluations_limit, 10000000}, {generation_limit, 10}]},
-        {2, [{tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 150}, {evaluations_limit, 20000000}, {generation_limit, 10}]}
+        {1, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 4000}, {specie_size_limit, 2000}, {init_specie_size, 1500}, {evaluations_limit, 10000000}, {generation_limit, 10}]},
+        {2, [{tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 2000}, {init_specie_size, 1500}, {evaluations_limit, 20000000}, {generation_limit, 10}]}
     ].
 
 %% Prep function (similar to benchmarker:prep)

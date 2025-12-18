@@ -38,6 +38,12 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 		{Acc,NewPopAcc}.
 %The calculate_alotments/4 function accepts the AgentSummaries list and for each agent, using the NeuralEnergyCost, calcualtes how many offspring that agent can produce by using the agent's Fitness, TotNEurons, and NeuralEnergyCost values. The function first calculates how many neurons the agent is alloted, based on the agent's fitness and the cost of each neuron (which itself was calculated based on the average performance of the population). From the number of neurons alloted to the agent, the function then calculates how many offspring the agent should be alloted, by deviding the agent's NN size by the number of neurons it is alloted. The function also keeps track of how many offspring will be created from all these agents in general, by adding up all the offspring alotements. The calcualte_alotments/4 function does this for each tuple in the AgentSummaries, and then returns the calculated alotment list and NewPopAcc to the caller.
 
+	parallel_create_mutants(Agent_Id,Count)->
+		Parent = self(),
+		Pids = [spawn(fun()-> try MutantAgent_Id = population_monitor:create_MutantAgentCopy(Agent_Id), Parent ! {mutant_created,MutantAgent_Id} catch Error:Reason -> Parent ! {mutant_error,Error,Reason} end end) || _ <- lists:seq(1,Count)],
+		MutantAgent_Ids = [receive {mutant_created,MutantAgent_Id} -> MutantAgent_Id; {mutant_error,Error,Reason} -> qlog:benchmarker(self,io_lib:format("Clone error Agent_Id=~p Error=~p Reason=~p",[Agent_Id,Error,Reason])), exit({clone_failed,Error,Reason}) end || _ <- Pids],
+		MutantAgent_Ids.
+
 	gather_survivors([{MutantAlotment,Fitness,TotNeurons,Agent_Id}|AlotmentsP],Normalizer,PopulationLimit,Acc)->
 		SafeNormalizer = case Normalizer of
 			0 -> 1.0;  % Prevent division by zero
@@ -49,15 +55,7 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 		%io:format("Agent_Id:~p Normalized_MutantAlotment:~p~n",[Agent_Id,Normalized_MutantAlotment]),
 		SurvivingAgent_Ids = case CappedAlotment >= 1 of
 			true ->
-				MutantAgent_Ids = case CappedAlotment >= 2 of
-					true ->
-						[begin
-							MutantAgent_Id = population_monitor:create_MutantAgentCopy(Agent_Id),
-							MutantAgent_Id
-						end || I <- lists:seq(1,CappedAlotment-1)];
-					false ->
-						[]
-				end,
+				MutantAgent_Ids = case CappedAlotment >= 2 of true -> parallel_create_mutants(Agent_Id,CappedAlotment-1); false -> [] end,
 				[Agent_Id|MutantAgent_Ids];
 			false ->
 				io:format("Deleting agent:~p~n",[Agent_Id]),
@@ -87,13 +85,14 @@ top3(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 	NewGenAgent_Ids = breed(Valid_AgentIds,PopulationLimit-TotSurvivors,[]),
 	{NewGenAgent_Ids,TopAgent_Ids}.
 		
-	breed(_Valid_AgentIds,0,Acc)->
-		Acc;
-	breed(Valid_AgentIds,OffspringIndex,Acc)->%TODO
+	breed(_Valid_AgentIds,0,Acc)-> Acc;
+	breed(Valid_AgentIds,OffspringIndex,Acc)->
 		Parent_AgentId = lists:nth(random:uniform(length(Valid_AgentIds)),Valid_AgentIds),
-		MutantAgent_Id = population_monitor:create_MutantAgentCopy(Parent_AgentId),
-		breed(Valid_AgentIds,OffspringIndex-1,[MutantAgent_Id|Acc]).
-%The breed/3 function is part of a very simple selection algorithm, which just selects the top 3 most fit agents, and then uses the create_MutantAgentCopy/1 function to create their offspring.
+		BatchSize = min(OffspringIndex,10),
+		MutantAgent_Ids = parallel_create_mutants(Parent_AgentId,BatchSize),
+		Remaining = OffspringIndex - BatchSize,
+		case Remaining > 0 of true -> breed(Valid_AgentIds,Remaining,lists:append(MutantAgent_Ids,Acc)); false -> lists:append(MutantAgent_Ids,Acc) end.
+%The breed/3 function creates offspring from top 3 agents using parallel cloning for efficiency.
 
 competition(ProperlySorted_AgentSummaries)->
 	TotEnergy = lists:sum([Fitness || {Fitness,_TotN,_Agent_Id}<-ProperlySorted_AgentSummaries]),
