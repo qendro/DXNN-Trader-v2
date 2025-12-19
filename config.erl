@@ -34,8 +34,8 @@ bench_end() -> get_val(bench_end, last).                          % Options: las
 %% Sensor Profiles
 %% ===================================================================
 %% --- Standard Forex Trader ---
-pli_resolutions() -> get_val(pli_resolutions, [20, 40]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
-pci_horizontal_resolutions() -> get_val(pci_horizontal_resolutions, [90]).         % Options: [10], [20], [50], [10,20], [20,50], etc. (creates one sensor per value)
+pli_resolutions() -> get_val(pli_resolutions, [30, 90, 270]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
+pci_horizontal_resolutions() -> get_val(pci_horizontal_resolutions, [30, 90, 270]).         % Options: [10], [20], [50], [10,20], [20,50], etc. (creates one sensor per value)
 pci_vertical_resolutions() -> get_val(pci_vertical_resolutions, [20]).           % Options: [10], [15], [20], [10,15], [15,20], etc. (PCI: Cartesian product HRes×VRes)
 
 %% --- 1-Minute Optimized Trader ---
@@ -121,7 +121,7 @@ mutation_operators() -> get_val(mutation_operators, [
 %% ===================================================================
 %% Fitness Function Selection
 %% ===================================================================
-fitness_function() -> get_val(fitness_function, curriculum_risk_penalty).                % Options: time_weighted, total_profit, sharpe_ratio, profit_factor, total_return, sortino_ratio, calmar_ratio, curriculum_risk_penalty
+fitness_function() -> get_val(fitness_function, curriculum_risk_penalty).                % Options: time_weighted, total_profit, sharpe_ratio, profit_factor, total_return, sortino_ratio, calmar_ratio, curriculum_risk_penalty, phase0_close_trades, phase1_profit_risk
 
 %% ===================================================================
 %% Time-Weighted Fitness Configuration
@@ -145,6 +145,11 @@ fitness_curriculum_generation_focus() -> get_val(fitness_curriculum_generation_f
 fitness_curriculum_drawdown_floor() -> get_val(fitness_curriculum_drawdown_floor, 0.10).    % DD_floor: Drawdown tolerated (default: 0.10 = 10%)
 fitness_curriculum_drawdown_penalty() -> get_val(fitness_curriculum_drawdown_penalty, 3.0). % lam: Drawdown penalty strength (default: 3.0)
 
+%% ===================================================================
+%% Phase 1 Profit Risk Fitness Configuration
+%% ===================================================================
+fitness_phase1_pscore_weight() -> get_val(fitness_phase1_pscore_weight, 0.40).      % Weight for PnL score in phase1_profit_risk (default: 0.40)
+fitness_phase1_tradescore_weight() -> get_val(fitness_phase1_tradescore_weight, 0.60).  % Weight for trade score in phase1_profit_risk (default: 0.60)
 
 %% ===================================================================
 %% Population Configuration

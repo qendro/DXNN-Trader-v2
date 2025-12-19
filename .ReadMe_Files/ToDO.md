@@ -1,11 +1,9 @@
 -----
 - reformat qlog:delete_all(). so it deletes the folder instead of each item one by one
-- Agent cloning seems to be sequential taking alot of time at low CPU usage
-- Agent cloning seems to clone an exesive amount of agents..
-- Identify increase RAM memory ussage
-    - Addressed neuron recurrent issue where it just keeps sending messages with a counter to only send total cycle count messages and not more 
-        - Memory is still very high though..
-- 
+- Agent connectivity fix
+- Agent RAM and CPU utlization and message queue
+- Distributed system across multple PC's or AWS instances
+- Improve fitness function
 -----
 
 

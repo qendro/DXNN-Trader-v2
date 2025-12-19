@@ -48,9 +48,35 @@ has_neural_path(Agent_Id, Cx, A) ->
                     has_path_bfs(Agent_Id, S_Id, A_Id, [S_Id], [S_Id], ConnectionArch)
                 end, A_Ids)
             end, S_Ids) of
-                true -> true;
+                true -> 
+                    case has_isolated_self_recurrent_neurons(Agent_Id, Cx) of
+                        true -> true;
+                        {false, _} -> {false, isolated_self_recurrent}
+                    end;
                 false -> {false, no_path}
             end
+    end.
+
+has_isolated_self_recurrent_neurons(Agent_Id, Cx) ->
+    N_Ids = Cx#cortex.neuron_ids,
+    Isolated = [N_Id || N_Id <- N_Ids, is_isolated_self_recurrent(Agent_Id, N_Id)],
+    case Isolated of
+        [] -> true;
+        _ -> 
+            qlog:xLog(qStatus, "Agent ~p detected ~p isolated self-recurrent neuron(s): ~p", [Agent_Id, length(Isolated), Isolated]),
+            {false, isolated_self_recurrent}
+    end.
+
+is_isolated_self_recurrent(Agent_Id, N_Id) ->
+    N = genotype:read({neuron,N_Id}),
+    % Early exit: must be self-recurrent first
+    case lists:member(N_Id, N#neuron.ro_ids) of
+        false -> false;  % Not self-recurrent, skip rest
+        true ->
+            {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+            Self_In_Inputs = lists:member(N_Id, Input_Ids),
+            Only_Self_Or_Bias = lists:all(fun(Id) -> Id == N_Id orelse Id == bias end, Input_Ids),
+            Self_In_Inputs andalso Only_Self_Or_Bias
     end.
 
 has_substrate_main_path(_Agent_Id, Cx, Substrate_Id) ->
@@ -244,6 +270,7 @@ try_fix_and_verify(Agent_Id, Reason, Attempts) ->
         cpp_to_cep_no_path -> fix_cpp_cep_path(Agent_Id);
         bidirectional_mismatch -> fix_bidirectional_mismatch(Agent_Id);
         cpp_bidirectional_mismatch -> fix_cpp_bidirectional_mismatch(Agent_Id);
+        isolated_self_recurrent -> fix_isolated_self_recurrent(Agent_Id);
         _ -> ok
     end,
     case has_valid_connectivity(Agent_Id) of
@@ -415,6 +442,69 @@ fix_cpp_bidirectional_mismatch(Agent_Id) ->
         end, Input_Ids)
     end, N_Ids),
     ok.
+
+fix_isolated_self_recurrent(Agent_Id) ->
+    A = genotype:read({agent,Agent_Id}),
+    Generation = A#agent.generation,
+    Cx_Id = A#agent.cx_id,
+    Cx = genotype:read({cortex,Cx_Id}),
+    S_Ids = Cx#cortex.sensor_ids,
+    N_Ids = Cx#cortex.neuron_ids,
+    Isolated = [N_Id || N_Id <- N_Ids, is_isolated_self_recurrent(Agent_Id, N_Id)],
+    case Isolated of
+        [] -> ok;
+        _ ->
+            qlog:xLog(qStatus, "Agent ~p fixing ~p isolated self-recurrent neuron(s)", [Agent_Id, length(Isolated)]),
+            lists:foreach(fun(Isolated_N_Id) ->
+                case {S_Ids, N_Ids} of
+                    {[], []} -> ok;
+                    {[], _} -> 
+                        % Only neurons: respect feedforward constraints
+                        Available_Neurons = case A#agent.constraint#constraint.connection_architecture of
+                            feedforward -> 
+                                genome_mutator:filter_InlinkIdPool(A#agent.constraint, Isolated_N_Id, N_Ids);
+                            recurrent -> N_Ids
+                        end,
+                        case Available_Neurons -- [Isolated_N_Id] of
+                            [] -> ok;
+                            Available -> 
+                                From_N_Id = pick_random(Available),
+                                genome_mutator:link_FromElementToElement(Agent_Id, From_N_Id, Isolated_N_Id),
+                                qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from neuron ~p", [Agent_Id, Isolated_N_Id, From_N_Id])
+                        end;
+                    {_, []} -> 
+                        % Only sensors
+                        S_Id = pick_random(S_Ids),
+                        link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id),
+                        qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
+                    _ ->
+                        % Both available: randomly choose
+                        case random:uniform(2) of
+                            1 -> 
+                                S_Id = pick_random(S_Ids),
+                                link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id),
+                                qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
+                            2 ->
+                                Available_Neurons = case A#agent.constraint#constraint.connection_architecture of
+                                    feedforward -> 
+                                        genome_mutator:filter_InlinkIdPool(A#agent.constraint, Isolated_N_Id, N_Ids);
+                                    recurrent -> N_Ids
+                                end,
+                                case Available_Neurons -- [Isolated_N_Id] of
+                                    [] -> 
+                                        S_Id = pick_random(S_Ids),
+                                        link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id),
+                                        qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p (fallback)", [Agent_Id, Isolated_N_Id, S_Id]);
+                                    Available -> 
+                                        From_N_Id = pick_random(Available),
+                                        genome_mutator:link_FromElementToElement(Agent_Id, From_N_Id, Isolated_N_Id),
+                                        qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from neuron ~p", [Agent_Id, Isolated_N_Id, From_N_Id])
+                                end
+                        end
+                end
+            end, Isolated),
+            ok
+    end.
 
 link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, N_Id) ->
     S = genotype:read({sensor,S_Id}),

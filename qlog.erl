@@ -258,6 +258,21 @@ exp_runner(Event, Data) ->
             io:format(File, "generations: ~p | tot_evaluations: ~p | agent_count: ~p~n",
                 [MaxGen, TotEvals, AgentCount]);
             
+        generation_start ->
+            {PopId, Generation, TotAgents} = Data,
+            io:format(File, "ts: ~s | generation_start | population: ~p | generation: ~p | total_agents: ~p~n",
+                [Timestamp, PopId, Generation, TotAgents]);
+            
+        generation_end ->
+            {PopId, Generation, TotAgents} = Data,
+            io:format(File, "ts: ~s | generation_end | population: ~p | generation: ~p | total_agents: ~p~n",
+                [Timestamp, PopId, Generation, TotAgents]);
+            
+        mutate_specie ->
+            {Specie_Id, PopulationLimit, AvgFitness, MaxFitness, MinFitness, NeuralEnergyCost} = Data,
+            io:format(File, "ts: ~s | mutate_specie | specie: ~p | population_limit: ~p | avg_fitness: ~.4f | max_fitness: ~.4f | min_fitness: ~.4f | neural_energy_cost: ~.4f~n",
+                [Timestamp, Specie_Id, PopulationLimit, AvgFitness, MaxFitness, MinFitness, NeuralEnergyCost]);
+            
         run_failed ->
             {RunId, RunIndex, Reason} = Data,
             io:format(File, "ts: ~s | status: failed | reason: ~p~n",
@@ -277,7 +292,12 @@ exp_runner(Event, Data) ->
         experiment_terminate ->
             {RunId, PopId} = Data,
             io:format(File, "ts: ~s | experiment: ~p | population: ~p | status: terminated~n",
-                [Timestamp, RunId, PopId])
+                [Timestamp, RunId, PopId]);
+            
+        population_monitor_terminated ->
+            {Population_Id, Reason, OpTag, OpMode, TotAgents, PopGen, TotEvals} = Data,
+            io:format(File, "ts: ~s | population_monitor: ~p | status: terminated | reason: ~p | op_tag: ~p | op_mode: ~p | total_agents: ~p | generation: ~p | total_evaluations: ~p~n",
+                [Timestamp, Population_Id, Reason, OpTag, OpMode, TotAgents, PopGen, TotEvals])
     end,
     file:close(File).
 

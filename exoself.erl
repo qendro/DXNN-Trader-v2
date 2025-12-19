@@ -62,16 +62,6 @@ prep(Agent_Id,PM_PId,OpMode)->
 	SIds = Cx#cortex.sensor_ids,
 	AIds = Cx#cortex.actuator_ids,
 	NIds = Cx#cortex.neuron_ids,
-	% Set max computations per neuron per evaluation based on actual OpMode
-	TotalCycles = case OpMode of
-		gt -> config:gt_start() - config:gt_end();
-		benchmark -> 
-			case config:bench_end() of
-				last -> config:gt_start() - config:gt_end();  % Use gt calculation when bench_end is unknown
-				N -> config:bench_start() - N
-			end;
-		_ -> config:gt_start() - config:gt_end()  % Default to gt calculation
-	end,
 	ScapePIds = spawn_Scapes(IdsNPIds,SIds,AIds,Agent_Id,OpMode),
 	spawn_CerebralUnits(IdsNPIds,cortex,[Cx#cortex.id]),
 	spawn_CerebralUnits(IdsNPIds,sensor,SIds),
@@ -105,7 +95,7 @@ prep(Agent_Id,PM_PId,OpMode)->
 	end,
 	link_Sensors(Agent_Id,SIds,IdsNPIds,OpMode),
 	link_Actuators(AIds,IdsNPIds,OpMode),
-	link_Neurons(NIds,IdsNPIds,HeredityType,TotalCycles),
+	link_Neurons(NIds,IdsNPIds,HeredityType),
 		{SPIds,NPIds,APIds}=link_Cortex(Cx,IdsNPIds),
 	Cx_PId = ets:lookup_element(IdsNPIds,Cx#cortex.id,2),
 	{TuningDurationFunction,Parameter} = A#agent.tuning_duration_f,
@@ -388,7 +378,7 @@ ensure_live_scape_started() ->
 		ok.
 %The link_SubstrateCEPs/2 function sends to the already spawned and waiting substrate_ceps their states, composed of the PId lists and other information which are needed by the substrate_ceps to link up and interface with other elements in the distributed phenotype.
 
-link_Neurons([NId|Neuron_Ids],IdsNPIds,HeredityType,MaxComputations) ->
+link_Neurons([NId|Neuron_Ids],IdsNPIds,HeredityType) ->
 	N=genotype:dirty_read({neuron,NId}),
 	NPId = try
 		ets:lookup_element(IdsNPIds,NId,2)
@@ -408,9 +398,9 @@ link_Neurons([NId|Neuron_Ids],IdsNPIds,HeredityType,MaxComputations) ->
 		MI_PIdPs = convert_IdPs2PIdPs(IdsNPIds,Input_IdPs_Modulation,[]),
 		O_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- Output_Ids],
 		RO_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- RO_Ids],
-		NPId ! {self(),{NId,Cx_PId,AFName,PFName,AggrFName,HeredityType,SI_PIdPs,MI_PIdPs,O_PIds,RO_PIds,MaxComputations}},
-		link_Neurons(Neuron_Ids,IdsNPIds,HeredityType,MaxComputations);
-link_Neurons([],_IdsNPIds,_HeredityType,_MaxComputations)->
+		NPId ! {self(),{NId,Cx_PId,AFName,PFName,AggrFName,HeredityType,SI_PIdPs,MI_PIdPs,O_PIds,RO_PIds}},
+		link_Neurons(Neuron_Ids,IdsNPIds,HeredityType);
+link_Neurons([],_IdsNPIds,_HeredityType)->
 	ok.
 %The link_Neurons/2 function sends to the already spawned and waiting neurons their states, composed of the PId lists and other information needed by the neurons to link up and interface with other elements in the distributed phenotype.
 

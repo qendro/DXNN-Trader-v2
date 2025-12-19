@@ -21,6 +21,8 @@
 %% - sortino_ratio: Downside deviation-adjusted return
 %% - calmar_ratio: Return / maximum drawdown ratio
 %% - curriculum_risk_penalty: Curriculum learning with risk penalty based on drawdown
+%% - phase0_close_trades: Phase 0 - Focus on closing trades without blowing up (strictly positive)
+%% - phase1_profit_risk: Phase 1 - Profit optimization with drawdown control (strictly positive)
 %% ===================================================================
 
 %% ===================================================================
@@ -44,6 +46,8 @@ calculate_fitness(State, Account, FunctionName, Generation) ->
         sortino_ratio -> sortino_ratio(State, Account);
         calmar_ratio -> calmar_ratio(State, Account);
         curriculum_risk_penalty -> curriculum_risk_penalty(State, Account, Generation);
+        phase0_close_trades -> phase0_close_trades(State, Account);
+        phase1_profit_risk -> phase1_profit_risk(State, Account);
         _ -> 
             io:format("Warning: Unknown fitness function ~p, using time_weighted~n", [FunctionName]),
             time_weighted(State, Account)
@@ -422,3 +426,152 @@ calculate_max_drawdown([E | Equity_Curve], E_Max, Peak, DD_Max) ->
     New_DD_Max = max(DD_Max, DD),
     calculate_max_drawdown(Equity_Curve, New_E_Max, New_Peak, New_DD_Max).
 
+
+%% =========================================================
+%% Small helpers
+%% =========================================================
+clamp(X, Lo, Hi) when X < Lo -> Lo;
+clamp(X, Lo, Hi) when X > Hi -> Hi;
+clamp(X, _Lo, _Hi) -> X.
+
+to_01(Core) ->
+    %% Core is intended in [-1,1]. Clamp anyway so Score01 is in [0,1].
+    CoreC = clamp(Core, -1.0, 1.0),
+    0.5 * (CoreC + 1.0).
+
+%% =========================================================
+%% Phase 0 Fitness: Close Trades (STRICTLY POSITIVE)
+%% =========================================================
+phase0_close_trades(State, Account) ->
+    MinFitness = 1.0,
+    Scale      = 1000.0,
+
+    Trades    = State#state.realized_pl_by_cycle,
+    NumTrades = length(Trades),
+    T         = max(State#state.cycle, 1),
+    ScaleT    = T / 1000.0,
+
+    TargetTradesPer1000    = 50.0,
+    OvertradeThreshPer1000 = 150.0,
+    LossFloorPct           = 0.03,
+
+    %% Trade completion score [-1,1]
+    NTarget = max(TargetTradesPer1000 * ScaleT, 0.001),
+    Ratio   = min(NumTrades, NTarget) / NTarget,
+    TradeScore0 = 2.0 * Ratio - 1.0,
+
+    %% Penalize no-trade case but CLAMP back into [-1,1]
+    TradeScore =
+        case NumTrades of
+            0 -> clamp(TradeScore0 - 0.5, -1.0, 1.0);
+            _ -> TradeScore0
+        end,
+
+    %% Overtrade penalty (0,1]
+    TradesPer1000 = NumTrades / max(ScaleT, 0.001),
+    ExcessOT      = max(0.0, TradesPer1000 - OvertradeThreshPer1000),
+    OvertradePenalty = math:exp(-0.05 * ExcessOT),
+
+    %% Loss guard
+    SB = 10000.0,  %% MUST match your sim's initial balance
+    RealizedPnL = lists:sum([PL || {_C, PL} <- Trades]),
+    LossFloor   = -LossFloorPct * SB,
+    LossPenalty =
+        case RealizedPnL < LossFloor of
+            true  -> 0.2;
+            false -> 1.0
+        end,
+
+    %% Small unrealized shaping term (bounded)
+    UnrealTerm = math:tanh((0.1 * Account#account.unrealized_PL) / max(SB, 1.0)),
+
+    Core    = 0.90 * TradeScore + 0.10 * UnrealTerm,  % may drift, so clamp in to_01/1
+    Score01 = to_01(Core),
+
+    %% Strictly positive
+    MinFitness + Scale * (Score01 * OvertradePenalty * LossPenalty).
+
+
+%% =========================================================
+%% Phase 1 Fitness: Profit + Drawdown Control (STRICTLY POSITIVE)
+%% =========================================================
+phase1_profit_risk(State, Account) ->
+    MinFitness = 1.0,
+    Scale      = 1000.0,
+
+    SB       = 10000.0, %% MUST match your sim's initial balance
+    Trades   = lists:sort(State#state.realized_pl_by_cycle),
+    NumTrades = length(Trades),
+    T        = max(State#state.cycle, 1),
+    ScaleT   = T / 1000.0,
+
+    UnrealizedDiscount      = 0.3,
+    PnLScale                = 100.0,
+    TargetTradesPer1000     = 50.0,
+    OvertradeThreshPer1000  = 150.0,
+    DrawdownFloorPct        = 0.10,
+    DrawdownLambda          = 4.0,
+
+    %% PnL score [-1,1]
+    RealizedPnL = lists:sum([PL || {_C, PL} <- Trades]),
+    UnrealPnL   = Account#account.unrealized_PL,
+    %% Penalize unrealized P/L more when no trades (encourage closing trades)
+    UnrealizedDiscountAdjusted = case NumTrades of
+        0 -> 0.1;  % Much lower discount for unrealized when no trades
+        _ -> UnrealizedDiscount
+    end,
+    PEff        = RealizedPnL + UnrealizedDiscountAdjusted * UnrealPnL,
+
+    PNorm = PEff / max(ScaleT, 0.001),
+    PClip = max(min(PNorm, 3.0 * PnLScale), -3.0 * PnLScale),
+    PScore = math:tanh(PClip / PnLScale),
+
+    %% Trade activity encouragement [-1,1] (clamped)
+    NTarget = max(TargetTradesPer1000 * ScaleT, 0.001),
+    Ratio   = min(NumTrades, NTarget) / NTarget,
+    TradeScore0 = 2.0 * Ratio - 1.0,
+    TradeScore =
+        case NumTrades of
+            0 -> clamp(TradeScore0 - 0.5, -1.0, 1.0);  % Stronger penalty for no trades
+            _ -> TradeScore0
+        end,
+
+    %% Drawdown penalty
+    EquityCurve = build_equity_curve(State, Account, SB),
+    MaxDDPct    = max_drawdown_pct(EquityCurve),
+    ExcessDD    = max(0.0, MaxDDPct - DrawdownFloorPct),
+    RiskPenalty = math:exp(-DrawdownLambda * ExcessDD),
+
+    %% Overtrade penalty
+    TradesPer1000 = NumTrades / max(ScaleT, 0.001),
+    ExcessOT = max(0.0, TradesPer1000 - OvertradeThreshPer1000),
+    OvertradePenalty = math:exp(-0.08 * ExcessOT),
+
+    %% Weighted combination of PnL score and trade activity (configurable via config.erl)
+    PScoreWeight = config:fitness_phase1_pscore_weight(),
+    TradeScoreWeight = config:fitness_phase1_tradescore_weight(),
+    Core    = PScoreWeight * PScore + TradeScoreWeight * TradeScore,
+    Score01 = to_01(Core),
+
+    MinFitness + Scale * (Score01 * RiskPenalty * OvertradePenalty).
+
+
+%% =========================================================
+%% Helper: Maximum Drawdown Percentage (>= 0)
+%% =========================================================
+max_drawdown_pct([]) ->
+    1.0;
+max_drawdown_pct([E0 | Rest]) ->
+    max_drawdown_pct(Rest, E0, 0.0).
+
+max_drawdown_pct([], _Peak, MaxDDPct) ->
+    MaxDDPct;
+max_drawdown_pct([E | Rest], Peak, MaxDDPct) ->
+    NewPeak = max(Peak, E),
+    DD      = NewPeak - E,
+    DDPct   =
+        case NewPeak > 0.001 of
+            true  -> DD / NewPeak;
+            false -> 1.0
+        end,
+    max_drawdown_pct(Rest, NewPeak, max(MaxDDPct, DDPct)).
