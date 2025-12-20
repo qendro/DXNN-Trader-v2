@@ -103,35 +103,45 @@ format_config_summary(RunIndex, RunConfigs) ->
     end,
     
     % Extract key values from config (overrides + defaults)
-    Morph = get_config_value(morphology, ConfigOverrides),
-    Enc = get_config_value(agent_encoding_types, ConfigOverrides),
-    Arch = get_config_value(connection_architecture, ConfigOverrides),
-    GtStart = get_config_value(gt_start, ConfigOverrides),
-    GtEnd = get_config_value(gt_end, ConfigOverrides),
-    SpecieSizeLimit = get_config_value(specie_size_limit, ConfigOverrides),
-    InitSpecieSize = get_config_value(init_specie_size, ConfigOverrides),
-    TuningDur = get_config_value(tuning_duration, ConfigOverrides),
+    % Use config module functions which have defaults, not direct get_val
+    Morph = get_config_value(morphology, ConfigOverrides, fun config:morphology/0),
+    Enc = get_config_value(agent_encoding_types, ConfigOverrides, fun config:agent_encoding_types/0),
+    Arch = get_config_value(connection_architecture, ConfigOverrides, fun config:connection_architecture/0),
+    GtStart = get_config_value(gt_start, ConfigOverrides, fun config:gt_start/0),
+    GtEnd = get_config_value(gt_end, ConfigOverrides, fun config:gt_end/0),
+    BenchStart = get_config_value(bench_start, ConfigOverrides, fun config:bench_start/0),
+    BenchEnd = get_config_value(bench_end, ConfigOverrides, fun config:bench_end/0),
+    EvoAlg = get_config_value(population_evo_alg_f, ConfigOverrides, fun config:population_evo_alg_f/0),
+    Selection = get_config_value(population_selection_f, ConfigOverrides, fun config:population_selection_f/0),
+    FPost = get_config_value(population_fitness_postprocessor_f, ConfigOverrides, fun config:population_fitness_postprocessor_f/0),
+    Survival = get_config_value(survival_percentage, ConfigOverrides, fun config:survival_percentage/0),
+    SpecieSizeLimit = get_config_value(specie_size_limit, ConfigOverrides, fun config:specie_size_limit/0),
+    InitSpecieSize = get_config_value(init_specie_size, ConfigOverrides, fun config:init_specie_size/0),
+    TuningDur = get_config_value(tuning_duration, ConfigOverrides, fun() -> {const,1} end),
     
-    % Format compactly
+    % Format compactly with line breaks for readability
+    TuningDurStr = case TuningDur of
+        {const, N} -> io_lib:format("const(~p)", [N]);
+        Other -> io_lib:format("~p", [Other])
+    end,
     lists:flatten(io_lib:format(
-        "morph=~w enc=~w arch=~w gt=~p-~p bench=~p-~p "
-        "evo=~w selection=~w fpost=~w "
-        "survival=~p specie_size_limit=~p init_specie_size=~p "
-        "tuning_duration=~p",
-        [Morph, Enc, Arch, GtStart, GtEnd, 
-         get_config_value(bench_start, ConfigOverrides),
-         get_config_value(bench_end, ConfigOverrides),
-         get_config_value(population_evo_alg_f, ConfigOverrides),
-         get_config_value(population_selection_f, ConfigOverrides),
-         get_config_value(population_fitness_postprocessor_f, ConfigOverrides),
-         get_config_value(survival_percentage, ConfigOverrides),
-         SpecieSizeLimit, InitSpecieSize, TuningDur]
+        "morph=~w enc=~w arch=~w | gt=~p-~p bench=~p-~p | "
+        "evo=~w sel=~w fpost=~w | survival=~p | "
+        "specie_limit=~p init_size=~p tuning=~s",
+        [Morph, Enc, Arch, GtStart, GtEnd, BenchStart, BenchEnd,
+         EvoAlg, Selection, FPost, Survival,
+         SpecieSizeLimit, InitSpecieSize, TuningDurStr]
     )).
 
-get_config_value(Key, ConfigOverrides) ->
+get_config_value(Key, ConfigOverrides, DefaultFun) ->
     case lists:keyfind(Key, 1, ConfigOverrides) of
         {Key, Value} -> Value;
-        false -> config:get_val(Key, undefined)
+        false -> 
+            % Try to get from loaded config first, then use default function
+            case config:get_val(Key, undefined) of
+                undefined -> DefaultFun();
+                Value -> Value
+            end
     end.
 
 %% ============================================================================
@@ -328,8 +338,7 @@ apply_run_configs(ExperimentId, RunIndex, RunConfigs) ->
             case lists:keyfind(RunIndex, 1, RunConfigs) of
                 {RunIndex, ConfigList} when is_list(ConfigList) ->
                     config:clear(),
-                    config:load_from_list(ConfigList),
-                    qlog:exp_runner(config_loaded, {ExperimentId, RunIndex, length(ConfigList)});
+                    config:load_from_list(ConfigList);
                 false -> ok
             end
     end.
@@ -351,8 +360,8 @@ generate_run_id() ->
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
 get_run_configs() ->
     [
-        {1, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 4000}, {specie_size_limit, 2000}, {init_specie_size, 1500}, {evaluations_limit, 100000000}, {generation_limit, 5}, {fitness_function, phase0_close_trades}]},
-        {2, [{tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 6000}, {specie_size_limit, 2000}, {init_specie_size, 2000}, {evaluations_limit, 100000000}, {generation_limit, 5}, {fitness_function, phase0_close_trades}]},
+        {1, [{tuning_duration, {const,1}}, {gt_start, 5000}, {gt_end, 4000}, {specie_size_limit, 20}, {init_specie_size, 15}, {evaluations_limit, 100000000}, {generation_limit, 2}, {fitness_function, phase0_close_trades}]},
+        {2, [{tuning_duration, {const,1}}, {gt_start, 8000}, {gt_end, 6000}, {specie_size_limit, 20}, {init_specie_size, 20}, {evaluations_limit, 100000000}, {generation_limit, 2}, {fitness_function, phase0_close_trades}]},
         {3, [{tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2000}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 100000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.60}]},
         {4, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 200000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.50}]},
         {5, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 200000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.60}, {fitness_phase1_tradescore_weight, 0.40}]},
@@ -394,15 +403,19 @@ prep(E, Mode, SourcePopId) ->
     % Handle population creation/cloning
     case Mode of
         fresh ->
-            population_monitor:prep_PopState(PMP, Constraints);
+            S = population_monitor:prep_PopState(PMP, Constraints),
+            population_monitor:init_population(S, Constraints);
         new_evo ->
             % First run: fresh, subsequent: clone
-            population_monitor:prep_PopState(PMP, Constraints);
+            S = population_monitor:prep_PopState(PMP, Constraints),
+            population_monitor:init_population(S, Constraints);
         {evo, _} ->
             % Reuse population from source
             case reuse_population_for_next_run(SourcePopId, Population_Id) of
                 {atomic, _} ->
-                    population_monitor:prep_PopState(PMP, Constraints);
+                    % Population already exists, just start monitor
+                    S = population_monitor:prep_PopState(PMP, Constraints),
+                    population_monitor:start(S);
                 Error ->
                     io:format("Error reusing population: ~p~n", [Error]),
                     Error
@@ -476,7 +489,9 @@ loop(E, P_Id) ->
                             io:format("Successfully reused population from ~p to ~p~n", [P_Id, NextPopId]),
                             qlog:benchmarker(P_Id, io_lib:format("Successfully reused population from ~p to ~p", [P_Id, NextPopId])),
                             Constraints = U_E#experiment.init_constraints,
-                            population_monitor:prep_PopState(U_PMP, Constraints),
+                            % Population already exists, just start monitor
+                            S = population_monitor:prep_PopState(U_PMP, Constraints),
+                            population_monitor:start(S),
                             loop(U_E, NextPopId);
                         Error ->
                             io:format("Error reusing population from ~p to ~p: ~p~n", [P_Id, NextPopId, Error]),

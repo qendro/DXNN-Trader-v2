@@ -99,6 +99,9 @@ init(S) ->
 		step_size = T#trace.step_size,
 		tot_evaluations = TotEvaluations
 	},
+	% Log generation_start for generation 0
+	qlog:exp_runner(generation_start, {Population_Id, 0, length(Agent_Ids)}),
+	qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, 0, length(Agent_Ids)])),
 	{ok, State}.
 %In init/1 the population_monitor proces registers itself with the node under the name monitor, and sets all the needed parameters within its #state record. The function first extracts all the Agent_Ids that belong to the population using the extract_AgentIds/2 function. Each agent is then spawned/activated, converted from genotype to phenotype in the summon_agents/2 function. The summon_agents/2 function summons the agents and returns to the caller a list of tuples with the following format: [{Agent_Id,Agent_PId}...]. Once the state record's parameters have been set, the function drops into the main gen_server loop.
 
@@ -138,8 +141,16 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 	AgentsLeft = S#state.agents_left,
 			case (AgentsLeft-1) =< 0 of
 		true ->
+			% Log generation_end for the CURRENT generation that just finished
+			CurrentGen = S#state.pop_gen,
+			qlog:exp_runner(generation_end, {Population_Id, CurrentGen, S#state.tot_agents}),
+			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, CurrentGen, S#state.tot_agents])),
+			
+			% Now mutate to create next generation
 			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm),
 			U_PopGen = S#state.pop_gen+1,
+			
+			% Log generation_start for the NEW generation
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, S#state.tot_agents])),
 			qlog:exp_runner(generation_start, {Population_Id, U_PopGen, S#state.tot_agents}),
 			case OpTag of
@@ -151,15 +162,29 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 					Evaluation_Limit=S#state.evaluations_limit,
 					Fitness_Goal=S#state.fitness_goal,
 					qlog:benchmarker(Population_Id,io_lib:format("Total Evaluations: ~p, Total Generations: ~p", [S#state.tot_evaluations, U_PopGen])),
-					qlog:exp_runner(generation_end, {Population_Id, U_PopGen, S#state.tot_agents}),
 					case (U_PopGen >= Generation_Limit) or (S#state.tot_evaluations >= Evaluation_Limit) or (BestFitness >= Fitness_Goal) or S#state.goal_reached of
 						true ->%ENDING_CONDITION_REACHED
-							Agent_Ids = extract_AgentIds(Population_Id,all),
-							TotAgents=length(Agent_Ids),
-							U_S=S#state{agent_ids=Agent_Ids, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
+							% Log generation_end for the final generation before stopping
+							FinalAgent_Ids = extract_AgentIds(Population_Id,all),
+							FinalTotAgents = length(FinalAgent_Ids),
+							qlog:exp_runner(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
+							qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, FinalTotAgents])),
+							TotAgents=FinalTotAgents,
+							U_S=S#state{agent_ids=FinalAgent_Ids, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
 							{stop,normal,U_S};
 						false ->%IN_PROGRESS
 							Agent_Ids = extract_AgentIds(Population_Id,all),
+							% Log genotypes for generation 0 (initial generation)
+							%case U_PopGen == 0 of
+							%	true ->
+							%		Run_Id = qlog:get_run_id_from_population_id(Population_Id),
+							%		[begin
+							%			A = genotype:dirty_read({agent, Agent_Id}),
+							%			qlog:genotype_log(Run_Id, A#agent.generation, Agent_Id)
+							%		end || Agent_Id <- Agent_Ids];
+							%	false ->
+							%		ok
+							%end,
 							U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
 							TotAgents=length(Agent_Ids),
 							U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
@@ -424,7 +449,7 @@ test()->
 %The test/0 function starts the population monitor through init_population/1 with a set of default parameters specified by the macros of this module.
 
 prep_PopState(PMP,Specie_Constraints)->
-	S=#state{
+	#state{
 		op_mode=PMP#pmp.op_mode,
 		population_id = PMP#pmp.population_id,
 		survival_percentage=PMP#pmp.survival_percentage,
@@ -435,8 +460,7 @@ prep_PopState(PMP,Specie_Constraints)->
 		evaluations_limit=PMP#pmp.evaluations_limit,
 		fitness_goal=PMP#pmp.fitness_goal,
 		benchmarker_pid=PMP#pmp.benchmarker_pid
-	},
-	init_population(S,Specie_Constraints).
+	}.
 
 init_population(Init_State,Specie_Constraints)->
 	random:seed(now()),
@@ -519,7 +543,8 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 		S = genotype:dirty_read({specie,Specie_Id}),
 		{AvgFitness,Std,MaxFitness,MinFitness} = calculate_SpecieFitness({specie,S}),
 		qlog:benchmarker(Specie_Id,io_lib:format("Specie=~p | Agents: ~p | Population_limit=~p | Avg Fitness=~p Max=~p Min=~p | Neural Energy Cost=~p",[Specie_Id,length(S#specie.agent_ids),PopulationLimit,AvgFitness,MaxFitness,MinFitness,NeuralEnergyCost])),
-		spawn(fun() -> qlog:exp_runner(mutate_specie, {Specie_Id,PopulationLimit,AvgFitness,MaxFitness,MinFitness,NeuralEnergyCost}) end),
+		% Removed mutate_specie logging for cleaner exp_runner.log
+		% spawn(fun() -> qlog:exp_runner(mutate_specie, {Specie_Id,PopulationLimit,AvgFitness,MaxFitness,MinFitness,NeuralEnergyCost}) end),
 		Agent_Ids = S#specie.agent_ids,
 		Sorted_AgentSummaries = lists:reverse(lists:sort(construct_AgentSummaries(Agent_Ids,[]))),
 		io:format("Using: Fitness Postprocessor:~p Selection Algorirthm:~p~n",[Fitness_Postprocessor_Name,Selection_Algorithm_Name]),
@@ -539,6 +564,13 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 			champion_ids = TopAgent_Ids,
 			fitness = {AvgFitness,Std,MaxFitness,MinFitness},
 			innovation_factor = U_InnovationFactor}).
+		% Log genotypes for all new generation agents
+		%Population_Id = S#specie.population_id,
+		%Run_Id = qlog:get_run_id_from_population_id(Population_Id),
+		%[begin
+		%	A = genotype:dirty_read({agent, Agent_Id}),
+		%	qlog:genotype_log(Run_Id, A#agent.generation, Agent_Id)
+		%end || Agent_Id <- NewGenAgent_Ids].
 %The function mutate_Specie/5 calls the selection algorithm function to seperate the fit from the unfit organisms in the specie, and then mutates the fit organisms to produce offspring, maintaning the total specie size within PopulationLimit. The function first calls the fitness_postprocessor which sorts the agent summaries. Then, the resorted updated summaries are split into a valid (fit) and invalid (unfit) lists of agents by the selection algorithm. The invalid agents are deleted, and the valid agents are used to create offspring using the particular Selection_Algorithm_Name function. The agent ids belonging to the next generation (the valid agents and their offspring) are then produced by the selection function. Finally, the innovation factor (the last time the specie's top fitness improved) is updated, the ids of the 3 top agents within the species are noted, and the updated specie record is written to database.
 
 	construct_AgentSummaries([Agent_Id|Agent_Ids],Acc)->

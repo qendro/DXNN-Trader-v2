@@ -1,6 +1,6 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0]).
 -include("records.hrl").
 
 -define(AGENT_PID_MAP, agent_pid_map).
@@ -181,7 +181,7 @@ benchmarker(Run_Id, Msg) ->
     Filename = filename:join(Dir, "benchmarker.log"),
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
-    io:format(File, "~s | [RUN:~p] ~s~n", [Timestamp, Run_Id, Msg]),
+    io:format(File, "~s | [Eval:~p] ~s~n", [Timestamp, Run_Id, Msg]),
     file:close(File).
 
 %% Process monitoring logging (writes to Benchmarker folder)
@@ -195,6 +195,256 @@ process_monitor(Msg) ->
     file:close(File).
 
 %% ============================================================================
+%% NEW LOGGING FUNCTIONS - Genotypes, PID Maps, and Reductions
+%% ============================================================================
+
+%% Helper: Get Run_Id from Population_Id by querying experiment record
+get_run_id_from_population_id(Population_Id) ->
+    F = fun() ->
+        % Try to find experiment where this population_id matches
+        % Check if population_id is in any experiment's pm_parameters
+        Experiments = mnesia:match_object({experiment, '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_', '_'}),
+        case lists:filter(fun(E) ->
+            case E#experiment.pm_parameters of
+                undefined -> false;
+                PMP -> PMP#pmp.population_id == Population_Id
+            end
+        end, Experiments) of
+            [E | _] -> E#experiment.run_index;
+            [] -> 
+                % Fallback: try to extract from population_id if it contains run info
+                % Or return population_id itself as fallback
+                Population_Id
+        end
+    end,
+    case catch mnesia:transaction(F) of
+        {atomic, RunId} -> RunId;
+        _ -> Population_Id  % Fallback to population_id if query fails
+    end.
+
+%% Log full genotype for an agent (called at generation boundaries)
+genotype_log(Run_Id, Generation, Agent_Id) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "genotypes.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    
+    % Read full genotype
+    A = genotype:dirty_read({agent, Agent_Id}),
+    Cx = genotype:dirty_read({cortex, A#agent.cx_id}),
+    Sensors = [genotype:dirty_read({sensor, Id}) || Id <- Cx#cortex.sensor_ids],
+    Neurons = [genotype:dirty_read({neuron, Id}) || Id <- Cx#cortex.neuron_ids],
+    Actuators = [genotype:dirty_read({actuator, Id}) || Id <- Cx#cortex.actuator_ids],
+    Substrate = case A#agent.substrate_id of
+        undefined -> undefined;
+        SubId -> genotype:dirty_read({substrate, SubId})
+    end,
+    
+    % Format as single line (using erlang term format - ~w for compact one-line format)
+    GenotypeData = {agent, A, cortex, Cx, sensors, Sensors, neurons, Neurons, 
+                    actuators, Actuators, substrate, Substrate},
+    % Format Agent_Id as compact string to keep on one line
+    AgentStr = lists:flatten(io_lib:format("~w", [Agent_Id])),
+    % Format Run_Id - handle binary by converting to string
+    RunStr = case is_binary(Run_Id) of
+        true -> binary_to_list(Run_Id);
+        false -> lists:flatten(io_lib:format("~w", [Run_Id]))
+    end,
+    % Format GenotypeData as compact string to keep on one line
+    GenotypeStr = lists:flatten(io_lib:format("~w", [GenotypeData])),
+    io:format(File, "~s | RUN:~s | GEN:~p | AGENT:~s | GENOTYPE:~s~n", 
+              [Timestamp, RunStr, Generation, AgentStr, GenotypeStr]),
+    file:close(File).
+
+%% Log PID map for an agent (called when agent spawns)
+pid_map_log(Run_Id, Generation, Agent_Id, All_Pids) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "pid_map.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    % Format PIDs as comma-separated string to keep on one line
+    PidsStr = string:join([pid_to_list(Pid) || Pid <- All_Pids], ","),
+    % Format Agent_Id as compact string to keep on one line
+    AgentStr = lists:flatten(io_lib:format("~w", [Agent_Id])),
+    % Format Run_Id - handle binary by converting to string
+    RunStr = case is_binary(Run_Id) of
+        true -> binary_to_list(Run_Id);
+        false -> lists:flatten(io_lib:format("~w", [Run_Id]))
+    end,
+    io:format(File, "~s | RUN:~s | GEN:~p | AGENT:~s | PIDS:[~s]~n", 
+              [Timestamp, RunStr, Generation, AgentStr, PidsStr]),
+    file:close(File).
+
+%% Log agent reductions (called at each evaluation)
+agent_reductions_log(Agent_Id, Eval_Num, Total_Reductions) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_reductions.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    io:format(File, "~s | AGENT:~p | EVAL:~p | REDUCTIONS:~p~n", 
+              [Timestamp, Agent_Id, Eval_Num, Total_Reductions]),
+    file:close(File).
+
+%% Log agent memory usage aggregated by agent (manual/sporadic use)
+log_agent_memory_usage() ->
+    % Get active agents
+    ActiveAgent_Ids = genotype_utils:get_active_agents(),
+    case ActiveAgent_Ids of
+        [] ->
+            log_agent_memory_to_file("=== AGENT MEMORY USAGE === No active agents found");
+        _ ->
+            % Read and parse pid_map.log
+            PidMapFile = filename:join([get_log_root_dir(), "Benchmarker", "pid_map.log"]),
+            case file:read_file(PidMapFile) of
+                {ok, Content} ->
+                    Lines = string:tokens(binary_to_list(Content), "\n"),
+                    % Parse lines and build map of Agent_Id -> {LatestTimestamp, PIDs}
+                    AgentPidMap = parse_pid_map_log(Lines),
+                    
+                    % For each active agent, get PIDs and sum memory
+                    AgentMemories = lists:foldl(fun(Agent_Id, Acc) ->
+                        case maps:get(Agent_Id, AgentPidMap, undefined) of
+                            undefined -> Acc;  % Agent not in log
+                            {_Timestamp, Pids} ->
+                                % Get memory for each PID and sum
+                                TotalMemory = lists:foldl(fun(PidStr, Sum) ->
+                                    try
+                                        Pid = list_to_pid(string:strip(PidStr)),
+                                        case erlang:process_info(Pid, memory) of
+                                            {memory, Mem} -> Sum + Mem;
+                                            undefined -> Sum  % Process dead
+                                        end
+                                    catch
+                                        _:_ -> Sum  % Invalid PID string or dead process
+                                    end
+                                end, 0, Pids),
+                                
+                                [{Agent_Id, TotalMemory, length(Pids)} | Acc]
+                        end
+                    end, [], ActiveAgent_Ids),
+                    
+                    % Sort by memory (descending)
+                    Sorted = lists:sort(fun({_, M1, _}, {_, M2, _}) -> M1 >= M2 end, AgentMemories),
+                    
+                    % Log to agent_memory.log
+                    log_agent_memory_to_file("=== AGENT MEMORY USAGE (sorted by total memory) ==="),
+                    lists:foreach(fun({Agent_Id, TotalMem, PidCount}) ->
+                        AgentStr = lists:flatten(io_lib:format("~w", [Agent_Id])),
+                        MemKB = TotalMem div 1024,
+                        log_agent_memory_to_file(io_lib:format("AGENT:~s | TOTAL_MEMORY:~p bytes (~p KB) | PROCESS_COUNT:~p", 
+                                                 [AgentStr, TotalMem, MemKB, PidCount]))
+                    end, Sorted),
+                    log_agent_memory_to_file("=== END AGENT MEMORY USAGE ===");
+                {error, Reason} ->
+                    log_agent_memory_to_file(io_lib:format("ERROR: Could not read pid_map.log: ~p", [Reason]))
+            end
+    end.
+
+%% Helper: Log to agent_memory.log file in Benchmarker folder
+log_agent_memory_to_file(Msg) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_memory.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    io:format(File, "~s | ~s~n", [Timestamp, Msg]),
+    file:close(File).
+
+%% Helper: Parse pid_map.log and return map of Agent_Id -> {Timestamp, PIDs}
+parse_pid_map_log(Lines) ->
+    % Parse each line and keep only the latest entry per agent
+    lists:foldl(fun(Line, Acc) ->
+        case parse_pid_map_line(Line) of
+            {ok, {Agent_Id, Timestamp, Pids}} ->
+                % Keep only latest entry per agent (by timestamp string comparison)
+                case maps:get(Agent_Id, Acc, undefined) of
+                    undefined -> maps:put(Agent_Id, {Timestamp, Pids}, Acc);
+                    {ExistingTs, _} when Timestamp > ExistingTs -> 
+                        maps:put(Agent_Id, {Timestamp, Pids}, Acc);
+                    _ -> Acc  % Keep existing (older entry)
+                end;
+            error -> Acc
+        end
+    end, maps:new(), Lines).
+
+%% Helper: Parse a single line from pid_map.log
+parse_pid_map_line(Line) ->
+    % Format: "[timestamp] | RUN:... | GEN:... | AGENT:{...} | PIDS:[<0.123.0>,<0.124.0>,...]"
+    % Find positions directly in the line
+    try
+        AgentPos = string:str(Line, "AGENT:"),
+        PidsPos = string:str(Line, "PIDS:"),
+        if AgentPos > 0 andalso PidsPos > AgentPos ->
+            % Extract agent ID: from "AGENT:" to " | PIDS:"
+            AgentStart = AgentPos + 6,  % After "AGENT:"
+            % Find where " | PIDS:" starts (4 chars before PidsPos)
+            AgentEnd = PidsPos - 4,  % Position before " | PIDS:"
+            AgentLength = AgentEnd - AgentStart + 1,
+            if AgentLength > 0 ->
+                AgentStr = string:substr(Line, AgentStart, AgentLength),
+                % Extract PIDs: from "PIDS:[" to "]"
+                PidsBracketPos = string:str(Line, "PIDS:[") + 6,  % After "PIDS:["
+                PidsEndPos = string:rstr(Line, "]"),
+                if PidsEndPos > PidsBracketPos ->
+                    PidsLength = PidsEndPos - PidsBracketPos,
+                    PidsStr = string:substr(Line, PidsBracketPos, PidsLength),
+                    % Parse Agent_Id (format: {number,agent})
+                    case parse_agent_id(string:strip(AgentStr)) of
+                        undefined -> error;
+                        Agent_Id ->
+                            % Parse PIDs (comma-separated list like "<0.123.0>,<0.124.0>")
+                            Pids = string:tokens(PidsStr, ","),
+                            % Extract timestamp for comparison (first part before |)
+                            Timestamp = extract_timestamp(Line),
+                            {ok, {Agent_Id, Timestamp, Pids}}
+                    end;
+                true -> error
+                end;
+            true -> error
+            end;
+        true -> error
+        end
+    catch
+        _:_ -> error
+    end.
+
+%% Helper: Parse agent ID from string representation
+parse_agent_id(AgentStr) ->
+    % AgentStr is like "{5.661944423739226e-10,agent}"
+    % Use regex to extract number and atom, then construct tuple
+    try
+        case re:run(AgentStr, "\\{([0-9.eE+-]+),([a-z_]+)\\}", [{capture, all_but_first, list}]) of
+            {match, [NumStr, AtomStr]} ->
+                Num = list_to_float(NumStr),
+                Atom = list_to_atom(AtomStr),
+                {Num, Atom};
+            _ -> 
+                % Fallback: try erl_scan/erl_parse
+                case erl_scan:string(AgentStr ++ ".") of
+                    {ok, Tokens, _} ->
+                        case erl_parse:parse_term(Tokens) of
+                            {ok, Term} -> Term;
+                            _ -> undefined
+                        end;
+                    _ -> undefined
+                end
+        end
+    catch
+        _:_ -> undefined
+    end.
+
+%% Helper: Extract timestamp from log line
+extract_timestamp(Line) ->
+    % Extract timestamp from "[2025-12-19 14:55:39]"
+    case re:run(Line, "^\\[(.+?)\\]", [{capture, all_but_first, list}]) of
+        {match, [TsStr]} -> TsStr;  % Use string comparison for timestamps
+        _ -> ""
+    end.
+
+%% ============================================================================
 %% EXP RUNNER LOGGING - Human-readable experiment run logging
 %% ============================================================================
 
@@ -204,26 +454,21 @@ exp_runner(Event, Data) ->
     ensure_directory_exists(Dir),
     Filename = filename:join(Dir, "exp_runner.log"),
     {ok, File} = file:open(Filename, [append]),
-    Timestamp = format_iso8601_for_log(erlang:timestamp()),
+    Timestamp = format_timestamp(),
     
     case Event of
         experiment_start ->
             {RunId, PopId, TotRuns, ConfigCount} = Data,
             io:format(File, "~n=== EXPERIMENT START ===~n", []),
-            io:format(File, "ts: ~s | experiment: ~p | population: ~p | tot_runs: ~p | config_count: ~p~n",
-                [Timestamp, RunId, PopId, TotRuns, ConfigCount]);
+            io:format(File, "[~s] | experiment: ~p | tot_runs: ~p~n",
+                [Timestamp, RunId, TotRuns]);
             
         run_start ->
             {RunId, RunIndex, PopId, Mode, ConfigStr} = Data,
             % ConfigStr is pre-formatted by exp_runner
-            ModeHeader = case Mode of
-                fresh -> "=== FRESH RUN START ===";
-                new_evo -> "=== CONTINUE EVO ===";
-                {evo, _} -> "=== CONTINUE EVO ==="
-            end,
-            io:format(File, "~n~s~n", [ModeHeader]),
-            io:format(File, "ts: ~s | experiment: ~p | run: ~p | population: ~p | mode: ~p~n",
-                [Timestamp, RunId, RunIndex, PopId, Mode]),
+            io:format(File, "~n=== RUN ~p ===~n", [RunIndex]),
+            io:format(File, "[~s] | population: ~p | mode: ~p~n",
+                [Timestamp, PopId, Mode]),
             io:format(File, "config: ~s~n", [ConfigStr]);
             
         run_end ->
@@ -253,50 +498,47 @@ exp_runner(Event, Data) ->
             MaxGen = case Generations of [] -> 0; _ -> lists:max(Generations) end,
             AgentCount = length(AgentIds),
             
-            io:format(File, "ts: ~s | status: completed | best_fitness: ~.4f | avg_fitness: ~.4f~n",
-                [Timestamp, BestFitness, AvgFitness]),
-            io:format(File, "generations: ~p | tot_evaluations: ~p | agent_count: ~p~n",
-                [MaxGen, TotEvals, AgentCount]);
+            io:format(File, "[~s] | status: completed | best_fitness: ~.4f | avg_fitness: ~.4f | generations: ~p | tot_evaluations: ~p | agent_count: ~p~n~n",
+                [Timestamp, BestFitness, AvgFitness, MaxGen, TotEvals, AgentCount]);
             
         generation_start ->
             {PopId, Generation, TotAgents} = Data,
-            io:format(File, "ts: ~s | generation_start | population: ~p | generation: ~p | total_agents: ~p~n",
-                [Timestamp, PopId, Generation, TotAgents]);
+            io:format(File, "[~s] | generation_start | generation: ~p | total_agents: ~p~n",
+                [Timestamp, Generation, TotAgents]);
             
         generation_end ->
             {PopId, Generation, TotAgents} = Data,
-            io:format(File, "ts: ~s | generation_end | population: ~p | generation: ~p | total_agents: ~p~n",
-                [Timestamp, PopId, Generation, TotAgents]);
+            io:format(File, "[~s] | generation_end   | generation: ~p | total_agents: ~p~n",
+                [Timestamp, Generation, TotAgents]);
             
         mutate_specie ->
             {Specie_Id, PopulationLimit, AvgFitness, MaxFitness, MinFitness, NeuralEnergyCost} = Data,
-            io:format(File, "ts: ~s | mutate_specie | specie: ~p | population_limit: ~p | avg_fitness: ~.4f | max_fitness: ~.4f | min_fitness: ~.4f | neural_energy_cost: ~.4f~n",
+            io:format(File, "[~s] | mutate_specie | specie: ~p | population_limit: ~p | avg_fitness: ~.4f | max_fitness: ~.4f | min_fitness: ~.4f | neural_energy_cost: ~.4f~n",
                 [Timestamp, Specie_Id, PopulationLimit, AvgFitness, MaxFitness, MinFitness, NeuralEnergyCost]);
             
         run_failed ->
             {RunId, RunIndex, Reason} = Data,
-            io:format(File, "ts: ~s | status: failed | reason: ~p~n",
+            io:format(File, "[~s] | status: failed | reason: ~p~n",
                 [Timestamp, Reason]);
             
         config_loaded ->
-            {RunId, RunIndex, ConfigCount} = Data,
-            io:format(File, "ts: ~s | config_loaded | run: ~p | config_count: ~p~n",
-                [Timestamp, RunIndex, ConfigCount]);
+            % Removed config_loaded logging - redundant with run_start config line
+            ok;
             
         experiment_complete ->
             {RunId, TotRuns} = Data,
             io:format(File, "~n=== EXPERIMENT COMPLETE ===~n", []),
-            io:format(File, "ts: ~s | experiment: ~p | total_runs: ~p~n",
+            io:format(File, "[~s] | experiment: ~p | total_runs: ~p~n",
                 [Timestamp, RunId, TotRuns]);
             
         experiment_terminate ->
             {RunId, PopId} = Data,
-            io:format(File, "ts: ~s | experiment: ~p | population: ~p | status: terminated~n",
+            io:format(File, "[~s] | experiment: ~p | population: ~p | status: terminated~n",
                 [Timestamp, RunId, PopId]);
             
         population_monitor_terminated ->
             {Population_Id, Reason, OpTag, OpMode, TotAgents, PopGen, TotEvals} = Data,
-            io:format(File, "ts: ~s | population_monitor: ~p | status: terminated | reason: ~p | op_tag: ~p | op_mode: ~p | total_agents: ~p | generation: ~p | total_evaluations: ~p~n",
+            io:format(File, "[~s] | population_monitor: ~p | status: terminated | reason: ~p | op_tag: ~p | op_mode: ~p | total_agents: ~p | generation: ~p | total_evaluations: ~p~n",
                 [Timestamp, Population_Id, Reason, OpTag, OpMode, TotAgents, PopGen, TotEvals])
     end,
     file:close(File).

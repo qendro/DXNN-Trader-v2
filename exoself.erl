@@ -123,6 +123,16 @@ prep(Agent_Id,PM_PId,OpMode)->
 		},
 	%qlog:register_agent(self(), Agent_Id),
 	%qlog:xLog(pid_to_list(self()), "ExoSelf: ~p generated phenotype for Agent_Id: ~p, Gen: ~p, Specie_Id: ~p. Spawning main loop. Genotype: ~p", [self(), Agent_Id, A#agent.generation, A#agent.specie_id, A]),
+	% Log PID map for this agent spawn
+	%All_Pids = [self(), S#state.cx_pid | S#state.spids] ++ S#state.npids ++ 
+	%            S#state.apids ++ S#state.scape_pids ++ S#state.cpp_pids ++ 
+	%            S#state.cep_pids ++ 
+	%            case S#state.substrate_pid of
+	%                undefined -> [];
+	%                SubPid -> [SubPid]
+	%            end,
+	%Run_Id = qlog:get_run_id_from_population_id(A#agent.population_id),
+	%qlog:pid_map_log(Run_Id, A#agent.generation, Agent_Id, All_Pids),
 	loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 
@@ -156,6 +166,9 @@ loop(S,gt)->
 			U_CycleAcc = S#state.cycle_acc+Cycles,
 			U_TimeAcc = S#state.time_acc+Time,
 			U_EvalAcc = S#state.eval_acc+1,
+			%QQ Collect and log total reductions for this evaluation
+			%Total_Reductions = collect_total_reductions(S),
+			%qlog:agent_reductions_log(S#state.agent_id, U_EvalAcc, Total_Reductions),
 			gen_server:cast(S#state.pm_pid,{self(),evaluations,S#state.specie_id,1,Cycles,Time}),
 			case (U_Attempt >= S#state.max_attempts) or (GoalReachedFlag == true) of
 				true ->	%End training
@@ -455,6 +468,22 @@ backup_genotype(IdsNPIds,NPIds)->
 			lists:reverse(Acc).
 %The convert_PIdPs2IdPs/3 performs the conversion from PIds to Ids of every {PId,Weights} tuple in the Input_PIdPs list. The updated Input_IdPs are then returned to the caller.
 	
+%% Collect total reductions from all agent processes
+collect_total_reductions(S) ->
+    All_Pids = [S#state.cx_pid | S#state.spids] ++ S#state.npids ++ 
+                S#state.apids ++ S#state.scape_pids ++ S#state.cpp_pids ++ 
+                S#state.cep_pids ++ 
+                case S#state.substrate_pid of
+                    undefined -> [];
+                    SubPid -> [SubPid]
+                end,
+    lists:foldl(fun(Pid, Acc) ->
+        case catch erlang:process_info(Pid, reductions) of
+            {reductions, Reductions} -> Acc + Reductions;
+            _ -> Acc  % Process might be dead
+        end
+    end, 0, All_Pids).
+
 terminate_phenotype(Cx_PId,SPIds,NPIds,APIds,ScapePIds,CPP_PIds,CEP_PIds,Substrate_PId)->
 	%io:format("Terminating the phenotype:~nCx_PId:~p~nSPIds:~p~nNPIds:~p~nAPIds:~p~nScapePids:~p~n",[Cx_PId,SPIds,NPIds,APIds,ScapePIds]),
 	[PId ! {self(),terminate} || PId <- SPIds],

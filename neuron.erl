@@ -136,6 +136,7 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 								mi_pidps_backup=S#state.mi_pidps_current
 							}
 					end,
+					erlang:garbage_collect(self()),
 					loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 				{ExoSelf_PId,weight_restore}->
 					U_S = S#state{
@@ -152,6 +153,7 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 						si_pidps_current=Perturbed_SIPIdPs,
 						mi_pidps_current=Perturbed_MIPIdPs
 					},
+					erlang:garbage_collect(self()),
 					loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 				{ExoSelf_PId,reset_prep}->
 					neuron:flush_buffer(),

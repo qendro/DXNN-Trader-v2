@@ -104,7 +104,8 @@ prep(E)->
 	},
 	Constraints = E#experiment.init_constraints,
 	Population_Id = PMP#pmp.population_id,
-	population_monitor:prep_PopState(PMP,Constraints),
+	S = population_monitor:prep_PopState(PMP,Constraints),
+	population_monitor:init_population(S,Constraints),
 	loop(E#experiment{pm_parameters=PMP},Population_Id).
 	
 loop(E,P_Id)->
@@ -146,7 +147,8 @@ loop(E,P_Id)->
 				genotype:write(U_E),
 				Constraints = U_E#experiment.init_constraints,
 				Population_Id = U_PMP#pmp.population_id,
-				population_monitor:prep_PopState(U_PMP,Constraints),
+				S = population_monitor:prep_PopState(U_PMP,Constraints),
+				population_monitor:init_population(S,Constraints),
 				checkpoint(),
 				loop(U_E,Population_Id)
 			end;
