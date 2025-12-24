@@ -110,9 +110,9 @@ forex_trader(sensors)->
 	PLI_Sensors=  [#sensor{name=fx_PLI,type=standard,scape={private,fx_sim},format=no_geo,vl=HRes,parameters=[HRes,close]} || HRes<-config:pli_resolutions()],
 	PCI_Sensors = [#sensor{name=fx_PCI,type=standard,scape={private,fx_sim},format={symmetric,[HRes,VRes]},vl=HRes*VRes,parameters=[HRes,VRes]} || HRes <-config:pci_horizontal_resolutions(), VRes<-config:pci_vertical_resolutions()],
 	InternalSensors = [#sensor{name=fx_Internals,type=standard,scape={private,fx_sim},format=no_geo,vl=config:internal_sensor_dimensions(),parameters=[config:internal_sensor_dimensions()]}],%[Long|Short|Void],Value
-	PLI_Sensors.
+	%PLI_Sensors.
 	%PCI_Sensors. %Inital state [BASE]
-	%PLI_Sensors++PCI_Sensors++InternalSensors.
+	PLI_Sensors++PCI_Sensors++InternalSensors.
 	%PCI_Sensors++PLI_Sensors++InternalSensors.
 	%PLI_Sensors.%++InternalSensors. %qq
 	%PLI_Sensors++InternalSensors. % qq - Enable internal sensors for more mutation options

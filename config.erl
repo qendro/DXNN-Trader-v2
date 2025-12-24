@@ -34,7 +34,7 @@ bench_end() -> get_val(bench_end, last).                          % Options: las
 %% Sensor Profiles
 %% ===================================================================
 %% --- Standard Forex Trader ---
-pli_resolutions() -> get_val(pli_resolutions, [30, 90, 270]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
+pli_resolutions() -> get_val(pli_resolutions, [30, 90, 270, 540, 1080]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
 pci_horizontal_resolutions() -> get_val(pci_horizontal_resolutions, [30, 90, 270]).         % Options: [10], [20], [50], [10,20], [20,50], etc. (creates one sensor per value)
 pci_vertical_resolutions() -> get_val(pci_vertical_resolutions, [20]).           % Options: [10], [15], [20], [10,15], [15,20], etc. (PCI: Cartesian product HRes×VRes)
 
@@ -49,7 +49,7 @@ internal_sensor_dimensions() -> get_val(internal_sensor_dimensions, 3).         
 %% ===================================================================
 specie_size_limit() -> get_val(specie_size_limit, 2).                     % Options: 1-100 (max agents per species)
 init_specie_size() -> get_val(init_specie_size, 2).                      % Options: 1-50 (initial agents per species)
-evaluations_limit() -> get_val(evaluations_limit, 10000000).                    % Options: 10-100000 (max evaluations per run)
+evaluations_limit() -> get_val(evaluations_limit, 100000000000).                    % Options: 10-100000 (max evaluations per run)
 generation_limit() -> get_val(generation_limit, 1).                     % Options: 1-1000 (max generations per run)
 survival_percentage() -> get_val(survival_percentage, 0.5).                  % Options: 0.1-0.9 (percentage of agents that survive)
 tot_runs() -> get_val(tot_runs, 1).                               % Options: 1-100 (number of benchmark runs)
@@ -60,8 +60,8 @@ tot_runs() -> get_val(tot_runs, 1).                               % Options: 1-1
 
 population_evo_alg_f() -> get_val(population_evo_alg_f, generational).        % Options: generational, steady_state
 population_selection_f() -> get_val(population_selection_f, competition).       % Options: competition, top3
-population_fitness_postprocessor_f() -> get_val(population_fitness_postprocessor_f, size_proportional). % Options: none, size_proportional
-tot_topological_mutations_functions() -> get_val(tot_topological_mutations_functions, [{ncount_exponential,0.5}, {ncount_linear,1}]). % Options: {ncount_exponential,0.5}, {ncount_linear,1}
+population_fitness_postprocessor_f() -> get_val(population_fitness_postprocessor_f, none). % Options: none, size_proportional
+tot_topological_mutations_functions() -> get_val(tot_topological_mutations_functions, [{ncount_exponential,1.5}, {ncount_linear,4}]). % Options: {ncount_exponential,0.5}, {ncount_linear,1}
 
 %% ===================================================================
 %% Substrate-Specific Configuration
@@ -75,7 +75,7 @@ substrate_linkforms() -> get_val(substrate_linkforms, [l2l_feedforward, jordan_r
 
 morphology() -> get_val(morphology, forex_trader).                  % Options: forex_trader, forex_trader_1m
 connection_architecture() -> get_val(connection_architecture, recurrent).        % Options: feedforward, recurrent
-agent_encoding_types() -> get_val(agent_encoding_types, [neural, substrate]).         % Options: neural, substrate
+agent_encoding_types() -> get_val(agent_encoding_types, [neural]).         % Options: neural, substrate
 tuning_duration() -> get_val(tuning_duration, {const,10}).               % Options: {const,N}, {wsize_proportional,N}, {nsize_proportional,N}
 tuning_selection_functions() -> get_val(tuning_selection_functions, [dynamic, dynamic_random, active, active_random, current, current_random, all, all_random]). % Note: lastgen/lastgen_random not implemented
 annealing_parameters() -> get_val(annealing_parameters, [0.1, 0.5, 1]).                 % Options: [0.1], [0.5], [1], [0.5,1], [0.1,0.5,1]
@@ -93,24 +93,24 @@ neural_aggregation_functions() -> get_val(neural_aggregation_functions, [dot_pro
 %% add_sensorlink, add_actuatorlink, add_cpp, add_cep
 mutation_operators() -> get_val(mutation_operators, [
     %% Weight & Bias Adaptation
-    {mutate_weights,10},
-    {mutate_af,10},
-    {mutate_pf,10},
-    {mutate_aggrf,10},
-    {mutate_plasticity_parameters,10}, 
-    {add_bias,10},
-    {remove_bias,5},
+    {mutate_weights,25},
+    {mutate_af,25},
+    {mutate_pf,25},
+    {mutate_aggrf,25},
+    {mutate_plasticity_parameters,25}, 
+    {add_bias,25},
+    {remove_bias,10},
 
     %% Topology Growth
-    {add_neuron,40},
-    {add_inlink,40},
+    {add_neuron,80},
+    {add_inlink,50},
     {add_outlink,40},
-    {outsplice,5},
+    {outsplice,15},
 
     %% Sensor & Actuator Expansion
-    {add_sensor,20},
+    {add_sensor,15},
     {add_actuator,1},
-    {add_sensorlink,20},
+    {add_sensorlink,30},
     {add_actuatorlink,20},
 
     %% CPP / CEP Extensions (for HyperNEAT substrate encoding)
@@ -121,7 +121,7 @@ mutation_operators() -> get_val(mutation_operators, [
 %% ===================================================================
 %% Fitness Function Selection
 %% ===================================================================
-fitness_function() -> get_val(fitness_function, curriculum_risk_penalty).                % Options: time_weighted, total_profit, sharpe_ratio, profit_factor, total_return, sortino_ratio, calmar_ratio, curriculum_risk_penalty, phase0_close_trades, phase1_profit_risk
+fitness_function() -> get_val(fitness_function, curriculum_risk_penalty).                % Options: time_weighted, total_profit, sharpe_ratio, profit_factor, total_return, sortino_ratio, calmar_ratio, curriculum_risk_penalty, phase0_close_trades, phase1_profit_risk, curriculum_trade_quality_profit, phase2_profit_optimization
 
 %% ===================================================================
 %% Time-Weighted Fitness Configuration
@@ -150,6 +150,25 @@ fitness_curriculum_drawdown_penalty() -> get_val(fitness_curriculum_drawdown_pen
 %% ===================================================================
 fitness_phase1_pscore_weight() -> get_val(fitness_phase1_pscore_weight, 0.40).      % Weight for PnL score in phase1_profit_risk (default: 0.40)
 fitness_phase1_tradescore_weight() -> get_val(fitness_phase1_tradescore_weight, 0.60).  % Weight for trade score in phase1_profit_risk (default: 0.60)
+
+%% ===================================================================
+%% Curriculum Trade Quality Profit Fitness Configuration
+%% ===================================================================
+fitness_target_trades_per_1000() -> get_val(fitness_target_trades_per_1000, 50.0).  % Target trades per 1000 timesteps (default: 50.0)
+fitness_overtrade_thresh_per_1000() -> get_val(fitness_overtrade_thresh_per_1000, 150.0).  % Overtrade threshold per 1000 timesteps (default: 150.0)
+fitness_overtrade_lambda() -> get_val(fitness_overtrade_lambda, 0.08).  % Overtrade penalty decay rate (default: 0.08)
+fitness_curriculum_g1() -> get_val(fitness_curriculum_g1, 15).  % Generation milestone 1 for curriculum schedule (default: 15)
+fitness_curriculum_g2() -> get_val(fitness_curriculum_g2, 60).  % Generation milestone 2 for curriculum schedule (default: 60)
+fitness_no_trade_penalty() -> get_val(fitness_no_trade_penalty, 0.5).  % Penalty for no trades in trade score (default: 0.5)
+fitness_dom_scale() -> get_val(fitness_dom_scale, 10.0).  % Scale for dominance score calculation (default: 10.0)
+fitness_bigwin_pct() -> get_val(fitness_bigwin_pct, 0.005).  % Big win threshold as percentage of starting balance (default: 0.005 = 0.5%)
+fitness_bigwin_sum_scale() -> get_val(fitness_bigwin_sum_scale, 1.0).  % Scale for big win sum normalization (default: 1.0)
+fitness_target_bigwins_per_1000() -> get_val(fitness_target_bigwins_per_1000, 5.0).  % Target big wins per 1000 timesteps (default: 5.0)
+fitness_unreal_discount_no_trades() -> get_val(fitness_unreal_discount_no_trades, 0.1).  % Unrealized discount when no trades (default: 0.1)
+fitness_dd_lambda_early() -> get_val(fitness_dd_lambda_early, 1.0).  % Early generation drawdown penalty strength (default: 1.0)
+fitness_dd_lambda_late() -> get_val(fitness_dd_lambda_late, 4.0).  % Late generation drawdown penalty strength (default: 4.0)
+%% Note: fitness_curriculum_drawdown_floor, fitness_curriculum_pnl_scale, and fitness_curriculum_unrealized_discount
+%% are already defined in the "Curriculum Risk Penalty Fitness Configuration" section above
 
 %% ===================================================================
 %% Population Configuration

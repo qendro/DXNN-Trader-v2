@@ -124,15 +124,15 @@ prep(Agent_Id,PM_PId,OpMode)->
 	%qlog:register_agent(self(), Agent_Id),
 	%qlog:xLog(pid_to_list(self()), "ExoSelf: ~p generated phenotype for Agent_Id: ~p, Gen: ~p, Specie_Id: ~p. Spawning main loop. Genotype: ~p", [self(), Agent_Id, A#agent.generation, A#agent.specie_id, A]),
 	% Log PID map for this agent spawn
-	%All_Pids = [self(), S#state.cx_pid | S#state.spids] ++ S#state.npids ++ 
-	%            S#state.apids ++ S#state.scape_pids ++ S#state.cpp_pids ++ 
-	%            S#state.cep_pids ++ 
-	%            case S#state.substrate_pid of
-	%                undefined -> [];
-	%                SubPid -> [SubPid]
-	%            end,
-	%Run_Id = qlog:get_run_id_from_population_id(A#agent.population_id),
-	%qlog:pid_map_log(Run_Id, A#agent.generation, Agent_Id, All_Pids),
+	All_Pids = [self(), S#state.cx_pid | S#state.spids] ++ S#state.npids ++ 
+	           S#state.apids ++ S#state.scape_pids ++ S#state.cpp_pids ++ 
+	           S#state.cep_pids ++ 
+	           case S#state.substrate_pid of
+	               undefined -> [];
+	               SubPid -> [SubPid]
+	           end,
+	Run_Id = qlog:get_run_id_from_population_id(A#agent.population_id),
+	qlog:pid_map_log(Run_Id, A#agent.generation, Agent_Id, All_Pids),
 	loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 
@@ -205,8 +205,13 @@ loop(S,gt)->
 					},
 					exoself:loop(U_S,gt)
 			end
-		%after 10000 ->
-		%	io:format("exoself:~p stuck.~n",[S#state.agent_id])
+		after 1000000 ->
+			qlog:xLog(qStatus, "Agent ~p timeout: no evaluation completed, assigning 0 fitness", [S#state.agent_id]),
+			% Clean up and report 0 fitness - same as normal termination
+			A=genotype:dirty_read({agent,S#state.agent_id}),
+			genotype:write(A#agent{fitness=0.0}),
+			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
+			gen_server:cast(S#state.pm_pid,{S#state.agent_id,terminated,0.0})
 	end;
 loop(S,benchmark)->
 	receive

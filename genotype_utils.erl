@@ -606,3 +606,76 @@ identify_process_type(Fun, Init, Reg) ->
                     end
             end
     end.
+
+%% List all agents with their sensor and neuron counts
+%% Writes results to logs/Benchmarker/agents.log
+list_active_agents_info() ->
+    % Prepare log directory and file
+    LogDir = filename:absname(filename:join("logs", "Benchmarker")),
+    ensure_log_directory(LogDir),
+    LogFile = filename:join(LogDir, "agents.log"),
+    {ok, File} = file:open(LogFile, [append]),
+    
+    % Write header
+    Timestamp = format_timestamp(),
+    io:format(File, "~n~s | === All Agents Info ===~n", [Timestamp]),
+    
+    % Also print to console
+    io:format("~n=== All Agents Info ===~n"),
+    
+    F = fun() ->
+        % Get all agent IDs from the database
+        Agent_Keys = mnesia:dirty_all_keys(agent),
+        Total_Agents = length(Agent_Keys),
+        
+        io:format(File, "~s | Total Agents: ~p~n~n", [Timestamp, Total_Agents]),
+        io:format("Total Agents: ~p~n~n", [Total_Agents]),
+        
+        lists:map(fun(Agent_Id) ->
+            case mnesia:dirty_read({agent, Agent_Id}) of
+                [] ->
+                    Msg = io_lib:format("Agent ~p: Not found in database~n", [Agent_Id]),
+                    io:format(File, "~s | ~s", [Timestamp, Msg]),
+                    io:format(Msg),
+                    {Agent_Id, 0, 0};
+                [Agent] ->
+                    Cx_Id = Agent#agent.cx_id,
+                    case mnesia:dirty_read({cortex, Cx_Id}) of
+                        [] ->
+                            Msg = io_lib:format("Agent ~p: Cortex not found~n", [Agent_Id]),
+                            io:format(File, "~s | ~s", [Timestamp, Msg]),
+                            io:format(Msg),
+                            {Agent_Id, 0, 0};
+                        [Cortex] ->
+                            Sensor_Count = length(Cortex#cortex.sensor_ids),
+                            Neuron_Count = length(Cortex#cortex.neuron_ids),
+                            Msg = io_lib:format("Agent ~p: Sensors=~p, Neurons=~p~n", 
+                                               [Agent_Id, Sensor_Count, Neuron_Count]),
+                            io:format(File, "~s | ~s", [Timestamp, Msg]),
+                            io:format(Msg),
+                            {Agent_Id, Sensor_Count, Neuron_Count}
+                    end
+            end
+        end, Agent_Keys)
+    end,
+    Result = mnesia:transaction(F),
+    file:close(File),
+    io:format("Results written to ~s~n", [LogFile]),
+    case Result of
+        {atomic, Agent_Info} -> Agent_Info;
+        _ -> []
+    end.
+
+%% Helper function to ensure log directory exists
+ensure_log_directory(Dir) ->
+    case filelib:is_dir(Dir) of
+        true -> ok;
+        false ->
+            filelib:ensure_dir(filename:join(Dir, "dummy"))
+    end.
+
+%% Helper function to format timestamp
+format_timestamp() ->
+    {{Y,Mo,D},{H,Mi,S}} = calendar:local_time(),
+    lists:flatten(io_lib:format("[~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B]",
+        [Y,Mo,D,H,Mi,S])).

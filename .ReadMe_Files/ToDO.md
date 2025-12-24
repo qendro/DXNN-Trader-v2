@@ -4,6 +4,7 @@
 - Agent RAM and CPU utlization and message queue
 - Distributed system across multple PC's or AWS instances
 - Improve fitness function
+- Improve CEP and weights 
 -----
 
 

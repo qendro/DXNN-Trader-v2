@@ -23,6 +23,8 @@
 %% - curriculum_risk_penalty: Curriculum learning with risk penalty based on drawdown
 %% - phase0_close_trades: Phase 0 - Focus on closing trades without blowing up (strictly positive)
 %% - phase1_profit_risk: Phase 1 - Profit optimization with drawdown control (strictly positive)
+%% - curriculum_trade_quality_profit: Single curriculum fitness that smoothly transitions from trade activity to profit quality over generations
+%% - phase2_profit_optimization: Phase 2 - Aggressive profit optimization with strong risk control for mature agents (strictly positive)
 %% ===================================================================
 
 %% ===================================================================
@@ -48,6 +50,8 @@ calculate_fitness(State, Account, FunctionName, Generation) ->
         curriculum_risk_penalty -> curriculum_risk_penalty(State, Account, Generation);
         phase0_close_trades -> phase0_close_trades(State, Account);
         phase1_profit_risk -> phase1_profit_risk(State, Account);
+        curriculum_trade_quality_profit -> curriculum_trade_quality_profit(State, Account, Generation);
+        phase2_profit_optimization -> phase2_profit_optimization(State, Account);
         _ -> 
             io:format("Warning: Unknown fitness function ~p, using time_weighted~n", [FunctionName]),
             time_weighted(State, Account)
@@ -473,7 +477,7 @@ phase0_close_trades(State, Account) ->
     OvertradePenalty = math:exp(-0.05 * ExcessOT),
 
     %% Loss guard
-    SB = 10000.0,  %% MUST match your sim's initial balance
+    SB = config:account_initial_balance(),
     RealizedPnL = lists:sum([PL || {_C, PL} <- Trades]),
     LossFloor   = -LossFloorPct * SB,
     LossPenalty =
@@ -499,7 +503,7 @@ phase1_profit_risk(State, Account) ->
     MinFitness = 1.0,
     Scale      = 1000.0,
 
-    SB       = 10000.0, %% MUST match your sim's initial balance
+    SB       = config:account_initial_balance(),
     Trades   = lists:sort(State#state.realized_pl_by_cycle),
     NumTrades = length(Trades),
     T        = max(State#state.cycle, 1),
@@ -553,6 +557,250 @@ phase1_profit_risk(State, Account) ->
     Core    = PScoreWeight * PScore + TradeScoreWeight * TradeScore,
     Score01 = to_01(Core),
 
+    MinFitness + Scale * (Score01 * RiskPenalty * OvertradePenalty).
+
+
+%% =========================================================
+%% Curriculum Trade Quality Profit Fitness (STRICTLY POSITIVE)
+%% =========================================================
+%% Single curriculum fitness function that smoothly transitions behavior over generations.
+%% Early generations: Focus on trade activity and closing trades.
+%% Later generations: Focus on profit quality, big wins, and risk control.
+curriculum_trade_quality_profit(State, Account) ->
+    Generation = config:fitness_curriculum_generation(),
+    curriculum_trade_quality_profit(State, Account, Generation).
+
+curriculum_trade_quality_profit(State, Account, Generation) ->
+    MinFitness = 1.0,
+    Scale = 1000.0,
+    
+    %% Get starting balance from config (not hard-coded)
+    SB = config:account_initial_balance(),
+    
+    %% Extract trade data
+    Trades = lists:sort(State#state.realized_pl_by_cycle),
+    N = length(Trades),
+    T = max(State#state.cycle, 1),
+    ScaleT = T / 1000.0,
+    
+    %% =========================================================
+    %% 1. Compute Trade Activity Score (target 50/1000, saturating)
+    %% =========================================================
+    TargetTradesPer1000 = config:fitness_target_trades_per_1000(),
+    NTarget = max(TargetTradesPer1000 * ScaleT, 0.001),
+    Ratio = min(N, NTarget) / NTarget,
+    TradeScore0 = 2.0 * Ratio - 1.0,  %% in [-1,1]
+    
+    %% Apply no-trade penalty
+    NoTradePenalty = config:fitness_no_trade_penalty(),
+    TradeScore = case N == 0 of
+        true -> clamp(TradeScore0 - NoTradePenalty, -1.0, 1.0);
+        false -> TradeScore0
+    end,
+    
+    %% =========================================================
+    %% 2. Compute Win Rate and Dominance Scores
+    %% =========================================================
+    NPos = length([PL || {_C, PL} <- Trades, PL > 0]),
+    NNeg = length([PL || {_C, PL} <- Trades, PL < 0]),
+    WinRate = NPos / max(N, 1),  %% in [0,1]
+    WinRateScore = 2.0 * WinRate - 1.0,  %% in [-1,1]
+    
+    %% Dominance score: tanh((NPos - NNeg) / DomScale)
+    DomScale = config:fitness_dom_scale(),
+    DominanceScore = math:tanh((NPos - NNeg) / max(DomScale, 0.001)),  %% in [-1,1]
+    
+    %% Combine win rate and dominance
+    WinCombo = 0.6 * WinRateScore + 0.4 * DominanceScore,  %% in [-1,1]
+    
+    %% =========================================================
+    %% 3. Overtrade Penalty (reward less if too many trades)
+    %% =========================================================
+    TradesPer1000 = N / max(ScaleT, 0.001),
+    OvertradeThreshPer1000 = config:fitness_overtrade_thresh_per_1000(),
+    OvertradeLambda = config:fitness_overtrade_lambda(),
+    ExcessOT = max(0.0, TradesPer1000 - OvertradeThreshPer1000),
+    OvertradePenalty = math:exp(-OvertradeLambda * ExcessOT),  %% in (0,1]
+    
+    %% =========================================================
+    %% 4. Big Win Metrics (large winners + many large winners)
+    %% =========================================================
+    BigWinPct = config:fitness_bigwin_pct(),
+    BigWinThreshold = BigWinPct * SB,
+    BigWins = [PL || {_C, PL} <- Trades, PL >= BigWinThreshold],
+    BigWinCount = length(BigWins),
+    BigWinSum = lists:sum(BigWins),
+    
+    %% Big win value score
+    %% BigWinSumScale is a multiplier: default 1.0 means use SB * BigWinPct as base scale
+    %% Higher values (e.g., 2.0) increase the scale, making it harder to saturate tanh
+    BigWinSumScale = config:fitness_bigwin_sum_scale(),
+    BaseBigWinSumScale = SB * BigWinPct,
+    EffectiveBigWinSumScale = case BigWinSumScale > 0.001 of
+        true -> BigWinSumScale * BaseBigWinSumScale;
+        false -> BaseBigWinSumScale
+    end,
+    BigWinValueScore = math:tanh(BigWinSum / max(EffectiveBigWinSumScale, 0.001)),  %% in [-1,1]
+    
+    %% Big win count score
+    TargetBigWinsPer1000 = config:fitness_target_bigwins_per_1000(),
+    BigWinCountTarget = max(TargetBigWinsPer1000 * ScaleT, 0.001),
+    BigWinCountRatio = min(BigWinCount, BigWinCountTarget) / BigWinCountTarget,
+    BigWinCountScore = 2.0 * BigWinCountRatio - 1.0,  %% in [-1,1]
+    
+    %% =========================================================
+    %% 5. PnL Score (ultimate objective)
+    %% =========================================================
+    RealizedPnL = lists:sum([PL || {_C, PL} <- Trades]),
+    UnrealPnL = Account#account.unrealized_PL,
+    KUnreal = config:fitness_curriculum_unrealized_discount(),
+    
+    %% Reduce unreal discount if no trades to discourage never closing
+    KUnrealAdjusted = case N == 0 of
+        true -> config:fitness_unreal_discount_no_trades();
+        false -> KUnreal
+    end,
+    
+    PEff = RealizedPnL + KUnrealAdjusted * UnrealPnL,
+    PNorm = PEff / max(ScaleT, 0.001),
+    PnLScale = config:fitness_curriculum_pnl_scale(),
+    PClip = clamp(PNorm, -3.0 * PnLScale, 3.0 * PnLScale),
+    PnLScore = math:tanh(PClip / max(PnLScale, 0.001)),  %% in [-1,1]
+    
+    %% =========================================================
+    %% 6. Risk Penalty (drawdown), increasing later in curriculum
+    %% =========================================================
+    EquityCurve = build_equity_curve(State, Account, SB),
+    MaxDDPct = max_drawdown_pct(EquityCurve),
+    DDFloor = config:fitness_curriculum_drawdown_floor(),
+    DDLambdaEarly = config:fitness_dd_lambda_early(),
+    DDLambdaLate = config:fitness_dd_lambda_late(),
+    
+    %% Ramp DDLambda from early to late with generation
+    G1 = config:fitness_curriculum_g1(),
+    G2 = config:fitness_curriculum_g2(),
+    G = float(Generation),
+    R2 = clamp((G - float(G1)) / max(float(G2 - G1), 1.0), 0.0, 1.0),
+    DDLambda = DDLambdaEarly * (1.0 - R2) + DDLambdaLate * R2,
+    
+    ExcessDD = max(0.0, MaxDDPct - DDFloor),
+    RiskPenalty = math:exp(-DDLambda * ExcessDD),  %% in (0,1]
+    
+    %% =========================================================
+    %% 7. Curriculum Schedule (weights change with generation)
+    %% =========================================================
+    %% Define ramps
+    R1 = clamp(G / max(float(G1), 1.0), 0.0, 1.0),  %% progress into "middle"
+    R2 = clamp((G - float(G1)) / max(float(G2 - G1), 1.0), 0.0, 1.0),  %% progress into "late"
+    
+    %% Set weights (early emphasizes trading, later emphasizes PnL and big wins)
+    W_Trade = 0.75 * (1.0 - R1) + 0.10 * R1,  %% ends near 0.10
+    W_Win = 0.20 * (1.0 - R1) + 0.20 * R1,  %% keep ~0.20 baseline
+    W_Big = 0.00 * (1.0 - R2) + 0.25 * R2,
+    W_Pnl = 0.05 * (1.0 - R2) + 0.45 * R2,
+    
+    %% =========================================================
+    %% 8. Ordering/gating so later terms don't dominate too early
+    %% =========================================================
+    GateTrade = to_01(TradeScore),  %% in [0,1]
+    GateWin = to_01(WinRateScore),  %% in [0,1]
+    
+    %% Effective late terms (gated)
+    PnLScoreEff = GateTrade * PnLScore,
+    BigWinScoreEff = GateTrade * GateWin * (0.5 * BigWinCountScore + 0.5 * BigWinValueScore),
+    
+    %% =========================================================
+    %% 9. Core combination + final fitness (strictly positive)
+    %% =========================================================
+    Core = W_Trade * TradeScore + W_Win * WinCombo + W_Big * BigWinScoreEff + W_Pnl * PnLScoreEff,
+    Score01 = to_01(Core),
+    
+    %% Apply penalties
+    Penalty = OvertradePenalty * RiskPenalty,
+    
+    %% Final fitness (strictly positive)
+    MinFitness + Scale * (Score01 * Penalty).
+
+
+%% =========================================================
+%% Phase 2 Fitness: Profit Optimization (STRICTLY POSITIVE)
+%% =========================================================
+%% Aggressive profit optimization for mature agents that already know how to trade.
+%% Focus: Maximum P/L with strong risk control, big win rewards, minimal trade count emphasis.
+phase2_profit_optimization(State, Account) ->
+    MinFitness = 1.0,
+    Scale = 1000.0,
+    
+    SB = config:account_initial_balance(),
+    Trades = lists:sort(State#state.realized_pl_by_cycle),
+    NumTrades = length(Trades),
+    T = max(State#state.cycle, 1),
+    ScaleT = T / 1000.0,
+    
+    %% Parameters - optimized for profit focus
+    UnrealizedDiscount = 0.2,  % Lower discount - prefer realized profits
+    PnLScale = 150.0,  % Higher scale to allow larger P/L values
+    DrawdownFloorPct = 0.08,  % Tighter drawdown tolerance (8%)
+    DrawdownLambda = 6.0,  % Stronger drawdown penalty
+    BigWinPct = 0.01,  % 1% of SB for big win threshold
+    OvertradeThreshPer1000 = 200.0,  % Allow more trades but still penalize excess
+    
+    %% PnL score [-1,1] - PRIMARY FOCUS
+    RealizedPnL = lists:sum([PL || {_C, PL} <- Trades]),
+    UnrealPnL = Account#account.unrealized_PL,
+    %% Strongly penalize unrealized when no trades
+    UnrealizedDiscountAdjusted = case NumTrades of
+        0 -> 0.05;  % Very low discount for unrealized when no trades
+        _ -> UnrealizedDiscount
+    end,
+    PEff = RealizedPnL + UnrealizedDiscountAdjusted * UnrealPnL,
+    
+    PNorm = PEff / max(ScaleT, 0.001),
+    PClip = clamp(PNorm, -3.0 * PnLScale, 3.0 * PnLScale),
+    PScore = math:tanh(PClip / max(PnLScale, 0.001)),  %% in [-1,1]
+    
+    %% Big win bonus - reward large profitable trades
+    BigWinThreshold = BigWinPct * SB,
+    BigWins = [PL || {_C, PL} <- Trades, PL >= BigWinThreshold],
+    BigWinSum = lists:sum(BigWins),
+    BigWinBonus = math:tanh(BigWinSum / max(SB * 0.02, 0.001)),  %% Normalize by 2% of SB
+    
+    %% Win rate bonus - reward consistency
+    NPos = length([PL || {_C, PL} <- Trades, PL > 0]),
+    WinRate = case NumTrades > 0 of
+        true -> NPos / NumTrades;
+        false -> 0.0
+    end,
+    WinRateBonus = 2.0 * WinRate - 1.0,  %% in [-1,1]
+    
+    %% Minimal trade activity score - just ensure some trading happens
+    MinTradesPer1000 = 20.0,  % Lower minimum - agents already know how to trade
+    NMinTarget = max(MinTradesPer1000 * ScaleT, 0.001),
+    TradeActivityScore = case NumTrades == 0 of
+        true -> -0.3;  % Small penalty for no trades
+        false ->
+            case NumTrades < NMinTarget of
+                true -> (NumTrades / NMinTarget) * 0.2 - 0.1;  %% Small bonus for meeting minimum
+                false -> 0.1  %% Small positive score for adequate trading
+            end
+    end,
+    
+    %% Drawdown penalty - STRONG
+    EquityCurve = build_equity_curve(State, Account, SB),
+    MaxDDPct = max_drawdown_pct(EquityCurve),
+    ExcessDD = max(0.0, MaxDDPct - DrawdownFloorPct),
+    RiskPenalty = math:exp(-DrawdownLambda * ExcessDD),  %% in (0,1]
+    
+    %% Overtrade penalty - moderate
+    TradesPer1000 = NumTrades / max(ScaleT, 0.001),
+    ExcessOT = max(0.0, TradesPer1000 - OvertradeThreshPer1000),
+    OvertradePenalty = math:exp(-0.05 * ExcessOT),  %% in (0,1]
+    
+    %% Weighted combination - HEAVY on P/L (85%), bonuses (10%), minimal trade activity (5%)
+    Core = 0.85 * PScore + 0.10 * (0.6 * BigWinBonus + 0.4 * WinRateBonus) + 0.05 * TradeActivityScore,
+    Score01 = to_01(Core),
+    
+    %% Final fitness (strictly positive)
     MinFitness + Scale * (Score01 * RiskPenalty * OvertradePenalty).
 
 

@@ -360,17 +360,16 @@ generate_run_id() ->
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
 get_run_configs() ->
     [
-        {1, [{tuning_duration, {const,1}}, {gt_start, 5000}, {gt_end, 4000}, {specie_size_limit, 20}, {init_specie_size, 15}, {evaluations_limit, 100000000}, {generation_limit, 2}, {fitness_function, phase0_close_trades}]},
-        {2, [{tuning_duration, {const,1}}, {gt_start, 8000}, {gt_end, 6000}, {specie_size_limit, 20}, {init_specie_size, 20}, {evaluations_limit, 100000000}, {generation_limit, 2}, {fitness_function, phase0_close_trades}]},
-        {3, [{tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2000}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 100000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.60}]},
-        {4, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 200000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.50}]},
-        {5, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 200000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.60}, {fitness_phase1_tradescore_weight, 0.40}]},
-        {6, [{tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {evaluations_limit, 200000000}, {generation_limit, 5}, {fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.70}, {fitness_phase1_tradescore_weight, 0.30}]}
+        {1, [{tuning_duration, {const,2}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 50}, {init_specie_size, 50}, {generation_limit, 300}, {fitness_function, phase2_profit_optimization}]},
+        {2, [{tuning_duration, {const,2}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]},
+        {3, [{tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]},
+        {4, [{tuning_duration, {const,10}}, {gt_start, 9000}, {gt_end, 5000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]},
+        {5, [{tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]}
     ].
 
 %% Prep function (similar to benchmarker:prep)
 prep(E, Mode, SourcePopId) ->
-    % Ensure config is applied for this run BEFORE reading config values
+    % Ensure config is applied for this run BEFORE reading config valuess
     apply_run_configs(E#experiment.id, E#experiment.run_index, E#experiment.run_configs),
     
     Old_PMP = E#experiment.pm_parameters,

@@ -85,6 +85,8 @@ launcher:start().
    genotype_utils:active_agents_process_check().
    genotype_utils:active_agents_process_check({5.663284600923985e-10,agent}).
 
+   qlog:print_genotype({5.660789465892301e-10,agent}).
+
 
 
    % Get total agents in database

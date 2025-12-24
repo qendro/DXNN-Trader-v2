@@ -1,6 +1,6 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0, print_genotype/1]).
 -include("records.hrl").
 
 -define(AGENT_PID_MAP, agent_pid_map).
@@ -256,6 +256,95 @@ genotype_log(Run_Id, Generation, Agent_Id) ->
     io:format(File, "~s | RUN:~s | GEN:~p | AGENT:~s | GENOTYPE:~s~n", 
               [Timestamp, RunStr, Generation, AgentStr, GenotypeStr]),
     file:close(File).
+
+%% Print and save genotype of an agent to genotypes.log (uses genotype:print logic)
+%% Usage: qlog:print_genotype(Agent_Id)
+print_genotype(Agent_Id) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "genotypes.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    
+    % Read full genotype using dirty_read (faster than transaction-based read)
+    case genotype:dirty_read({agent, Agent_Id}) of
+        undefined ->
+            io:format("Error: Agent ~p not found~n", [Agent_Id]),
+            io:format(File, "~s | ERROR: Agent ~p not found~n", [Timestamp, Agent_Id]),
+            file:close(File);
+        A ->
+            case genotype:dirty_read({cortex, A#agent.cx_id}) of
+                undefined ->
+                    io:format("Error: Cortex ~p not found for agent ~p~n", [A#agent.cx_id, Agent_Id]),
+                    io:format(File, "~s | ERROR: Cortex ~p not found for agent ~p~n", [Timestamp, A#agent.cx_id, Agent_Id]),
+                    file:close(File);
+                Cx ->
+                    % Print header to both console and file
+                    Header = io_lib:format("~s | [PRINT_GENOTYPE] Agent: ~p | Generation: ~p | Fitness: ~p~n", 
+                                           [Timestamp, Agent_Id, A#agent.generation, A#agent.fitness]),
+                    io:format("~s", [Header]),
+                    io:format(File, "~s", [Header]),
+                    
+                    % Print agent record
+                    io:format("~p~n", [A]),
+                    io:format(File, "~p~n", [A]),
+                    
+                    % Print cortex record
+                    io:format("~p~n", [Cx]),
+                    io:format(File, "~p~n", [Cx]),
+                    
+                    % Print sensors
+                    [begin
+                        Sensor = genotype:dirty_read({sensor, Id}),
+                        io:format("~p~n", [Sensor]),
+                        io:format(File, "~p~n", [Sensor])
+                    end || Id <- Cx#cortex.sensor_ids],
+                    
+                    % Print neurons
+                    [begin
+                        Neuron = genotype:dirty_read({neuron, Id}),
+                        io:format("~p~n", [Neuron]),
+                        io:format(File, "~p~n", [Neuron])
+                    end || Id <- Cx#cortex.neuron_ids],
+                    
+                    % Print actuators
+                    [begin
+                        Actuator = genotype:dirty_read({actuator, Id}),
+                        io:format("~p~n", [Actuator]),
+                        io:format(File, "~p~n", [Actuator])
+                    end || Id <- Cx#cortex.actuator_ids],
+                    
+                    % Print substrate if it exists
+                    case A#agent.substrate_id of
+                        undefined ->
+                            ok;
+                        Substrate_Id ->
+                            Substrate = genotype:dirty_read({substrate, Substrate_Id}),
+                            io:format("~p~n", [Substrate]),
+                            io:format(File, "~p~n", [Substrate]),
+                            
+                            % Print CPP sensors
+                            [begin
+                                CPP = genotype:dirty_read({sensor, Id}),
+                                io:format("~p~n", [CPP]),
+                                io:format(File, "~p~n", [CPP])
+                            end || Id <- Substrate#substrate.cpp_ids],
+                            
+                            % Print CEP actuators
+                            [begin
+                                CEP = genotype:dirty_read({actuator, Id}),
+                                io:format("~p~n", [CEP]),
+                                io:format(File, "~p~n", [CEP])
+                            end || Id <- Substrate#substrate.cep_ids]
+                    end,
+                    
+                    % Print separator line
+                    io:format("---~n", []),
+                    io:format(File, "---~n", []),
+                    
+                    file:close(File)
+            end
+    end.
 
 %% Log PID map for an agent (called when agent spawns)
 pid_map_log(Run_Id, Generation, Agent_Id, All_Pids) ->

@@ -96,7 +96,7 @@ mutate(Agent_Id)->
 			{atomic,_} ->
 				apply_Mutators(Agent_Id,MutationIndex-1);
 			Error ->
-				%io:format("******** Error:~p~nRetrying with new Mutation...~n",[Error]),
+				%qlog:xLog(qStatus, "Mutation failed for Agent_Id=~p Error=~p Retrying...", [Agent_Id, Error]),
 				apply_Mutators(Agent_Id,MutationIndex)
 		end.
 %apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented. Connectivity is validated and fixed only after all mutations are complete (when MutationIndex reaches 0).
@@ -746,6 +746,7 @@ add_neuron(Agent_Id)->%Adds neuron and connects it to other neurons, not sensors
 			U_EvoHist = [{add_neuron,From_ElementId,NewN_Id,To_ElementId}|A#agent.evo_hist],
 			genotype:write(Cx#cortex{neuron_ids = U_N_Ids}),
 			genotype:write(A#agent{pattern=U_Pattern,evo_hist=U_EvoHist})
+			%qlog:print_genotype(Agent_Id)
 	end.
 %The function add_neuron/1 creats a new neuron, and connects it to a randomly selected element in the NN, and form a randomly selected element in the NN. The function first reads the agent's pattern list, selects a random layer from the pattern, and then creates a new neuron id for that layer. Then, a new, unconnected neuron, is created with that neuron id. From the cortex's neuron_ids list, two random neuron ids are chosen: From_ElementId, and To_ElementId, (they can be the same ids). The function then establishes a connection from the neuron to To_ElemenId, and to the neuron from From_ElementId. Finally, the cortex's neuron_ids list is updated by appending to it the id of the newly created neuron, the agent's evo_hist is updated, and the updated cortex and agent records are written to database.
 
