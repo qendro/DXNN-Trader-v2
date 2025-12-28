@@ -222,11 +222,113 @@ reset_agent_for_next_run_in_tx(AgentId, NewSpecieId, NewPopId) ->
                 generation = 0,
                 fitness = 0,
                 evo_hist = [],
-                innovation_factor = 0,
-                pattern = []
+                innovation_factor = 0
             },
             mnesia:write(ResetAgent)
     end.
+
+%% ============================================================================
+%% POPULATION CLONING (Creates new agent IDs for each run - preserves artifacts)
+%% ============================================================================
+
+%% Clone population for next run: creates new agent IDs, preserves all artifacts
+%% This preserves logs, genotypes, and other artifacts by giving each run unique agent IDs
+clone_population_for_next_run(SourcePopId, NewPopId) ->
+    qlog:benchmarker(NewPopId, io_lib:format("CLONE_POPULATION_START | from ~p to ~p", [SourcePopId, NewPopId])),
+    
+    % First, read source population to get all agent IDs (outside transaction)
+    SourcePop = case genotype:dirty_read({population, SourcePopId}) of
+        undefined -> error({population_not_found, SourcePopId});
+        P -> P
+    end,
+    
+    % Clone all agents outside transaction (clone_Agent has its own transaction)
+    % Build map: SourceSpecieId -> [ClonedAgentIds]
+    SpecieClonesMap = lists:foldl(fun(SourceSpecieId, Acc) ->
+        SourceSpecie = genotype:dirty_read({specie, SourceSpecieId}),
+        case SourceSpecie of
+            undefined -> Acc;
+            _ ->
+                % Clone all agents in this specie
+                ClonedAgentIds = [
+                    begin
+                        CloneAgentId = genotype:clone_Agent(SourceAgentId),
+                        qlog:benchmarker(NewPopId, io_lib:format("CLONED_AGENT | source=~p | clone=~p | specie=~p", [SourceAgentId, CloneAgentId, SourceSpecieId])),
+                        CloneAgentId
+                    end
+                    || SourceAgentId <- SourceSpecie#specie.agent_ids
+                ],
+                maps:put(SourceSpecieId, ClonedAgentIds, Acc)
+        end
+    end, maps:new(), SourcePop#population.specie_ids),
+    
+    % Now update all records in transaction
+    F = fun() ->
+        % Create new population record with reset trace
+        NewPop = SourcePop#population{
+            id = NewPopId,
+            specie_ids = [],
+            trace = #trace{}
+        },
+        mnesia:write(NewPop),
+        
+        % Clone species - create new specie records with cloned agents
+        NewSpecieIds = lists:map(fun(SpecieId) ->
+            ClonedAgentIds = maps:get(SpecieId, SpecieClonesMap),
+            clone_specie_for_next_run_in_tx(SpecieId, NewPopId, ClonedAgentIds)
+        end, SourcePop#population.specie_ids),
+        
+        % Update population with new specie IDs
+        mnesia:write(NewPop#population{specie_ids = NewSpecieIds})
+    end,
+    mnesia:transaction(F).
+
+%% Clone specie for next run: create new specie record, clone all agents
+%% Note: Clones agents outside transaction (clone_Agent has its own transaction),
+%%       then updates runtime fields inside transaction
+clone_specie_for_next_run_in_tx(SourceSpecieId, NewPopId, ClonedAgentIds) ->
+    SourceSpecie = case mnesia:read({specie, SourceSpecieId}) of
+        [] -> error({specie_not_found, SourceSpecieId});
+        [S] -> S
+    end,
+    NewSpecieId = genotype:generate_UniqueId(),
+    
+    % Update runtime fields for all cloned agents
+    [update_cloned_agent_runtime_fields_in_tx(CloneAgentId, NewSpecieId, NewPopId)
+     || CloneAgentId <- ClonedAgentIds],
+    
+    % Create new specie record pointing to cloned agents
+    NewSpecie = SourceSpecie#specie{
+        id = NewSpecieId,
+        population_id = NewPopId,
+        agent_ids = ClonedAgentIds,  % New agent IDs from clones
+        dead_pool = [],
+        champion_ids = [],
+        fitness = undefined,
+        innovation_factor = {0, 0},
+        stats = []
+    },
+    mnesia:write(NewSpecie),
+    NewSpecieId.
+
+%% Update cloned agent's runtime fields for next run
+%% Called from within transaction - uses mnesia directly
+update_cloned_agent_runtime_fields_in_tx(CloneAgentId, NewSpecieId, NewPopId) ->
+    ClonedAgent = case mnesia:read({agent, CloneAgentId}) of
+        [] -> error({clone_agent_not_found, CloneAgentId, NewSpecieId, NewPopId});
+        [A] -> A
+    end,
+    
+    % Reset runtime fields for the new run
+    ResetClonedAgent = ClonedAgent#agent{
+        population_id = NewPopId,
+        specie_id = NewSpecieId,
+        generation = 0,          % Reset generation
+        fitness = 0,             % Reset fitness
+        evo_hist = [],           % Reset evolution history
+        innovation_factor = 0   % Reset innovation factor
+    },
+    mnesia:write(ResetClonedAgent).
 
 %% ============================================================================
 %% START FUNCTIONS
@@ -358,13 +460,77 @@ generate_run_id() ->
 
 %% Get run configs - customize this function with your experiment configs
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
+%%
+%% CURRICULUM LEARNING PROGRESSION:
+%% Phase -1 (Runs 1-5):   Size Reward - Focus: Reward larger neural networks to encourage growth
+%% Phase 0 (Runs 6-10):   Learn to trade - Focus: Close trades without blowing up
+%% Phase 1 (Runs 11-15):  Make positive trades - Profit optimization with drawdown control
+%% Phase 2 (Runs 16-25):  Win rate focus - More positive than negative trades (curriculum early)
+%% Phase 3 (Runs 26-35):  Big wins focus - Large positive trades (curriculum mid)
+%% Phase 4 (Runs 36-45):  Profit optimization - Maximum P/L with strong risk control
+%%
 get_run_configs() ->
     [
-        {1, [{tuning_duration, {const,2}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 50}, {init_specie_size, 50}, {generation_limit, 300}, {fitness_function, phase2_profit_optimization}]},
-        {2, [{tuning_duration, {const,2}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]},
-        {3, [{tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]},
-        {4, [{tuning_duration, {const,10}}, {gt_start, 9000}, {gt_end, 5000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]},
-        {5, [{tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 30}, {fitness_function, phase2_profit_optimization}]}
+        %% Phase -1: Size Reward (Runs 1-5) - Focus: Pure size focus in run 1, gradually transitioning
+        %% Run 1: fitness_size_focus_weight=0.0 means constant fitness (1.0), size_first postprocessor
+        %%        sorts primarily by neuron count (larger networks win regardless of trading performance)
+        %% Runs 2-5: Gradually increase focus_weight so trading performance becomes important alongside size
+        %{1, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.0}, {tuning_duration, {const,4}}, {gt_start, 1000}, {gt_end, 500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 1.0}]},
+        %{2, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.2}, {tuning_duration, {const,4}}, {gt_start, 2000}, {gt_end, 1000}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.9}]},
+        %{3, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.4}, {tuning_duration, {const,4}}, {gt_start, 3000}, {gt_end, 1500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.8}]},
+        %{4, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.6}, {tuning_duration, {const,4}}, {gt_start, 4000}, {gt_end, 2000}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.7}]},
+        %{5, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.8}, {tuning_duration, {const,4}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.6}]},
+        
+        %% Phase 0: Learn to Trade (Runs 6-10) - Focus: Close trades without blowing up
+        %% Runs 1-3: Use size_first postprocessor to encourage network growth
+        {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, size_first}, {tuning_duration, {const,10}}, {gt_start, 2000}, {gt_end, 1500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 1.0}]},
+        {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.8}]},
+        {3, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.7}]},
+        {4, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.6}]},
+        {5, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.5}]},
+        
+        %% Phase 1: Make Positive Trades (Runs 11-15) - Focus: Profit optimization with drawdown control
+        {6, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.30}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
+        {7, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.35}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
+        {8, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.60}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
+        {9, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.45}, {fitness_phase1_tradescore_weight, 0.55}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
+        {10, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.50}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
+        
+        %% Phase 2: Win Rate Focus (Runs 16-25) - Focus: More positive than negative trades
+        {11, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 0}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {12, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 5}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {13, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 10}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {14, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 15}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 9000}, {gt_end, 5000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {15, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 20}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 10000}, {gt_end, 5500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {16, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 25}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {17, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 30}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {18, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 35}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {19, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 40}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {20, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 45}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 15000}, {gt_end, 8000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        
+        %% Phase 3: Big Wins Focus (Runs 26-35) - Focus: Large positive trades
+        {21, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 50}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.005}, {fitness_target_bigwins_per_1000, 5.0}, {fitness_bigwin_sum_scale, 1.0}, {fitness_dd_lambda_early, 1.5}, {fitness_dd_lambda_late, 4.0}, {tuning_duration, {const,10}}, {gt_start, 10000}, {gt_end, 5500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {22, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 55}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.005}, {fitness_target_bigwins_per_1000, 5.0}, {fitness_bigwin_sum_scale, 1.2}, {fitness_dd_lambda_early, 1.5}, {fitness_dd_lambda_late, 4.0}, {tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {23, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 60}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.007}, {fitness_target_bigwins_per_1000, 5.0}, {fitness_bigwin_sum_scale, 1.2}, {fitness_dd_lambda_early, 1.5}, {fitness_dd_lambda_late, 4.0}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {24, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 65}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.007}, {fitness_target_bigwins_per_1000, 6.0}, {fitness_bigwin_sum_scale, 1.5}, {fitness_dd_lambda_early, 2.0}, {fitness_dd_lambda_late, 4.5}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {25, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 70}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.007}, {fitness_target_bigwins_per_1000, 6.0}, {fitness_bigwin_sum_scale, 1.5}, {fitness_dd_lambda_early, 2.0}, {fitness_dd_lambda_late, 4.5}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {26, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 75}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 6.0}, {fitness_bigwin_sum_scale, 2.0}, {fitness_dd_lambda_early, 2.5}, {fitness_dd_lambda_late, 5.0}, {tuning_duration, {const,10}}, {gt_start, 15000}, {gt_end, 8000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {27, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 80}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 7.0}, {fitness_bigwin_sum_scale, 2.0}, {fitness_dd_lambda_early, 2.5}, {fitness_dd_lambda_late, 5.0}, {tuning_duration, {const,10}}, {gt_start, 16000}, {gt_end, 8500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {28, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 85}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 7.0}, {fitness_bigwin_sum_scale, 2.5}, {fitness_dd_lambda_early, 3.0}, {fitness_dd_lambda_late, 5.5}, {tuning_duration, {const,10}}, {gt_start, 17000}, {gt_end, 9000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {29, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 90}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 8.0}, {fitness_bigwin_sum_scale, 2.5}, {fitness_dd_lambda_early, 3.0}, {fitness_dd_lambda_late, 5.5}, {tuning_duration, {const,10}}, {gt_start, 18000}, {gt_end, 9500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {30, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 95}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 8.0}, {fitness_bigwin_sum_scale, 3.0}, {fitness_dd_lambda_early, 3.5}, {fitness_dd_lambda_late, 6.0}, {tuning_duration, {const,10}}, {gt_start, 19000}, {gt_end, 10000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        
+        %% Phase 4: Profit Optimization (Runs 36-45) - Focus: Maximum P/L with strong risk control
+        {31, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {32, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {33, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {34, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 15000}, {gt_end, 8000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {35, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 16000}, {gt_end, 8500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {36, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 17000}, {gt_end, 9000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {37, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 18000}, {gt_end, 9500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {38, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 19000}, {gt_end, 10000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {39, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 20000}, {gt_end, 10500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {40, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 21000}, {gt_end, 11000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]}
     ].
 
 %% Prep function (similar to benchmarker:prep)
@@ -409,14 +575,14 @@ prep(E, Mode, SourcePopId) ->
             S = population_monitor:prep_PopState(PMP, Constraints),
             population_monitor:init_population(S, Constraints);
         {evo, _} ->
-            % Reuse population from source
-            case reuse_population_for_next_run(SourcePopId, Population_Id) of
+            % Clone population from source (creates new agent IDs, preserves artifacts)
+            case clone_population_for_next_run(SourcePopId, Population_Id) of
                 {atomic, _} ->
                     % Population already exists, just start monitor
                     S = population_monitor:prep_PopState(PMP, Constraints),
                     population_monitor:start(S);
                 Error ->
-                    io:format("Error reusing population: ~p~n", [Error]),
+                    io:format("Error cloning population: ~p~n", [Error]),
                     Error
             end
     end,
@@ -482,20 +648,20 @@ loop(E, P_Id) ->
                     qlog:exp_runner(run_start, {E#experiment.id, U_RunIndex, NextPopId, new_evo, ConfigStr}),
                     qlog:benchmarker(P_Id, io_lib:format("Run Start: Experiment id: ~p Run Index: ~p, NextPopId: ~p", [E#experiment.id, U_RunIndex, NextPopId])),
                     
-                    % Reuse population for next run (new_evo mode reuses from previous run)
-                    case reuse_population_for_next_run(P_Id, NextPopId) of
+                    % Clone population for next run (new_evo mode clones from previous run, preserves artifacts)
+                    case clone_population_for_next_run(P_Id, NextPopId) of
                         {atomic, _} ->
-                            io:format("Successfully reused population from ~p to ~p~n", [P_Id, NextPopId]),
-                            qlog:benchmarker(P_Id, io_lib:format("Successfully reused population from ~p to ~p", [P_Id, NextPopId])),
+                            io:format("Successfully cloned population from ~p to ~p~n", [P_Id, NextPopId]),
+                            qlog:benchmarker(P_Id, io_lib:format("Successfully cloned population from ~p to ~p", [P_Id, NextPopId])),
                             Constraints = U_E#experiment.init_constraints,
                             % Population already exists, just start monitor
                             S = population_monitor:prep_PopState(U_PMP, Constraints),
                             population_monitor:start(S),
                             loop(U_E, NextPopId);
                         Error ->
-                            io:format("Error reusing population from ~p to ~p: ~p~n", [P_Id, NextPopId, Error]),
-                            qlog:exp_runner(run_failed, {E#experiment.id, U_RunIndex, {reuse_failed, Error}}),
-                            qlog:benchmarker(P_Id, io_lib:format("Error reusing population from ~p to ~p: ~p", [P_Id, NextPopId, Error])),
+                            io:format("Error cloning population from ~p to ~p: ~p~n", [P_Id, NextPopId, Error]),
+                            qlog:exp_runner(run_failed, {E#experiment.id, U_RunIndex, {clone_failed, Error}}),
+                            qlog:benchmarker(P_Id, io_lib:format("Error cloning population from ~p to ~p: ~p", [P_Id, NextPopId, Error])),
                             Error
                     end
             end;

@@ -2,19 +2,20 @@
 -compile(export_all).
 -include("records.hrl").
 
--define(MAX_FIX_ATTEMPTS, 3).
+-define(MAX_FIX_ATTEMPTS, 10).
 
 fix_connectivity_if_needed(Agent_Id) ->
     case has_valid_connectivity(Agent_Id) of
         true -> ok;
         {false, Reason} ->
-            qlog:xLog(qStatus, "Agent ~p connectivity issue: ~p", [Agent_Id, Reason]),
+            %qlog:xLog(qStatus, "Agent ~p connectivity issue: ~p", [Agent_Id, Reason]),
             case try_fix_and_verify(Agent_Id, Reason) of
                 ok -> 
-                    qlog:xLog(qStatus, "Agent ~p connectivity fixed successfully", [Agent_Id]),
+                    %qlog:xLog(qStatus, "Agent ~p connectivity fixed successfully", [Agent_Id]),
                     ok;
                 retry ->
                     qlog:xLog(qStatus, "Agent ~p connectivity fix FAILED after max attempts", [Agent_Id]),
+                    qlog:genotype_snapshot(Agent_Id, "Connectivity fix failed after all mutations completed"),
                     error("********ERROR:apply_Mutators:: Connectivity fix failed after all mutations completed.")
             end
     end.
@@ -63,7 +64,7 @@ has_isolated_self_recurrent_neurons(Agent_Id, Cx) ->
     case Isolated of
         [] -> true;
         _ -> 
-            qlog:xLog(qStatus, "Agent ~p detected ~p isolated self-recurrent neuron(s): ~p", [Agent_Id, length(Isolated), Isolated]),
+            %qlog:xLog(qStatus, "Agent ~p detected ~p isolated self-recurrent neuron(s): ~p", [Agent_Id, length(Isolated), Isolated]),
             {false, isolated_self_recurrent}
     end.
 
@@ -300,37 +301,57 @@ fix_neural_path(Agent_Id) ->
     end.
 
 fix_substrate_main_path(Agent_Id) ->
-    A = genotype:read({agent,Agent_Id}),
-    Cx_Id = A#agent.cx_id,
-    Cx = genotype:read({cortex,Cx_Id}),
-    Substrate_Id = A#agent.substrate_id,
-    S_Ids = Cx#cortex.sensor_ids,
-    A_Ids = Cx#cortex.actuator_ids,
-    case S_Ids of
-        [] -> ok;
-        _ ->
-            S_Id = pick_random(S_Ids),
-            S = genotype:read({sensor,S_Id}),
-            case lists:member(Substrate_Id, S#sensor.fanout_ids) of
-                false ->
-                    U_S = S#sensor{fanout_ids = [Substrate_Id|S#sensor.fanout_ids]},
-                    genotype:write(U_S);
-                true -> ok
-            end
+    % Use transaction to ensure atomicity
+    F = fun() ->
+        A = genotype:read({agent,Agent_Id}),
+        Cx_Id = A#agent.cx_id,
+        Cx = genotype:read({cortex,Cx_Id}),
+        Substrate_Id = A#agent.substrate_id,
+        S_Ids = Cx#cortex.sensor_ids,
+        A_Ids = Cx#cortex.actuator_ids,
+        
+        % Collect updates
+        Updates = case S_Ids of
+            [] -> [];
+            _ ->
+                S_Id = pick_random(S_Ids),
+                S = genotype:read({sensor,S_Id}),
+                case lists:member(Substrate_Id, S#sensor.fanout_ids) of
+                    false ->
+                        U_S = S#sensor{fanout_ids = [Substrate_Id|S#sensor.fanout_ids]},
+                        case A_Ids of
+                            [] -> [U_S];
+                            _ ->
+                                A_Id = pick_random(A_Ids),
+                                Act = genotype:read({actuator,A_Id}),
+                                case lists:member(Substrate_Id, Act#actuator.fanin_ids) of
+                                    false ->
+                                        U_A = Act#actuator{fanin_ids = [Substrate_Id|Act#actuator.fanin_ids]},
+                                        [U_S, U_A];
+                                    true -> [U_S]
+                                end
+                        end;
+                    true ->
+                        case A_Ids of
+                            [] -> [];
+                            _ ->
+                                A_Id = pick_random(A_Ids),
+                                Act = genotype:read({actuator,A_Id}),
+                                case lists:member(Substrate_Id, Act#actuator.fanin_ids) of
+                                    false ->
+                                        U_A = Act#actuator{fanin_ids = [Substrate_Id|Act#actuator.fanin_ids]},
+                                        [U_A];
+                                    true -> []
+                                end
+                        end
+                end
+        end,
+        
+        % Write all updates in a single transaction
+        [mnesia:write(U) || U <- Updates],
+        ok
     end,
-    case A_Ids of
-        [] -> ok;
-        _ ->
-            A_Id = pick_random(A_Ids),
-            Act = genotype:read({actuator,A_Id}),
-            case lists:member(Substrate_Id, Act#actuator.fanin_ids) of
-                false ->
-                    U_A = Act#actuator{fanin_ids = [Substrate_Id|Act#actuator.fanin_ids]},
-                    genotype:write(U_A);
-                true -> ok
-            end
-    end,
-    ok.
+    mnesia:transaction(F).
 
 fix_cpp_cep_path(Agent_Id) ->
     A = genotype:read({agent,Agent_Id}),
@@ -356,92 +377,128 @@ fix_cpp_cep_path(Agent_Id) ->
     end.
 
 fix_bidirectional_mismatch(Agent_Id) ->
-    A = genotype:read({agent,Agent_Id}),
-    Cx_Id = A#agent.cx_id,
-    Cx = genotype:read({cortex,Cx_Id}),
-    S_Ids = Cx#cortex.sensor_ids,
-    lists:foreach(fun(S_Id) ->
-        S = genotype:read({sensor,S_Id}),
-        Fanout_Ids = S#sensor.fanout_ids,
-        lists:foreach(fun(Fanout_Id) ->
-            case Fanout_Id of
-                {_,neuron} ->
-                    N = genotype:read({neuron,Fanout_Id}),
-                    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
-                    case lists:member(S_Id, Input_Ids) of
-                        false -> genome_mutator:link_ToNeuron(S_Id, S#sensor.vl, N, A#agent.generation);
-                        true -> ok
-                    end;
-                _ -> ok
-            end
-        end, Fanout_Ids)
-    end, S_Ids),
-    N_Ids = Cx#cortex.neuron_ids,
-    lists:foreach(fun(N_Id) ->
-        N = genotype:read({neuron,N_Id}),
-        {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
-        lists:foreach(fun(Input_Id) ->
-            case Input_Id of
-                {_,sensor} ->
-                    S = genotype:read({sensor,Input_Id}),
-                    case lists:member(N_Id, S#sensor.fanout_ids) of
-                        false ->
-                            U_S = S#sensor{fanout_ids = [N_Id|S#sensor.fanout_ids], generation = A#agent.generation},
-                            genotype:write(U_S);
-                        true -> ok
-                    end;
-                _ -> ok
-            end
-        end, Input_Ids)
-    end, N_Ids),
-    ok.
+    % Use transaction to ensure atomicity and prevent race conditions
+    F = fun() ->
+        A = genotype:read({agent,Agent_Id}),
+        Cx_Id = A#agent.cx_id,
+        Cx = genotype:read({cortex,Cx_Id}),
+        S_Ids = Cx#cortex.sensor_ids,
+        N_Ids = Cx#cortex.neuron_ids,
+        
+        % Collect all updates first: check sensors -> neurons, then neurons -> sensors
+        Updates1 = collect_sensor_to_neuron_fixes_tx(Agent_Id, S_Ids, A#agent.generation, []),
+        Updates2 = collect_neuron_sensor_fixes_tx(Agent_Id, N_Ids, A#agent.generation, []),
+        Updates = Updates1 ++ Updates2,
+        
+        % Write all updates in a single transaction (atomic and prevents race conditions)
+        [mnesia:write(U) || U <- Updates],
+        ok
+    end,
+    mnesia:transaction(F).
+
+collect_sensor_to_neuron_fixes_tx(_Agent_Id, [], _Generation, Acc) -> Acc;
+collect_sensor_to_neuron_fixes_tx(Agent_Id, [S_Id|S_Rest], Generation, Acc) ->
+    S = genotype:read({sensor,S_Id}),
+    Fanout_Ids = S#sensor.fanout_ids,
+    Acc1 = lists:foldl(fun(Fanout_Id, AccIn) ->
+        case Fanout_Id of
+            {_,neuron} ->
+                N = genotype:read({neuron,Fanout_Id}),
+                {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+                case lists:member(S_Id, Input_Ids) of
+                    false -> 
+                        U_N = genome_mutator:link_ToNeuron(S_Id, S#sensor.vl, N, Generation),
+                        [U_N|AccIn];
+                    true -> AccIn
+                end;
+            _ -> AccIn
+        end
+    end, Acc, Fanout_Ids),
+    collect_sensor_to_neuron_fixes_tx(Agent_Id, S_Rest, Generation, Acc1).
+
+collect_neuron_sensor_fixes_tx(_Agent_Id, [], _Generation, Acc) -> Acc;
+collect_neuron_sensor_fixes_tx(Agent_Id, [N_Id|N_Rest], Generation, Acc) ->
+    N = genotype:read({neuron,N_Id}),
+    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+    Acc1 = lists:foldl(fun(Input_Id, AccIn) ->
+        case Input_Id of
+            {_,sensor} ->
+                S = genotype:read({sensor,Input_Id}),
+                case lists:member(N_Id, S#sensor.fanout_ids) of
+                    false ->
+                        U_S = S#sensor{fanout_ids = [N_Id|S#sensor.fanout_ids], generation = Generation},
+                        [U_S|AccIn];
+                    true -> AccIn
+                end;
+            _ -> AccIn
+        end
+    end, Acc, Input_Ids),
+    collect_neuron_sensor_fixes_tx(Agent_Id, N_Rest, Generation, Acc1).
 
 fix_cpp_bidirectional_mismatch(Agent_Id) ->
-    A = genotype:read({agent,Agent_Id}),
-    Substrate_Id = A#agent.substrate_id,
-    Substrate = genotype:read({substrate,Substrate_Id}),
-    CPP_Ids = Substrate#substrate.cpp_ids,
-    Cx_Id = A#agent.cx_id,
-    Cx = genotype:read({cortex,Cx_Id}),
-    N_Ids = Cx#cortex.neuron_ids,
-    lists:foreach(fun(CPP_Id) ->
-        CPP = genotype:read({sensor,CPP_Id}),
-        Fanout_Ids = CPP#sensor.fanout_ids,
-        lists:foreach(fun(N_Id) ->
-            case N_Id of
-                {_,neuron} ->
-                    N = genotype:read({neuron,N_Id}),
-                    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
-                    case lists:member(CPP_Id, Input_Ids) of
-                        false -> genome_mutator:link_ToNeuron(CPP_Id, CPP#sensor.vl, N, A#agent.generation);
-                        true -> ok
-                    end;
-                _ -> ok
-            end
-        end, Fanout_Ids)
-    end, CPP_Ids),
-    lists:foreach(fun(N_Id) ->
-        N = genotype:read({neuron,N_Id}),
-        {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
-        lists:foreach(fun(Input_Id) ->
-            case Input_Id of
-                {_,sensor} ->
-                    case lists:member(Input_Id, CPP_Ids) of
-                        true ->
-                            CPP = genotype:read({sensor,Input_Id}),
-                            case lists:member(N_Id, CPP#sensor.fanout_ids) of
-                                false ->
-                                    U_CPP = CPP#sensor{fanout_ids = [N_Id|CPP#sensor.fanout_ids], generation = A#agent.generation},
-                                    genotype:write(U_CPP);
-                                true -> ok
-                            end;
-                        false -> ok
-                    end;
-                _ -> ok
-            end
-        end, Input_Ids)
-    end, N_Ids),
-    ok.
+    % Use transaction to ensure atomicity and prevent race conditions
+    F = fun() ->
+        A = genotype:read({agent,Agent_Id}),
+        Substrate_Id = A#agent.substrate_id,
+        Substrate = genotype:read({substrate,Substrate_Id}),
+        CPP_Ids = Substrate#substrate.cpp_ids,
+        Cx_Id = A#agent.cx_id,
+        Cx = genotype:read({cortex,Cx_Id}),
+        N_Ids = Cx#cortex.neuron_ids,
+        
+        % Collect all updates first: check CPP -> neurons, then neurons -> CPP
+        Updates1 = collect_cpp_to_neuron_fixes_tx(Agent_Id, CPP_Ids, A#agent.generation, []),
+        Updates2 = collect_neuron_to_cpp_fixes_tx(Agent_Id, N_Ids, CPP_Ids, A#agent.generation, []),
+        Updates = Updates1 ++ Updates2,
+        
+        % Write all updates in a single transaction
+        [mnesia:write(U) || U <- Updates],
+        ok
+    end,
+    mnesia:transaction(F).
+
+collect_cpp_to_neuron_fixes_tx(_Agent_Id, [], _Generation, Acc) -> Acc;
+collect_cpp_to_neuron_fixes_tx(Agent_Id, [CPP_Id|CPP_Rest], Generation, Acc) ->
+    CPP = genotype:read({sensor,CPP_Id}),
+    Fanout_Ids = CPP#sensor.fanout_ids,
+    Acc1 = lists:foldl(fun(N_Id, AccIn) ->
+        case N_Id of
+            {_,neuron} ->
+                N = genotype:read({neuron,N_Id}),
+                {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+                case lists:member(CPP_Id, Input_Ids) of
+                    false -> 
+                        U_N = genome_mutator:link_ToNeuron(CPP_Id, CPP#sensor.vl, N, Generation),
+                        [U_N|AccIn];
+                    true -> AccIn
+                end;
+            _ -> AccIn
+        end
+    end, Acc, Fanout_Ids),
+    collect_cpp_to_neuron_fixes_tx(Agent_Id, CPP_Rest, Generation, Acc1).
+
+collect_neuron_to_cpp_fixes_tx(_Agent_Id, [], _CPP_Ids, _Generation, Acc) -> Acc;
+collect_neuron_to_cpp_fixes_tx(Agent_Id, [N_Id|N_Rest], CPP_Ids, Generation, Acc) ->
+    N = genotype:read({neuron,N_Id}),
+    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+    Acc1 = lists:foldl(fun(Input_Id, AccIn) ->
+        case Input_Id of
+            {_,sensor} ->
+                case lists:member(Input_Id, CPP_Ids) of
+                    true ->
+                        CPP = genotype:read({sensor,Input_Id}),
+                        case lists:member(N_Id, CPP#sensor.fanout_ids) of
+                            false ->
+                                U_CPP = CPP#sensor{fanout_ids = [N_Id|CPP#sensor.fanout_ids], generation = Generation},
+                                [U_CPP|AccIn];
+                            true -> AccIn
+                        end;
+                    false -> AccIn
+                end;
+            _ -> AccIn
+        end
+    end, Acc, Input_Ids),
+    collect_neuron_to_cpp_fixes_tx(Agent_Id, N_Rest, CPP_Ids, Generation, Acc1).
 
 fix_isolated_self_recurrent(Agent_Id) ->
     A = genotype:read({agent,Agent_Id}),
@@ -454,7 +511,7 @@ fix_isolated_self_recurrent(Agent_Id) ->
     case Isolated of
         [] -> ok;
         _ ->
-            qlog:xLog(qStatus, "Agent ~p fixing ~p isolated self-recurrent neuron(s)", [Agent_Id, length(Isolated)]),
+            %qlog:xLog(qStatus, "Agent ~p fixing ~p isolated self-recurrent neuron(s)", [Agent_Id, length(Isolated)]),
             lists:foreach(fun(Isolated_N_Id) ->
                 case {S_Ids, N_Ids} of
                     {[], []} -> ok;
@@ -469,21 +526,21 @@ fix_isolated_self_recurrent(Agent_Id) ->
                             [] -> ok;
                             Available -> 
                                 From_N_Id = pick_random(Available),
-                                genome_mutator:link_FromElementToElement(Agent_Id, From_N_Id, Isolated_N_Id),
-                                qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from neuron ~p", [Agent_Id, Isolated_N_Id, From_N_Id])
+                                genome_mutator:link_FromElementToElement(Agent_Id, From_N_Id, Isolated_N_Id)
+                                %qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from neuron ~p", [Agent_Id, Isolated_N_Id, From_N_Id])
                         end;
                     {_, []} -> 
                         % Only sensors
                         S_Id = pick_random(S_Ids),
-                        link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id),
-                        qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
+                        link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id);
+                        %qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
                     _ ->
                         % Both available: randomly choose
                         case random:uniform(2) of
                             1 -> 
                                 S_Id = pick_random(S_Ids),
-                                link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id),
-                                qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
+                                link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id);
+                                %qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
                             2 ->
                                 Available_Neurons = case A#agent.constraint#constraint.connection_architecture of
                                     feedforward -> 
@@ -493,12 +550,12 @@ fix_isolated_self_recurrent(Agent_Id) ->
                                 case Available_Neurons -- [Isolated_N_Id] of
                                     [] -> 
                                         S_Id = pick_random(S_Ids),
-                                        link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id),
-                                        qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p (fallback)", [Agent_Id, Isolated_N_Id, S_Id]);
+                                        link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id);
+                                        %qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p (fallback)", [Agent_Id, Isolated_N_Id, S_Id]);
                                     Available -> 
                                         From_N_Id = pick_random(Available),
-                                        genome_mutator:link_FromElementToElement(Agent_Id, From_N_Id, Isolated_N_Id),
-                                        qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from neuron ~p", [Agent_Id, Isolated_N_Id, From_N_Id])
+                                        genome_mutator:link_FromElementToElement(Agent_Id, From_N_Id, Isolated_N_Id)
+                                        %qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from neuron ~p", [Agent_Id, Isolated_N_Id, From_N_Id])
                                 end
                         end
                 end

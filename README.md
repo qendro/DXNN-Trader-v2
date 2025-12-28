@@ -36,6 +36,8 @@ process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, me
 process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, memory}, {format, per_line}]).
 process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, reductions}, {format, per_line}]).
 
+process_monitor:log_process_info([{full_system, true}, {sort_by, memory}, {format, per_line}]).
+
 benchmarker:start(sliding_window_5, 
 bench_configs:get_run_configs()).
 
@@ -79,13 +81,16 @@ launcher:start().
    c(genotype_utils).
    % Print the best genotype from the default 'test' population
    genotype_utils:get_active_agents().
+   genotype_utils:list_active_agents_info().
 
    genotype_utils:print_active_agent_genotypes().
 
    genotype_utils:active_agents_process_check().
    genotype_utils:active_agents_process_check({5.663284600923985e-10,agent}).
 
-   qlog:print_genotype({5.660789465892301e-10,agent}).
+   qlog:print_genotype({5.660575282997371e-10,agent}).
+
+   genotype_utils:terminate_agent({5.660525142447517e-10,agent}).
 
 
 

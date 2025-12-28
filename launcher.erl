@@ -19,8 +19,21 @@ start(BenchmarkId) ->
     % Initialize Mnesia
     maybe_create_schema(),
     qlog:benchmarker(BenchmarkId, "Schema created"),
-    mnesia:start(),
-    qlog:benchmarker(BenchmarkId, "Mnesia started"),
+    % Set dump_log_time_threshold BEFORE starting Mnesia (default: 180000ms = 3min)
+    % Setting to 15 minutes (900000ms) to reduce frequency of transaction log dumps
+    case application:set_env(mnesia, dump_log_time_threshold, 900000) of
+        ok -> ok;
+        {error, ConfigError} -> 
+            qlog:xLog(qStatus, "Mnesia config error: failed to set dump_log_time_threshold: ~p", [ConfigError]);
+        ConfigError -> 
+            qlog:xLog(qStatus, "Mnesia config error: failed to set dump_log_time_threshold: ~p", [ConfigError])
+    end,
+    case mnesia:start() of
+        ok -> qlog:benchmarker(BenchmarkId, "Mnesia started");
+        {error, Reason} -> 
+            qlog:xLog(qStatus, "Mnesia start error: ~p", [Reason]),
+            exit({mnesia_start_failed, Reason})
+    end,
     
     % Initialize FX and Polis
     fx:init(),
@@ -65,5 +78,6 @@ maybe_create_schema() ->
         {error, {already_exists, _}} -> 
             ok;
         {error, Reason} -> 
+            qlog:xLog(qStatus, "Mnesia schema creation error: ~p", [Reason]),
             exit({schema_create_failed, Reason})
     end.

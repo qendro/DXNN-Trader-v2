@@ -48,7 +48,25 @@ init({Mods,PublicScapes}) ->
 	process_flag(trap_exit,true), 
 	register(polis,self()), 
 	io:format("Parameters:~p~n",[{Mods,PublicScapes}]), 
-	mnesia:start(), 
+	% Set dump_log_time_threshold if Mnesia not already started (default: 180000ms = 3min)
+	% Setting to 15 minutes (900000ms) to reduce frequency of transaction log dumps
+	case mnesia:system_info(is_running) of
+		no -> 
+			case application:set_env(mnesia, dump_log_time_threshold, 900000) of
+				ok -> ok;
+				{error, ConfigError} -> 
+					qlog:xLog(qStatus, "Mnesia config error: failed to set dump_log_time_threshold: ~p", [ConfigError]);
+				ConfigError -> 
+					qlog:xLog(qStatus, "Mnesia config error: failed to set dump_log_time_threshold: ~p", [ConfigError])
+			end;
+		_ -> ok
+	end,
+	case mnesia:start() of
+		ok -> ok;
+		{error, StartReason} -> 
+			qlog:xLog(qStatus, "Mnesia start error in polis: ~p", [StartReason]),
+			exit({mnesia_start_failed, StartReason})
+	end,
 	start_supmods(Mods), 
 	Active_PublicScapes = start_scapes(PublicScapes,[]), 
 	io:format("******** Polis: ##MATHEMA## is now online.~n"), 
@@ -99,17 +117,42 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions 
 %%-------------------------------------------------------------------- 
 create()-> 
-	mnesia:create_schema([node()]), 
-	mnesia:start(), 
-	mnesia:create_table(population,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,population)}]), 
-	mnesia:create_table(specie,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,specie)}]),
-	mnesia:create_table(agent,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,agent)}]), 
-	mnesia:create_table(cortex,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,cortex)}]), 
-	mnesia:create_table(neuron,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,neuron)}]),
-	mnesia:create_table(sensor,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,sensor)}]), 
-	mnesia:create_table(actuator,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,actuator)}]),
-	mnesia:create_table(substrate,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,substrate)}]),
-	mnesia:create_table(experiment,[{disc_copies, [node()]},{type,set},{attributes, record_info(fields,experiment)}]).
+	case mnesia:create_schema([node()]) of
+		ok -> ok;
+		{error, {_, {already_exists, _}}} -> ok;
+		{error, {already_exists, _}} -> ok;
+		{error, SchemaReason} -> 
+			qlog:xLog(qStatus, "Mnesia schema creation error in polis:create: ~p", [SchemaReason])
+	end,
+	case mnesia:start() of
+		ok -> ok;
+		{error, StartReason} -> 
+			qlog:xLog(qStatus, "Mnesia start error in polis:create: ~p", [StartReason])
+	end,
+	create_tables().
+	
+create_tables() ->
+	Tables = [
+		{population, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,population)}]},
+		{specie, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,specie)}]},
+		{agent, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,agent)}]},
+		{cortex, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,cortex)}]},
+		{neuron, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,neuron)}]},
+		{sensor, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,sensor)}]},
+		{actuator, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,actuator)}]},
+		{substrate, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,substrate)}]},
+		{experiment, [{disc_copies, [node()]},{type,set},{attributes, record_info(fields,experiment)}]}
+	],
+	lists:foreach(fun({TableName, Options}) ->
+		case mnesia:create_table(TableName, Options) of
+			{atomic, ok} -> ok;
+			{aborted, {already_exists, _}} -> ok;
+			{aborted, Reason} -> 
+				qlog:xLog(qStatus, "Mnesia table creation error for ~p: ~p", [TableName, Reason]);
+			Error -> 
+				qlog:xLog(qStatus, "Mnesia table creation error for ~p: ~p", [TableName, Error])
+		end
+	end, Tables).
 
 reset()-> 
 	mnesia:stop(), 

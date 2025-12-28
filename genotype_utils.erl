@@ -208,6 +208,79 @@ get_active_agents() ->
             end
     end.
 
+%% Terminate a specific agent by Agent_Id
+%% Usage: genotype_utils:terminate_agent({5.660525142447517e-10,agent}).
+%% This will kill the agent process and notify the population monitor so the program can continue.
+terminate_agent(Agent_Id) ->
+    case whereis(monitor) of
+        undefined -> 
+            io:format("Monitor not running~n"),
+            {error, monitor_not_running};
+        MonitorPid -> 
+            case catch gen_server:call(MonitorPid, get_active_agents) of
+                {active_agents, ActiveAgent_IdPs, _AgentsLeft, _TotAgents} ->
+                    case lists:keyfind(Agent_Id, 1, ActiveAgent_IdPs) of
+                        false ->
+                            io:format("Agent ~p is not in the active agents list~n", [Agent_Id]),
+                            {error, agent_not_found};
+                        {Agent_Id, Agent_PId} ->
+                            case is_process_alive(Agent_PId) of
+                                true ->
+                                    % Get all linked and monitored processes to kill them all
+                                    AllPids = case catch erlang:process_info(Agent_PId, [links, monitors]) of
+                                        ProcessInfo when is_list(ProcessInfo) ->
+                                            Links = proplists:get_value(links, ProcessInfo, []),
+                                            Monitors = proplists:get_value(monitors, ProcessInfo, []),
+                                            MonitoredPids = [Pid || {process, Pid} <- Monitors],
+                                            % Filter out self and monitor (population_monitor)
+                                            [P || P <- Links ++ MonitoredPids, 
+                                                  P =/= Agent_PId, 
+                                                  P =/= self(),
+                                                  case catch erlang:process_info(P, registered_name) of
+                                                      [{registered_name, monitor}] -> false;
+                                                      _ -> true
+                                                  end];
+                                        _ -> []
+                                    end,
+                                    % Kill all child processes first
+                                    KilledCount = lists:foldl(fun(Pid, Acc) ->
+                                        case is_process_alive(Pid) of
+                                            true ->
+                                                exit(Pid, kill),
+                                                Acc + 1;
+                                            false -> Acc
+                                        end
+                                    end, 0, AllPids),
+                                    % Kill the exoself process
+                                    exit(Agent_PId, kill),
+                                    % Update agent fitness to 0.0 in database so it doesn't persist
+                                    case mnesia:dirty_read({agent, Agent_Id}) of
+                                        [] ->
+                                            io:format("Warning: Agent ~p not found in database~n", [Agent_Id]);
+                                        [Agent] ->
+                                            UpdatedAgent = Agent#agent{fitness = 0.0},
+                                            genotype:write(UpdatedAgent),
+                                            io:format("Set agent ~p fitness to 0.0 in database~n", [Agent_Id])
+                                    end,
+                                    % Notify population monitor that agent terminated with 0.0 fitness
+                                    gen_server:cast(MonitorPid, {Agent_Id, terminated, 0.0}),
+                                    io:format("Terminated agent ~p (PID: ~p) and ~p child processes, notified monitor~n", 
+                                             [Agent_Id, Agent_PId, KilledCount]),
+                                    {ok, terminated};
+                                false ->
+                                    io:format("Agent ~p (PID: ~p) is already dead~n", [Agent_Id, Agent_PId]),
+                                    {ok, already_dead}
+                            end
+                    end;
+                {'EXIT', Reason} ->
+                    io:format("Error querying monitor: ~p~n", [Reason]),
+                    {error, Reason};
+                Other ->
+                    io:format("Unexpected response: ~p~n", [Other]),
+                    {error, unexpected_response}
+            end
+    end.
+
 %% Get total number of agents in the database
 get_total_agents() ->
     F = fun() ->
@@ -679,3 +752,145 @@ format_timestamp() ->
     {{Y,Mo,D},{H,Mi,S}} = calendar:local_time(),
     lists:flatten(io_lib:format("[~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B]",
         [Y,Mo,D,H,Mi,S])).
+
+%% List all populations in Mnesia with agent counts
+%% Usage: genotype_utils:list_all_populations()
+list_all_populations() ->
+    F = fun() ->
+        % Get all population keys from Mnesia
+        Population_Keys = mnesia:all_keys(population),
+        
+        io:format("~n=== All Populations in Mnesia ===~n"),
+        io:format("Total Populations: ~p~n~n", [length(Population_Keys)]),
+        
+        % For each population, get the record and count agents
+        Population_Info = lists:map(fun(Population_Id) ->
+            case mnesia:read({population, Population_Id}) of
+                [] ->
+                    % Population record not found, count agents by population_id field
+                    Agent_Count = count_agents_by_population_id(Population_Id),
+                    {Population_Id, undefined, Agent_Count, []};
+                [Population] ->
+                    % Get specie IDs from population record
+                    Specie_Ids = Population#population.specie_ids,
+                    
+                    % Count agents across all species in this population
+                    Agent_Count = lists:foldl(fun(Specie_Id, Acc) ->
+                        case mnesia:read({specie, Specie_Id}) of
+                            [] -> Acc;
+                            [Specie] -> Acc + length(Specie#specie.agent_ids)
+                        end
+                    end, 0, Specie_Ids),
+                    
+                    % Also count directly from agent records (in case species are inconsistent)
+                    Direct_Count = count_agents_by_population_id(Population_Id),
+                    
+                    % Use the higher count (more reliable)
+                    Final_Count = max(Agent_Count, Direct_Count),
+                    
+                    {Population_Id, Population, Final_Count, Specie_Ids}
+            end
+        end, Population_Keys),
+        
+        % Sort by population ID for consistent output
+        Sorted_Info = lists:keysort(1, Population_Info),
+        
+        % Print formatted output
+        io:format("Population ID                          | Species | Agents | Encoding Types~n"),
+        io:format(string:chars($-, 80) ++ "~n"),
+        
+        lists:foreach(fun({Pop_Id, Pop_Record, Agent_Count, Specie_Ids}) ->
+            % Format population ID (handle atoms and other types)
+            Pop_Id_Str = case Pop_Id of
+                Atom when is_atom(Atom) -> atom_to_list(Atom);
+                _ -> lists:flatten(io_lib:format("~p", [Pop_Id]))
+            end,
+            
+            % Truncate if too long
+            Display_Id = case length(Pop_Id_Str) > 30 of
+                true -> string:substr(Pop_Id_Str, 1, 27) ++ "...";
+                false -> Pop_Id_Str ++ string:chars($\s, 30 - length(Pop_Id_Str))
+            end,
+            
+            % Get encoding types from population record or agents
+            Encoding_Types = case Pop_Record of
+                undefined ->
+                    get_encoding_types_from_agents(Pop_Id);
+                _ ->
+                    % Try to get from first agent in first specie
+                    case Specie_Ids of
+                        [First_Specie_Id | _] ->
+                            case mnesia:read({specie, First_Specie_Id}) of
+                                [] -> [];
+                                [Specie] ->
+                                    case Specie#specie.agent_ids of
+                                        [First_Agent_Id | _] ->
+                                            case mnesia:read({agent, First_Agent_Id}) of
+                                                [] -> [];
+                                                [Agent] -> [Agent#agent.encoding_type]
+                                            end;
+                                        [] -> []
+                                    end
+                            end;
+                        [] -> []
+                    end
+            end,
+            
+            Encoding_Str = case Encoding_Types of
+                [] -> "unknown";
+                [ET] -> atom_to_list(ET);
+                ETs -> string:join([atom_to_list(ET) || ET <- ETs], ",")
+            end,
+            
+            Specie_Count = length(Specie_Ids),
+            
+            io:format("~s | ~6B | ~6B | ~s~n", 
+                     [Display_Id, Specie_Count, Agent_Count, Encoding_Str])
+        end, Sorted_Info),
+        
+        % Summary
+        Total_Agents = lists:sum([Count || {_, _, Count, _} <- Sorted_Info]),
+        Total_Species = lists:sum([length(Specie_Ids) || {_, _, _, Specie_Ids} <- Sorted_Info]),
+        
+        io:format(string:chars($-, 80) ++ "~n"),
+        io:format("TOTAL                                  | ~6B | ~6B |~n", 
+                 [Total_Species, Total_Agents]),
+        io:format("~n"),
+        
+        % Return structured data
+        {ok, Sorted_Info, Total_Agents, Total_Species}
+    end,
+    
+    case mnesia:transaction(F) of
+        {atomic, Result} -> Result;
+        {abort, Reason} ->
+            io:format("Error reading populations: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+%% Helper: Count agents by population_id field (direct count from agent table)
+count_agents_by_population_id(Population_Id) ->
+    Agent_Keys = mnesia:dirty_all_keys(agent),
+    Filtered = [Agent_Id || Agent_Id <- Agent_Keys,
+               case mnesia:dirty_read({agent, Agent_Id}) of
+                   [] -> false;
+                   [Agent] -> Agent#agent.population_id == Population_Id
+               end],
+    length(Filtered).
+
+%% Helper: Get encoding types from agents in a population
+get_encoding_types_from_agents(Population_Id) ->
+    Agent_Keys = mnesia:dirty_all_keys(agent),
+    Encoding_Types = lists:foldl(fun(Agent_Id, Acc) ->
+        case mnesia:dirty_read({agent, Agent_Id}) of
+            [] -> Acc;
+            [Agent] when Agent#agent.population_id == Population_Id ->
+                ET = Agent#agent.encoding_type,
+                case lists:member(ET, Acc) of
+                    true -> Acc;
+                    false -> [ET | Acc]
+                end;
+            _ -> Acc
+        end
+    end, [], Agent_Keys),
+    lists:reverse(Encoding_Types).

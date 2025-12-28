@@ -354,6 +354,8 @@ sim(ExoSelf,S,A)->
 			end;
 		restart ->
 			fx:sim(ExoSelf,#state{},create_account());
+		{From,terminate} ->
+			ok;
 		terminate ->
 			ok
 		after 10000 ->

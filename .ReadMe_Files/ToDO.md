@@ -5,6 +5,7 @@
 - Distributed system across multple PC's or AWS instances
 - Improve fitness function
 - Improve CEP and weights 
+- Stats to exp_runner.log to show avg/max trades, avg/max neurons, avg/max PL 
 -----
 
 

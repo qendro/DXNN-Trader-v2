@@ -35,7 +35,7 @@ bench_end() -> get_val(bench_end, last).                          % Options: las
 %% ===================================================================
 %% --- Standard Forex Trader ---
 pli_resolutions() -> get_val(pli_resolutions, [30, 90, 270, 540, 1080]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
-pci_horizontal_resolutions() -> get_val(pci_horizontal_resolutions, [30, 90, 270]).         % Options: [10], [20], [50], [10,20], [20,50], etc. (creates one sensor per value)
+pci_horizontal_resolutions() -> get_val(pci_horizontal_resolutions, [30]).         % Options: [10], [20], [50], [10,20], [20,50], etc. (creates one sensor per value)
 pci_vertical_resolutions() -> get_val(pci_vertical_resolutions, [20]).           % Options: [10], [15], [20], [10,15], [15,20], etc. (PCI: Cartesian product HRes×VRes)
 
 %% --- 1-Minute Optimized Trader ---
@@ -61,7 +61,7 @@ tot_runs() -> get_val(tot_runs, 1).                               % Options: 1-1
 population_evo_alg_f() -> get_val(population_evo_alg_f, generational).        % Options: generational, steady_state
 population_selection_f() -> get_val(population_selection_f, competition).       % Options: competition, top3
 population_fitness_postprocessor_f() -> get_val(population_fitness_postprocessor_f, none). % Options: none, size_proportional
-tot_topological_mutations_functions() -> get_val(tot_topological_mutations_functions, [{ncount_exponential,1.5}, {ncount_linear,4}]). % Options: {ncount_exponential,0.5}, {ncount_linear,1}
+tot_topological_mutations_functions() -> get_val(tot_topological_mutations_functions, [{ncount_exponential,2}, {ncount_linear,7}]). % Options: {ncount_exponential,0.5}, {ncount_linear,1}
 
 %% ===================================================================
 %% Substrate-Specific Configuration
@@ -102,7 +102,7 @@ mutation_operators() -> get_val(mutation_operators, [
     {remove_bias,10},
 
     %% Topology Growth
-    {add_neuron,80},
+    {add_neuron,95},
     {add_inlink,50},
     {add_outlink,40},
     {outsplice,15},

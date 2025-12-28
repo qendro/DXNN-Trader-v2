@@ -459,11 +459,11 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 	populate_PHyperlayers_l2l(PrevHyperlayer,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
 	NewWeights = case Plasticity of
 		none -> 
-			get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[]);
+			get_weights_parallel(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[]);
 		modular_none ->
-			get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
+			get_weights_parallel(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
 		_ ->
-			get_weights(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
+			get_weights_parallel(PrevHyperlayer,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
 	end,
 	populate_PHyperlayers_l2l(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
 	populate_PHyperlayers_l2l(_PrevHyperlayer,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
@@ -475,11 +475,11 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 	populate_PHyperlayers_fi(FlatSubstrate,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
 	NewWeights = case Plasticity of
 		none -> 
-			get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[]);
+			get_weights_parallel(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[]);
 		modular_none ->
-			get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
+			get_weights_parallel(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
 		_ ->
-			get_weights(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
+			get_weights_parallel(FlatSubstrate,Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
 	end,
 	populate_PHyperlayers_fi(FlatSubstrate,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
 	populate_PHyperlayers_fi(FlatSubstrate,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
@@ -490,11 +490,11 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 			populate_PHyperlayers_nsr(PrevHyperlayer,[{Coord,PrevO,PrevWeights}|CurHyperlayer],Substrate,CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
 			NewWeights = case Plasticity of
 				none -> 
-					get_weights([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[]);
+					get_weights_parallel([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[]);
 				modular_none ->
-					get_weights([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
+					get_weights_parallel([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO);
 				_ ->
-					get_weights([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
+					get_weights_parallel([{Coord,PrevO,PrevWeights}|PrevHyperlayer],Coord,CPP_PIds,CEP_PIds,[],PrevWeights,PrevO)
 			end,
 			populate_PHyperlayers_nsr(PrevHyperlayer,CurHyperlayer,Substrate,CPP_PIds,CEP_PIds,Plasticity,[{Coord,PrevO,NewWeights}|Acc1],Acc2);
 	populate_PHyperlayers_nsr(_PrevHyperlayer,[],[CurHyperlayer|Substrate],CPP_PIds,CEP_PIds,Plasticity,Acc1,Acc2)->
@@ -541,6 +541,59 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 		exit({empty_weight_list,Coord});
 	get_weights([],_Coord,CPP_PIds,CEP_PIds,Acc,[],_O)->
 		lists:reverse(Acc).
+
+%%%%%%%%%%% PARALLEL WEIGHT CALCULATION FUNCTIONS %%%%%%%%%%%
+	% Parallel version: sends all requests first, then collects responses
+	get_weights_parallel(I_Neurodes, Coord, CPP_PIds, CEP_PIds, Acc) ->
+		% Send all requests (non-blocking)
+		send_all_weight_requests(I_Neurodes, Coord, CPP_PIds),
+		% Collect all responses in parallel
+		Weights = collect_all_weight_responses(CEP_PIds, length(I_Neurodes), []),
+		lists:reverse(Weights ++ Acc).
+
+	% Parallel version with plasticity (7-arg version)
+	get_weights_parallel(I_Neurodes, Coord, CPP_PIds, CEP_PIds, Acc, PrevWeights, O) ->
+		% Send all plasticity requests (non-blocking)
+		send_all_plasticity_requests(I_Neurodes, Coord, CPP_PIds, PrevWeights, O),
+		% Collect all responses in parallel
+		Weights = collect_all_weight_responses(CEP_PIds, length(I_Neurodes), []),
+		lists:reverse(Weights ++ Acc).
+
+	% Helper: Send all weight requests without waiting
+	send_all_weight_requests([{I_Coord, _I, _I_Weights}|I_Neurodes], Coord, CPP_PIds) ->
+		static_fanout(CPP_PIds, I_Coord, Coord),
+		send_all_weight_requests(I_Neurodes, Coord, CPP_PIds);
+	send_all_weight_requests([], _Coord, _CPP_PIds) ->
+		ok.
+
+	% Helper: Send all plasticity requests without waiting
+	send_all_plasticity_requests([{I_Coord, I, _I_Weights}|I_Neurodes], Coord, CPP_PIds, [{W, _LF, _Params}|PrevWeights], O) ->
+		plasticity_fanout(CPP_PIds, I_Coord, Coord, [I, O, W]),
+		send_all_plasticity_requests(I_Neurodes, Coord, CPP_PIds, PrevWeights, O);
+	send_all_plasticity_requests([{I_Coord, I, _I_Weights}|I_Neurodes], Coord, CPP_PIds, [W|PrevWeights], O) ->
+		plasticity_fanout(CPP_PIds, I_Coord, Coord, [I, O, W]),
+		send_all_plasticity_requests(I_Neurodes, Coord, CPP_PIds, PrevWeights, O);
+	send_all_plasticity_requests([], _Coord, _CPP_PIds, [], _O) ->
+		ok.
+
+	% Helper: Collect all weight responses in parallel
+	collect_all_weight_responses(CEP_PIds, 0, Acc) ->
+		Acc;
+	collect_all_weight_responses(CEP_PIds, Remaining, Acc) ->
+		receive
+			{CEP_PId, Command, Signal} when is_pid(CEP_PId) ->
+				case lists:member(CEP_PId, CEP_PIds) of
+					true ->
+						U_W = substrate:Command(Signal, void),
+						collect_all_weight_responses(CEP_PIds, Remaining - 1, [U_W|Acc]);
+					false ->
+						% Not from our CEP processes, ignore and continue waiting
+						collect_all_weight_responses(CEP_PIds, Remaining, Acc)
+				end
+		after 600000 ->
+			qlog:xLog(qStatus, "weight_collection_timeout remaining=~p", [Remaining]),
+			error({weight_collection_timeout, Remaining})
+		end.
 
 				plasticity_fanout([CPP_PId|CPP_PIds],I_Coord,Coord,IOW)->
 					CPP_PId ! {self(),I_Coord,Coord,IOW},
@@ -603,10 +656,10 @@ calculate_ResetOutput(Densities,Substrate,Input,CPP_PIds,CEP_PIds,Plasticity,Lin
 							true -> Weights;
 							false ->
 								qlog:xLog(qStatus, "iterative weight_len_mismatch Coord=~p weights=~p fanin=~p", [Coord, length(Weights), FanIn]),
-								get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[])
+								get_weights_parallel(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[])
 						end,
 						Output = calculate_neurode_output_std(I_Neurodes,{Coord,Prev_O,FixedWeights},0),
-						U_Weights = get_weights(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[],FixedWeights,Output),
+						U_Weights = get_weights_parallel(I_Neurodes,Coord,CPP_PIds,CEP_PIds,[],FixedWeights,Output),
 						{Coord,Output,U_Weights};
 					abcn ->
 						NormW = normalize_plastic_weights(Weights, abcn),

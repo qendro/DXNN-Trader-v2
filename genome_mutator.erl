@@ -96,7 +96,7 @@ mutate(Agent_Id)->
 			{atomic,_} ->
 				apply_Mutators(Agent_Id,MutationIndex-1);
 			Error ->
-				%qlog:xLog(qStatus, "Mutation failed for Agent_Id=~p Error=~p Retrying...", [Agent_Id, Error]),
+				%io:format("******** Error:~p~nRetrying with new Mutation...~n",[Error]),
 				apply_Mutators(Agent_Id,MutationIndex)
 		end.
 %apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented. Connectivity is validated and fixed only after all mutations are complete (when MutationIndex reaches 0).

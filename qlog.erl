@@ -1,6 +1,6 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0, print_genotype/1]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, log_agent_metadata/3, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0, print_genotype/1, agent_gen/2]).
 -include("records.hrl").
 
 -define(AGENT_PID_MAP, agent_pid_map).
@@ -94,6 +94,48 @@ agent_trades(Agent_Id, Msg) ->
     Timestamp = format_timestamp(),
     io:format(File, "~s | [AGENT:~p] ~s~n", [Timestamp, Agent_Id, Msg]),
     file:close(File).
+
+%% Agent metadata tracking (encoding type, neurons, sensors, generation, run number, ex_pid)
+%% Writes to logs/Benchmarker/agent_meta.log
+agent_meta(Agent_Id, Msg) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_meta.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    io:format(File, "~s | [AGENT:~p] ~s~n", [Timestamp, Agent_Id, Msg]),
+    file:close(File).
+
+%% Log agent metadata (encoding type, neurons, sensors, generation, run number, ex_pid)
+%% Writes to logs/Benchmarker/agent_meta.log
+log_agent_metadata(Agent_Id, Generation, ExoSelf_PId) ->
+    case catch genotype:dirty_read({agent, Agent_Id}) of
+        A when is_record(A, agent) ->
+            % Extract encoding type
+            EncodingType = A#agent.encoding_type,
+            
+            % Read cortex to get neuron count and sensors
+            Cx = genotype:dirty_read({cortex, A#agent.cx_id}),
+            NumNeurons = length(Cx#cortex.neuron_ids),
+            
+            % Extract sensor names and sizes
+            SensorInfos = [begin
+                S = genotype:dirty_read({sensor, SId}),
+                io_lib:format("~p(~p)", [S#sensor.name, S#sensor.vl])
+            end || SId <- Cx#cortex.sensor_ids],
+            SensorsStr = string:join(SensorInfos, ","),
+            
+            % Get run number from population_id
+            RunNumber = get_run_id_from_population_id(A#agent.population_id),
+            
+            % Format and log (including ex_pid)
+            Msg = io_lib:format(" | ex_pid=~p | run=~p | generation=~p | encoding=~p | neurons=~p | sensors=~s", 
+                                [ExoSelf_PId, RunNumber, Generation, EncodingType, NumNeurons, SensorsStr]),
+            agent_meta(Agent_Id, Msg);
+        _ ->
+            % Agent not found, skip logging
+            ok
+    end.
 
 %% ============================================================================
 %% GENOTYPE EVOLUTION LOGGING - Complete genotype tracking over time
@@ -194,6 +236,20 @@ process_monitor(Msg) ->
     io:format(File, "~s | ~s~n", [Timestamp, Msg]),
     file:close(File).
 
+%% Agent generation logging (writes to Benchmarker folder)
+agent_gen(Population_Id, Msg) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_gen.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    PopIdStr = case is_atom(Population_Id) of
+        true -> atom_to_list(Population_Id);
+        false -> lists:flatten(io_lib:format("~p", [Population_Id]))
+    end,
+    io:format(File, "~s | [POP:~s] ~s~n", [Timestamp, PopIdStr, Msg]),
+    file:close(File).
+
 %% ============================================================================
 %% NEW LOGGING FUNCTIONS - Genotypes, PID Maps, and Reductions
 %% ============================================================================
@@ -212,14 +268,45 @@ get_run_id_from_population_id(Population_Id) ->
         end, Experiments) of
             [E | _] -> E#experiment.run_index;
             [] -> 
-                % Fallback: try to extract from population_id if it contains run info
-                % Or return population_id itself as fallback
-                Population_Id
+                % Try to extract run number from population_id format
+                % Format: <<"<ISO8601>_<LineageId>_run<RunIndex>">>
+                case Population_Id of
+                    undefined -> "unknown";
+                    PopId when is_binary(PopId) ->
+                        % Convert binary to string and extract run number
+                        PopIdStr = binary_to_list(PopId),
+                        case string:str(PopIdStr, "_run") of
+                            0 -> PopId;  % No "_run" found, return original
+                            Pos ->
+                                RunPart = string:substr(PopIdStr, Pos + 4),  % Skip "_run"
+                                case catch list_to_integer(RunPart) of
+                                    RunNum when is_integer(RunNum) -> RunNum;
+                                    _ -> PopId  % Conversion failed, return original
+                                end
+                        end;
+                    _ -> Population_Id  % Not binary, return as-is
+                end
         end
     end,
     case catch mnesia:transaction(F) of
         {atomic, RunId} -> RunId;
-        _ -> Population_Id  % Fallback to population_id if query fails
+        _ -> 
+            % Fallback: try to extract from population_id directly
+            case Population_Id of
+                undefined -> "unknown";
+                PopId when is_binary(PopId) ->
+                    PopIdStr = binary_to_list(PopId),
+                    case string:str(PopIdStr, "_run") of
+                        0 -> PopId;
+                        Pos ->
+                            RunPart = string:substr(PopIdStr, Pos + 4),
+                            case catch list_to_integer(RunPart) of
+                                RunNum when is_integer(RunNum) -> RunNum;
+                                _ -> PopId
+                            end
+                    end;
+                _ -> Population_Id
+            end
     end.
 
 %% Log full genotype for an agent (called at generation boundaries)

@@ -321,6 +321,9 @@ dirty_read(TnK)->
 			R
 	end.
 
+dirty_write(R)->
+	mnesia:dirty_write(R).
+
 write(R)->
 	F = fun()->
 		mnesia:write(R)

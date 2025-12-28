@@ -178,6 +178,7 @@ loop(S,gt)->
 					%	false -> ok 
 					%end,
 					A=genotype:dirty_read({agent,S#state.agent_id}),
+					qlog:log_agent_metadata(S#state.agent_id, S#state.generation, self()),
 					genotype:write(A#agent{fitness=U_HighestFitness}),
 					backup_genotype(S#state.idsNpids,S#state.npids),
 					terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
@@ -205,10 +206,11 @@ loop(S,gt)->
 					},
 					exoself:loop(U_S,gt)
 			end
-		after 1000000 ->
+		after 300000 ->
 			qlog:xLog(qStatus, "Agent ~p timeout: no evaluation completed, assigning 0 fitness", [S#state.agent_id]),
 			% Clean up and report 0 fitness - same as normal termination
 			A=genotype:dirty_read({agent,S#state.agent_id}),
+			qlog:genotype_snapshot(S#state.agent_id, "Timeout: No evaluation completed, assigning 0 fitness"),
 			genotype:write(A#agent{fitness=0.0}),
 			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
 			gen_server:cast(S#state.pm_pid,{S#state.agent_id,terminated,0.0})
@@ -513,6 +515,7 @@ gather_acks(PId_Index)->
 		{_From,ready}->
 			gather_acks(PId_Index-1)
 		after 100000 ->
+			qlog:xLog(qStatus, "Not all acks received:~p~n", [PId_Index]),
 			io:format("******** Not all acks received:~p~n",[PId_Index])
 	end.
 %gather_acks/1 ensures that the X number of {From,ready} messages are sent to it, before it returns with done. X is set by the caller of the function.

@@ -5,16 +5,47 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Get Init Standard Actuators/Sensors %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 get_InitSensors(Morphology)->
-	Sensors = morphology:Morphology(sensors),
-	% Exclude fx_Internals sensor from initial sensor selection
-	% fx_Internals should only be added via mutation, not during initialization
-	FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
-	[lists:nth(random:uniform(length(FilteredSensors)),FilteredSensors)].
+	% Check if agent_gen has custom sensors stored in ETS
+	case ets:whereis(agent_gen_overrides) of
+		undefined ->
+			% No ETS table, use default behavior
+			Sensors = morphology:Morphology(sensors),
+			FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
+			[lists:nth(random:uniform(length(FilteredSensors)),FilteredSensors)];
+		_ ->
+			% Check for custom sensors
+			case ets:lookup(agent_gen_overrides, {custom_sensors, Morphology}) of
+				[] ->
+					% No custom sensors, use default
+					Sensors = morphology:Morphology(sensors),
+					FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
+					[lists:nth(random:uniform(length(FilteredSensors)),FilteredSensors)];
+				[{_, Custom_Sensors}] ->
+					% Use custom sensors from agent_gen
+					Custom_Sensors
+			end
+	end.
 	%[lists:nth(1,Sensors)].
 
 get_InitActuators(Morphology)->
-	Actuators = morphology:Morphology(actuators),
-	[lists:nth(random:uniform(length(Actuators)),Actuators)].
+	% Check if agent_gen has custom actuators stored in ETS
+	case ets:whereis(agent_gen_overrides) of
+		undefined ->
+			% No ETS table, use default behavior
+			Actuators = morphology:Morphology(actuators),
+			[lists:nth(random:uniform(length(Actuators)),Actuators)];
+		_ ->
+			% Check for custom actuators
+			case ets:lookup(agent_gen_overrides, {custom_actuators, Morphology}) of
+				[] ->
+					% No custom actuators, use default
+					Actuators = morphology:Morphology(actuators),
+					[lists:nth(random:uniform(length(Actuators)),Actuators)];
+				[{_, Custom_Actuators}] ->
+					% Use custom actuators from agent_gen
+					Custom_Actuators
+			end
+	end.
 	%[lists:nth(1,Actuators)].
 
 get_Sensors(Morphology)->
@@ -110,9 +141,9 @@ forex_trader(sensors)->
 	PLI_Sensors=  [#sensor{name=fx_PLI,type=standard,scape={private,fx_sim},format=no_geo,vl=HRes,parameters=[HRes,close]} || HRes<-config:pli_resolutions()],
 	PCI_Sensors = [#sensor{name=fx_PCI,type=standard,scape={private,fx_sim},format={symmetric,[HRes,VRes]},vl=HRes*VRes,parameters=[HRes,VRes]} || HRes <-config:pci_horizontal_resolutions(), VRes<-config:pci_vertical_resolutions()],
 	InternalSensors = [#sensor{name=fx_Internals,type=standard,scape={private,fx_sim},format=no_geo,vl=config:internal_sensor_dimensions(),parameters=[config:internal_sensor_dimensions()]}],%[Long|Short|Void],Value
-	%PLI_Sensors.
+	PLI_Sensors.
 	%PCI_Sensors. %Inital state [BASE]
-	PLI_Sensors++PCI_Sensors++InternalSensors.
+	%PLI_Sensors++PCI_Sensors++InternalSensors.
 	%PCI_Sensors++PLI_Sensors++InternalSensors.
 	%PLI_Sensors.%++InternalSensors. %qq
 	%PLI_Sensors++InternalSensors. % qq - Enable internal sensors for more mutation options

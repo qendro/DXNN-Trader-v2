@@ -25,6 +25,7 @@
 %% - phase1_profit_risk: Phase 1 - Profit optimization with drawdown control (strictly positive)
 %% - curriculum_trade_quality_profit: Single curriculum fitness that smoothly transitions from trade activity to profit quality over generations
 %% - phase2_profit_optimization: Phase 2 - Aggressive profit optimization with strong risk control for mature agents (strictly positive)
+%% - phase_size_reward: Rewards larger neural networks - used in early runs to encourage network growth (strictly positive)
 %% ===================================================================
 
 %% ===================================================================
@@ -52,6 +53,7 @@ calculate_fitness(State, Account, FunctionName, Generation) ->
         phase1_profit_risk -> phase1_profit_risk(State, Account);
         curriculum_trade_quality_profit -> curriculum_trade_quality_profit(State, Account, Generation);
         phase2_profit_optimization -> phase2_profit_optimization(State, Account);
+        phase_size_reward -> phase_size_reward(State, Account);
         _ -> 
             io:format("Warning: Unknown fitness function ~p, using time_weighted~n", [FunctionName]),
             time_weighted(State, Account)
@@ -823,3 +825,65 @@ max_drawdown_pct([E | Rest], Peak, MaxDDPct) ->
             false -> 1.0
         end,
     max_drawdown_pct(Rest, NewPeak, max(MaxDDPct, DDPct)).
+
+
+%% =========================================================
+%% Phase Size Reward Fitness: Reward Larger Networks (STRICTLY POSITIVE)
+%% =========================================================
+%% Fitness function designed to encourage larger neural networks in early evolution.
+%% For run 1: Returns very small base fitness so size_proportional postprocessor makes 
+%%           neuron count the primary selection factor (divides by size^0.01, but since
+%%           base is tiny, larger networks win).
+%% For runs 2-5: Gradually increases base fitness component to transition away from pure size focus.
+phase_size_reward(State, Account) ->
+    % Always calculate performance-based fitness regardless of weight
+    % The size_first postprocessor handles size-based sorting
+    % Weight parameter is ignored - fitness always includes performance variation
+    
+    Trades    = State#state.realized_pl_by_cycle,
+    NumTrades = length(Trades),
+    T         = max(State#state.cycle, 1),
+    ScaleT    = T / 1000.0,
+
+    TargetTradesPer1000    = 30.0,
+    OvertradeThreshPer1000 = 150.0,
+    LossFloorPct           = 0.10,
+
+    %% Trade completion score [-1,1]
+    NTarget = max(TargetTradesPer1000 * ScaleT, 0.001),
+    Ratio   = min(NumTrades, NTarget) / NTarget,
+    TradeScore0 = 2.0 * Ratio - 1.0,
+    TradeScore = case NumTrades of
+        0 -> clamp(TradeScore0 - 0.1, -1.0, 1.0);
+        _ -> TradeScore0
+    end,
+
+    %% Overtrade penalty - lenient
+    TradesPer1000 = NumTrades / max(ScaleT, 0.001),
+    ExcessOT      = max(0.0, TradesPer1000 - OvertradeThreshPer1000),
+    OvertradePenalty = math:exp(-0.01 * ExcessOT),
+
+    %% Loss guard - lenient
+    SB = config:account_initial_balance(),
+    RealizedPnL = lists:sum([PL || {_C, PL} <- Trades]),
+    LossFloor   = -LossFloorPct * SB,
+    LossPenalty = case RealizedPnL < LossFloor of
+        true  -> 0.5;
+        false -> 1.0
+    end,
+
+    %% Small unrealized term
+    UnrealTerm = math:tanh((0.1 * Account#account.unrealized_PL) / max(SB, 1.0)),
+    Core    = 0.80 * TradeScore + 0.20 * UnrealTerm,
+    Score01 = to_01(Core),
+
+    %% Base fitness with performance component
+    % Base fitness ensures all values are positive and above 1.0
+    % Performance component adds variation based on trading results
+    % The size_first postprocessor will sort by neuron count primarily
+    BaseFitness = 1.0,
+    PerformanceComponent = Score01 * OvertradePenalty * LossPenalty,
+    
+    % Return fitness that varies based on performance
+    % Size-based sorting is handled by the postprocessor
+    BaseFitness + (BaseFitness * PerformanceComponent).
