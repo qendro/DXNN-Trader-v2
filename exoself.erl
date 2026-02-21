@@ -206,7 +206,7 @@ loop(S,gt)->
 					},
 					exoself:loop(U_S,gt)
 			end
-		after 300000 ->
+		after 600000 ->
 			qlog:xLog(qStatus, "Agent ~p timeout: no evaluation completed, assigning 0 fitness", [S#state.agent_id]),
 			% Clean up and report 0 fitness - same as normal termination
 			A=genotype:dirty_read({agent,S#state.agent_id}),

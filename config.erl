@@ -15,6 +15,7 @@ account_initial_balance() -> get_val(account_initial_balance, 300).             
 account_lot_size() -> get_val(account_lot_size, 10000).                  % Options: 1000, 10000, 100000 (micro, mini, standard lots)
 account_margin() -> get_val(account_margin, 0).                        % Options: 0-1.0 (percentage, 0=no margin requirement)
 account_spread() -> get_val(account_spread, 0.000150).                 % Options: 0.00001-0.001 (1-100 pips, typical: 0.00015)
+account_extinction_threshold() -> get_val(account_extinction_threshold, 1).    % Options: 1-inf (account equity threshold, 1=disabled extinction)
 buy_money_fixed() -> get_val(buy_money_fixed, 100).                     % Options: any positive number (fixed trade size)
 min_profit_threshold() -> get_val(min_profit_threshold, 0.000150).           % Options: 0.00001-0.01 (minimum profit in pips)
 order_size_percentage() -> get_val(order_size_percentage, 0.2).               % Options: 0.01-1.0 (1%-100% of balance per trade)
@@ -34,7 +35,7 @@ bench_end() -> get_val(bench_end, last).                          % Options: las
 %% Sensor Profiles
 %% ===================================================================
 %% --- Standard Forex Trader ---
-pli_resolutions() -> get_val(pli_resolutions, [30, 90, 270, 540, 1080]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
+pli_resolutions() -> get_val(pli_resolutions, [90, 270]).                    % Options: [5], [10], [20], [5,10], [10,20], [5,10,20], etc. (creates one sensor per value)
 pci_horizontal_resolutions() -> get_val(pci_horizontal_resolutions, [30]).         % Options: [10], [20], [50], [10,20], [20,50], etc. (creates one sensor per value)
 pci_vertical_resolutions() -> get_val(pci_vertical_resolutions, [20]).           % Options: [10], [15], [20], [10,15], [15,20], etc. (PCI: Cartesian product HRes×VRes)
 
@@ -47,6 +48,7 @@ internal_sensor_dimensions() -> get_val(internal_sensor_dimensions, 3).         
 %% ===================================================================
 %% Evolution Strategy
 %% ===================================================================
+evaluation_timeout_ms() -> get_val(evaluation_timeout_ms, 600000).               % Options: any positive integer in milliseconds (default: 600000 = 10 minutes)
 specie_size_limit() -> get_val(specie_size_limit, 2).                     % Options: 1-100 (max agents per species)
 init_specie_size() -> get_val(init_specie_size, 2).                      % Options: 1-50 (initial agents per species)
 evaluations_limit() -> get_val(evaluations_limit, 100000000000).                    % Options: 10-100000 (max evaluations per run)

@@ -2,10 +2,9 @@
 -module(selection_algorithm).
 -compile(export_all).
 -include("records.hrl").
--define(SURVIVAL_PERCENTAGE,0.5).
 
-competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
-	TotSurvivors = round(length(ProperlySorted_AgentSummaries)*?SURVIVAL_PERCENTAGE),
+competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,Survival_Percentage)->
+	TotSurvivors = round(length(ProperlySorted_AgentSummaries)*Survival_Percentage),
 	Valid_AgentSummaries = lists:sublist(ProperlySorted_AgentSummaries,TotSurvivors),
 	Invalid_AgentSummaries = ProperlySorted_AgentSummaries -- Valid_AgentSummaries,
 	{_,_,Invalid_AgentIds} = lists:unzip3(Invalid_AgentSummaries),
@@ -26,7 +25,7 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 	io:format("Population size normalizer:~p~n",[Normalizer]),
 	NewGenAgent_Ids = gather_survivors(AlotmentsP,Normalizer,PopulationLimit,[]),
 	{NewGenAgent_Ids,TopAgent_Ids}.
-%The competition/3 is part of the selection algorithm dubbed "competition". The function first executes calculate_alotments/4 to calculate the number of offspring alloted for each agent in the Sorted_AgentSummaries list. The function then calculates the Normalizer value, which is used then used to proportionalize the alloted number of offspring to each agent, to ensure that the final specie size is within PopulationLimit. The function then drops into the gather_survivors/3 function which, using the normalized offspring allotment values, creates the actual mutant offspring.
+%The competition/4 is part of the selection algorithm dubbed "competition". The function accepts a Survival_Percentage parameter that determines what fraction of the population survives to the next generation. The function first executes calculate_alotments/4 to calculate the number of offspring alloted for each agent in the Sorted_AgentSummaries list. The function then calculates the Normalizer value, which is used then used to proportionalize the alloted number of offspring to each agent, to ensure that the final specie size is within PopulationLimit. The function then drops into the gather_survivors/3 function which, using the normalized offspring allotment values, creates the actual mutant offspring.
 
 	calculate_alotments([{Fitness,TotNeurons,Agent_Id}|Sorted_AgentSummaries],NeuralEnergyCost,Acc,NewPopAcc)->
 		NeuralAlotment = Fitness/NeuralEnergyCost,
@@ -70,7 +69,7 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
 		Acc.
 %The gather_survivors/3 function accepts the list composed of the alotment tuples and a population normalizer value calculated by the competition/3 function, and from those values calculates the actual number of offspring that each agent should produce, creating those mutant offspring and accumulating the new generation agent ids. FOr each Agent_Id the function first calculates the noramlized offspring alotment value, to ensure that the final nubmer of agents in the specie is within the popualtion limit of that specie. If the offspring alotment value is less than 0, the agent is killed. If the offspring alotment is 1, the parent agent is allowed to survive to the next generation, but is not allowed to create any new offspring. If the offspring alotment is greater than one, then the Normalized_MutantAlotment-1 offspring are created from this fit agent, by calling upon the create_MutantAgentCopy/1 function, which rerns the id of the new mutant offspring. Once all the offspring have been created, the function returns to the caller a list of ids, composed of the surviving parent agent ids, and their offspring.
 
-top3(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit)->
+top3(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,_Survival_Percentage)->
 	TotSurvivors = 3,
 	Valid_AgentSummaries = lists:sublist(ProperlySorted_AgentSummaries,TotSurvivors),
 	Invalid_AgentSummaries = ProperlySorted_AgentSummaries -- Valid_AgentSummaries,

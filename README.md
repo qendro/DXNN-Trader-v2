@@ -48,6 +48,20 @@ exp_runner:start(fresh).        % Uses configs from get_run_configs()
 exp_runner:start(new_evo)      % Uses configs from get_run_configs()
 exp_runner:start({evo, PopId})  % Uses configs from get_run_configs()
 
+%%Continue by experiment id (recommended)
+exp_runner:continue(<<"2026-02-20T22:27:51Z_p08s_run1">>).
+
+%%Start a NEW experiment seeded from an old population (not resume)
+exp_runner:start({evo, <<"2026-02-20T23:05:10Z_p08s_run7">>}).
+
+make:all().
+mnesia:start().
+fx:start().
+polis:start().
+exp_runner:continue(<<"2026-02-20T22:28:05Z_p08s_run4">>).
+
+
+
 benchmarker:start(sliding_window_5).
 
 benchmarker:start(sliding_window_5, []).

@@ -549,7 +549,7 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 		Sorted_AgentSummaries = lists:reverse(lists:sort(construct_AgentSummaries(Agent_Ids,[]))),
 		io:format("Using: Fitness Postprocessor:~p Selection Algorirthm:~p~n",[Fitness_Postprocessor_Name,Selection_Algorithm_Name]),
 		ProperlySorted_AgentSummaries = fitness_postprocessor:Fitness_Postprocessor_Name(Sorted_AgentSummaries),
-		{NewGenAgent_Ids,TopAgent_Ids} = selection_algorithm:Selection_Algorithm_Name(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit),
+		{NewGenAgent_Ids,TopAgent_Ids} = selection_algorithm:Selection_Algorithm_Name(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,config:survival_percentage()),
 		{FList,_TNList,_AgentIds}=lists:unzip3(Sorted_AgentSummaries),
 		[TopFitness|_] = FList,
 		{Factor,Fitness}=S#specie.innovation_factor,

@@ -192,9 +192,10 @@ market_properties(CurrencyPair,Feature,Parameters,StartIndex,EndIndex)->
 			U_A = make_trade(S,A,TradeSignal),
 			Total_Profit = A#account.balance + A#account.unrealized_PL,
 %			io:format("TP:~p~n",[Total_Profit]),
-			case (U_A#account.balance + U_A#account.unrealized_PL) =< 100 of
+			ExtinctionThreshold = config:account_extinction_threshold(),
+			case (U_A#account.balance + U_A#account.unrealized_PL) =< ExtinctionThreshold of
 				true ->
-					io:format("Lost all money~n"),
+					io:format("Lost all money (threshold: ~p)~n", [ExtinctionThreshold]),
 					(U_A#account.balance + U_A#account.unrealized_PL);
 %					io:format("******************************FINISHED PROCESSING TRADE SIGNAL******************************~n");
 				false ->
@@ -327,10 +328,11 @@ sim(ExoSelf,S,A)->
 						false ->
 							ok
 					end,
-					case (U_A#account.balance + U_A#account.unrealized_PL) =< 100 of
+					ExtinctionThreshold = config:account_extinction_threshold(),
+					case (U_A#account.balance + U_A#account.unrealized_PL) =< ExtinctionThreshold of
 						true ->
 							From ! {self(),0,1},
-							io:format("Lost all money~n"),
+							io:format("Lost all money (threshold: ~p)~n", [ExtinctionThreshold]),
 							put(prev_PC,0),
 							fx:sim(ExoSelf,#state{},create_account());
 						false ->

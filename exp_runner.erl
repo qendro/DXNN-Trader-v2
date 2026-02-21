@@ -483,18 +483,18 @@ get_run_configs() ->
         
         %% Phase 0: Learn to Trade (Runs 6-10) - Focus: Close trades without blowing up
         %% Runs 1-3: Use size_first postprocessor to encourage network growth
-        {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, size_first}, {tuning_duration, {const,10}}, {gt_start, 2000}, {gt_end, 1500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 1.0}]},
-        {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.8}]},
-        {3, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.7}]},
-        {4, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.6}]},
-        {5, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.5}]},
+        {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, size_first}, {tuning_duration, {const,3}}, {gt_start, 2000}, {gt_end, 1500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 5}, {survival_percentage, 1.0}]},
+        {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,3}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.8}]},
+        {3, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,3}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.7}]},
+        {4, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,2}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.6}]},
+        {5, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,2}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.5}]},
         
         %% Phase 1: Make Positive Trades (Runs 11-15) - Focus: Profit optimization with drawdown control
-        {6, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.30}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
-        {7, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.35}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
-        {8, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.60}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
-        {9, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.45}, {fitness_phase1_tradescore_weight, 0.55}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
-        {10, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.50}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 50}]},
+        {6, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.30}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {7, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.35}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {8, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.60}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {9, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.45}, {fitness_phase1_tradescore_weight, 0.55}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {10, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.50}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
         
         %% Phase 2: Win Rate Focus (Runs 16-25) - Focus: More positive than negative trades
         {11, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 0}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
@@ -678,33 +678,119 @@ loop(E, P_Id) ->
 
 
 %% Continue an existing experiment (similar to benchmarker:continue)
-continue(ExperimentId) ->
-    case genotype:dirty_read({experiment, ExperimentId}) of
+continue(ExperimentIdOrPopulationId) ->
+    case resolve_experiment_for_continue(ExperimentIdOrPopulationId) of
         undefined ->
-            qlog:benchmarker(io_lib:format("Can't continue experiment ~p, it's not present in the database.", [ExperimentId])),
-            io:format("Can't continue experiment ~p, it's not present in the database.~n", [ExperimentId]);
+            qlog:benchmarker(
+                ExperimentIdOrPopulationId,
+                io_lib:format(
+                    "Can't continue experiment for id ~p, it's not present in the database.",
+                    [ExperimentIdOrPopulationId]
+                )
+            ),
+            io:format(
+                "Can't continue experiment for id ~p, it's not present in the database.~n",
+                [ExperimentIdOrPopulationId]
+            );
         E ->
-            case E#experiment.progress_flag of
-                completed ->
-                    qlog:benchmarker(io_lib:format("Experiment ~p already completed.", [ExperimentId])),
-                    io:format("Experiment ~p already completed: ~p~n", [ExperimentId, E#experiment.trace_acc]);
-                in_progress ->
-                    config:init(),
-                    CurrentRunIndex = E#experiment.run_index,
-                    apply_run_configs(ExperimentId, CurrentRunIndex, E#experiment.run_configs),
-                    Interruptions = E#experiment.interruptions,
-                    U_Interruptions = [erlang:timestamp() | Interruptions],
+            continue_experiment(E)
+    end.
+
+continue_experiment(E) ->
+    ExperimentId = E#experiment.id,
+    case E#experiment.progress_flag of
+        completed ->
+            qlog:benchmarker(ExperimentId, io_lib:format("Experiment ~p already completed.", [ExperimentId])),
+            io:format("Experiment ~p already completed: ~p~n", [ExperimentId, E#experiment.trace_acc]);
+        in_progress ->
+            config:init(),
+            CurrentRunIndex = E#experiment.run_index,
+            apply_run_configs(ExperimentId, CurrentRunIndex, E#experiment.run_configs),
+            Interruptions = E#experiment.interruptions,
+            U_Interruptions = [erlang:timestamp() | Interruptions],
+            CurrentPopId = (E#experiment.pm_parameters)#pmp.population_id,
+            case genotype:dirty_read({population, CurrentPopId}) of
+                undefined ->
+                    qlog:benchmarker(
+                        ExperimentId,
+                        io_lib:format(
+                            "Continue failed: population ~p not found for experiment ~p.",
+                            [CurrentPopId, ExperimentId]
+                        )
+                    ),
+                    io:format(
+                        "Continue failed: population ~p not found for experiment ~p.~n",
+                        [CurrentPopId, ExperimentId]
+                    );
+                _Pop ->
                     U_E = E#experiment{
                         interruptions = U_Interruptions
                     },
                     genotype:write(U_E),
-                    
-                    % Determine mode from experiment state
-                    % For now, assume new_evo mode (can be enhanced later)
-                    Mode = new_evo,
-                    SourcePopId = undefined,  % Will be determined from previous run if needed
-                    
-                    register(exp_runner, spawn(exp_runner, prep, [U_E, Mode, SourcePopId]))
+                    qlog:benchmarker(
+                        ExperimentId,
+                        io_lib:format(
+                            "Resuming experiment ~p run ~p from population ~p",
+                            [ExperimentId, CurrentRunIndex, CurrentPopId]
+                        )
+                    ),
+                    spawn(exp_runner, resume, [U_E, CurrentPopId])
             end
     end.
 
+resolve_experiment_for_continue(ExperimentIdOrPopulationId) ->
+    case genotype:dirty_read({experiment, ExperimentIdOrPopulationId}) of
+        undefined ->
+            find_experiment_by_population_id(ExperimentIdOrPopulationId);
+        E ->
+            E
+    end.
+
+find_experiment_by_population_id(PopulationId) ->
+    ExperimentIds = mnesia:dirty_all_keys(experiment),
+    find_experiment_by_population_id(ExperimentIds, PopulationId).
+
+find_experiment_by_population_id([ExperimentId | Rest], PopulationId) ->
+    case genotype:dirty_read({experiment, ExperimentId}) of
+        undefined ->
+            find_experiment_by_population_id(Rest, PopulationId);
+        E ->
+            PMP = E#experiment.pm_parameters,
+            case PMP =/= undefined andalso PMP#pmp.population_id =:= PopulationId of
+                true ->
+                    E;
+                false ->
+                    find_experiment_by_population_id(Rest, PopulationId)
+            end
+    end;
+find_experiment_by_population_id([], _PopulationId) ->
+    undefined.
+
+resume(E, Population_Id) ->
+    % Apply the current run config before rebuilding PM parameters.
+    apply_run_configs(E#experiment.id, E#experiment.run_index, E#experiment.run_configs),
+    Old_PMP = E#experiment.pm_parameters,
+    PMP = Old_PMP#pmp{
+        population_id = Population_Id,
+        survival_percentage = config:survival_percentage(),
+        specie_size_limit = config:specie_size_limit(),
+        init_specie_size = config:init_specie_size(),
+        generation_limit = config:generation_limit(),
+        evaluations_limit = config:evaluations_limit(),
+        benchmarker_pid = self()
+    },
+    U_E = E#experiment{pm_parameters = PMP},
+    genotype:write(U_E),
+
+    ConfigStr = format_config_summary(U_E#experiment.run_index, U_E#experiment.run_configs),
+    qlog:exp_runner(run_start, {U_E#experiment.id, U_E#experiment.run_index, Population_Id, resume, ConfigStr}),
+    qlog:benchmarker(
+        Population_Id,
+        io_lib:format(
+            "Run Resume: Experiment id: ~p Run Index: ~p Population: ~p",
+            [U_E#experiment.id, U_E#experiment.run_index, Population_Id]
+        )
+    ),
+
+    population_monitor:continue(Population_Id),
+    loop(U_E, Population_Id).
