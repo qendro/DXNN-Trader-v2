@@ -6,7 +6,6 @@ start() ->
     start(sliding_window_5).
 
 start(BenchmarkId) ->
-    fx:clear_log(),
     qlog:benchmarker(BenchmarkId, "Launcher starting"),
     
     % Compile all modules
@@ -47,7 +46,7 @@ start(BenchmarkId) ->
     
     ensure_fx_complete(BenchmarkId).
 
-%% Wait until FX signals readiness, then kick off the benchmarker
+%% Wait until FX signals readiness, then kick off exp_runner
 ensure_fx_complete(BenchmarkId) ->
     case whereis(fx) of
         undefined ->
@@ -57,7 +56,7 @@ ensure_fx_complete(BenchmarkId) ->
             wait_fx_ready(BenchmarkId);
         _Pid ->
             qlog:benchmarker(BenchmarkId, "FX process already running"),
-            benchmarker:start(BenchmarkId)
+            exp_runner:start(new_evo)
     end.
 
 %% Blocks until we see an fx_updated message
@@ -65,7 +64,7 @@ wait_fx_ready(BenchmarkId) ->
     receive
         fx_updated ->
             qlog:benchmarker(BenchmarkId, "FX ready"),
-            benchmarker:start(BenchmarkId)
+            exp_runner:start(new_evo)
     end.
 
 %% Create Mnesia schema if it doesn't exist
