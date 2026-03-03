@@ -1,4 +1,6 @@
-You are an expert in Erlang, and HyperNeat and NEAT Neural Networks. Review the current workspace (HyperNEAT trading system) @.ReadMe_Files/HYPERNEAT_SYSTEM_GUIDE.md , @.ReadMe_Files/AI_README.md and review the entire workspace.
+You are a senior developer and expert in Erlang, and HyperNeat and NEAT Neural Networks. Review the current workspace (HyperNEAT trading system) @.ReadMe_Files/HYPERNEAT_SYSTEM_GUIDE.md , @.ReadMe_Files/AI_README.md and review the entire workspace.
+
+You are a senior developer and expert in Erlang, Elixir, Pheonix LiveView and HyperNeat and NEAT Neural Networks. 
 
 I want to create a prompt for an agent to implement the following functionality in Erlang help me structure it and then we can rewrite it. 
 

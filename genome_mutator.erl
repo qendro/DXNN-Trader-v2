@@ -102,14 +102,12 @@ mutate(Agent_Id)->
 %apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented. Connectivity is validated and fixed only after all mutations are complete (when MutationIndex reaches 0).
 
 		apply_NeuralMutator(Agent_Id)->
-			F = fun()->
-				A = genotype:read({agent,Agent_Id}),
-				MutatorsP = A#agent.mutation_operators,
-				Mutator = select_random_MO(MutatorsP),
-				genome_mutator:Mutator(Agent_Id)
-			end,
-			mnesia:transaction(F).
-%apply_NeuralMutator/1 applies the available mutation operators to the NN. Because the genotype is stored in mnesia, if the mutation operator function exits with an error, the database made changes are retracted, and a new mutation operator can then be applied to the agent, as if the previous unsuccessful mutation operator was never applied. The mutation operator to be applied to the agent is chosen randomly from the agent's mutation_operators list.
+			A = genotype:read({agent,Agent_Id}),
+			MutatorsP = A#agent.mutation_operators,
+			Mutator = select_random_MO(MutatorsP),
+			genome_mutator:Mutator(Agent_Id),
+			{atomic,ok}.
+%apply_NeuralMutator/1 applies the available mutation operators to the NN. This function is always called from within mutate/1 which already has a transaction, so no additional transaction wrapper is needed. Returns {atomic,ok} for compatibility with the caller's error handling.
 			
 			select_random_MO(MutatorsP)->
 				TotSize = lists:sum([SliceSize || {_MO,SliceSize} <- MutatorsP]),

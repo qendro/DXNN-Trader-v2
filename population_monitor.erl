@@ -147,7 +147,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, CurrentGen, S#state.tot_agents])),
 			
 			% Now mutate to create next generation
-			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm),
+			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm,S#state.survival_percentage),
 			U_PopGen = S#state.pop_gen+1,
 			
 			% Log generation_start for the NEW generation
@@ -527,19 +527,17 @@ continue(Population_Id)->
 	population_monitor:start(S).
 %The function continue/0 and continue/1 are used to summon an already existing population with either the default population Id, or the specified Population_Id.
 
-mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorithm)->
-	qlog:benchmarker(Population_Id,io_lib:format("MUTATING_POPULATION | population_id=~p | keep_total=~p | fitness_postprocessor=~p | selection_algorithm=~p",[Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorithm])),
+mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorithm,Survival_Percentage)->
+	qlog:benchmarker(Population_Id,io_lib:format("MUTATING_POPULATION | population_id=~p | keep_total=~p | fitness_postprocessor=~p | selection_algorithm=~p | survival_percentage=~p",[Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorithm,Survival_Percentage])),
 	NeuralEnergyCost = calculate_EnergyCost(Population_Id),
-	F = fun()->
-		P = genotype:read({population,Population_Id}),
-		Specie_Ids = P#population.specie_ids,
-		[mutate_Specie(Specie_Id,KeepTot,NeuralEnergyCost,Fitness_Postprocessor,Selection_Algorithm) || Specie_Id <- Specie_Ids]
-	end,
-	{atomic,_} = mnesia:transaction(F).
+	P = genotype:dirty_read({population,Population_Id}),
+	Specie_Ids = P#population.specie_ids,
+	[mutate_Specie(Specie_Id,KeepTot,NeuralEnergyCost,Fitness_Postprocessor,Selection_Algorithm,Survival_Percentage) || Specie_Id <- Specie_Ids],
+	ok.
 %The function mutate_population/3 mutates the agents within every specie in its specie_ids list, maintianing each specie within the size of KeepTot. The function first calculates the average cost of each neuron, and then calls each specie seperately with the Fitness_Postprocessor and Selection_Algorithm parameters, which are used to mutate the species.
 
-	mutate_Specie(Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name)->
-		qlog:benchmarker(Specie_Id,io_lib:format("MUTATING_SPECIE | specie_id=~p | population_limit=~p | neural_energy_cost=~p | fitness_postprocessor=~p | selection_algorithm=~p",[Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name])),
+	mutate_Specie(Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name,Survival_Percentage)->
+		qlog:benchmarker(Specie_Id,io_lib:format("MUTATING_SPECIE | specie_id=~p | population_limit=~p | neural_energy_cost=~p | fitness_postprocessor=~p | selection_algorithm=~p | survival_percentage=~p",[Specie_Id,PopulationLimit,NeuralEnergyCost,Fitness_Postprocessor_Name,Selection_Algorithm_Name,Survival_Percentage])),
 		S = genotype:dirty_read({specie,Specie_Id}),
 		{AvgFitness,Std,MaxFitness,MinFitness} = calculate_SpecieFitness({specie,S}),
 		qlog:benchmarker(Specie_Id,io_lib:format("Specie=~p | Agents: ~p | Population_limit=~p | Avg Fitness=~p Max=~p Min=~p | Neural Energy Cost=~p",[Specie_Id,length(S#specie.agent_ids),PopulationLimit,AvgFitness,MaxFitness,MinFitness,NeuralEnergyCost])),
@@ -549,7 +547,7 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 		Sorted_AgentSummaries = lists:reverse(lists:sort(construct_AgentSummaries(Agent_Ids,[]))),
 		io:format("Using: Fitness Postprocessor:~p Selection Algorirthm:~p~n",[Fitness_Postprocessor_Name,Selection_Algorithm_Name]),
 		ProperlySorted_AgentSummaries = fitness_postprocessor:Fitness_Postprocessor_Name(Sorted_AgentSummaries),
-		{NewGenAgent_Ids,TopAgent_Ids} = selection_algorithm:Selection_Algorithm_Name(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,config:survival_percentage()),
+		{NewGenAgent_Ids,TopAgent_Ids} = selection_algorithm:Selection_Algorithm_Name(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,Survival_Percentage),
 		{FList,_TNList,_AgentIds}=lists:unzip3(Sorted_AgentSummaries),
 		[TopFitness|_] = FList,
 		{Factor,Fitness}=S#specie.innovation_factor,
@@ -559,11 +557,19 @@ mutate_population(Population_Id,KeepTot,Fitness_Postprocessor,Selection_Algorith
 			false ->
 				{Factor-1,Fitness}
 		end,
-		genotype:write(S#specie{
-			agent_ids = NewGenAgent_Ids,
-			champion_ids = TopAgent_Ids,
-			fitness = {AvgFitness,Std,MaxFitness,MinFitness},
-			innovation_factor = U_InnovationFactor}).
+		F = fun()->
+			case mnesia:read({specie,Specie_Id}) of
+				[US] ->
+					mnesia:write(US#specie{
+						agent_ids = NewGenAgent_Ids,
+						champion_ids = TopAgent_Ids,
+						fitness = {AvgFitness,Std,MaxFitness,MinFitness},
+						innovation_factor = U_InnovationFactor});
+				[] ->
+					mnesia:abort({specie_not_found,Specie_Id})
+			end
+		end,
+		{atomic,_} = mnesia:transaction(F).
 		% Log genotypes for all new generation agents
 		%Population_Id = S#specie.population_id,
 		%Run_Id = qlog:get_run_id_from_population_id(Population_Id),

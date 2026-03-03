@@ -26,47 +26,29 @@ get_init_constraints() ->
 
 %% Generate population ID for fresh run (new lineage)
 generate_population_id(RunIndex) ->
-    io:format("exp_runner: generate_population_id/1 called, RunIndex=~p~n", [RunIndex]),
-    io:format("exp_runner: generating lineage ID...~n"),
     LineageId = generate_lineage_id(),
-    io:format("exp_runner: lineage ID generated: ~p~n", [LineageId]),
     generate_population_id_with_lineage(RunIndex, LineageId).
 
 %% Generate population ID for cloned run (reuse lineage from source)
 %% Only match if SourcePopId looks like a full population ID (longer than 4 chars, has underscores)
 generate_population_id(RunIndex, SourcePopId) when is_binary(SourcePopId), byte_size(SourcePopId) > 20 ->
-    io:format("exp_runner: generate_population_id/2 (binary source) called, RunIndex=~p, SourcePopId=~p~n", [RunIndex, SourcePopId]),
     LineageId = extract_lineage_id(SourcePopId),
-    io:format("exp_runner: extracted LineageId=~p~n", [LineageId]),
     generate_population_id_with_lineage(RunIndex, LineageId).
 
 %% Internal helper with lineage ID (4-char binary)
 generate_population_id_with_lineage(RunIndex, LineageId) when is_binary(LineageId), byte_size(LineageId) =:= 4 ->
-    io:format("exp_runner: generate_population_id_with_lineage called, RunIndex=~p, LineageId=~p~n", 
-              [RunIndex, LineageId]),
     % Format: <<"<ISO8601>_<LineageId>_run<RunIndex>">>
     % Example: <<"2025-02-11T15-30-45Z_a3f9_run1">>
-    io:format("exp_runner: formatting timestamp...~n"),
     Timestamp = format_iso8601(erlang:timestamp()),
-    io:format("exp_runner: Timestamp=~p~n", [Timestamp]),
     RunIndexStr = integer_to_list(RunIndex),
-    io:format("exp_runner: creating binary...~n"),
-    Result = <<Timestamp/binary, "_", LineageId/binary, "_run", (list_to_binary(RunIndexStr))/binary>>,
-    io:format("exp_runner: binary created: ~p~n", [Result]),
-    Result.
+    <<Timestamp/binary, "_", LineageId/binary, "_run", (list_to_binary(RunIndexStr))/binary>>.
 
 %% Generate 4 random alphanumeric characters
 generate_lineage_id() ->
-    io:format("exp_runner: generate_lineage_id called~n"),
     Chars = "abcdefghijklmnopqrstuvwxyz0123456789",
-    io:format("exp_runner: Chars defined, length=~p~n", [length(Chars)]),
-    io:format("exp_runner: generating random chars...~n"),
     RandomChars = [lists:nth(random:uniform(length(Chars)), Chars) 
                    || _ <- lists:seq(1, 4)],
-    io:format("exp_runner: RandomChars=~p~n", [RandomChars]),
-    Result = list_to_binary(RandomChars),
-    io:format("exp_runner: lineage ID result=~p~n", [Result]),
-    Result.
+    list_to_binary(RandomChars).
 
 %% Extract lineage ID from source population ID
 %% Format: <<"<ISO8601>_<LineageId>_run<RunIndex>">>
@@ -348,34 +330,24 @@ start({evo, SourcePopId}) ->
 start_internal(Mode, RunConfigs) ->
     % 1. Initialize config
     config:init(),
-    io:format("exp_runner: config initialized~n"),
     
     % 2. Generate population ID first (auto-generated, includes lineage and run_index)
     % The first population ID becomes the experiment ID
-    io:format("exp_runner: about to generate population ID, Mode=~p~n", [Mode]),
     {PopId, SourcePopId} = case Mode of
         fresh ->
-            io:format("exp_runner: calling generate_population_id for fresh mode~n"),
             PopId1 = generate_population_id(1),
-            io:format("exp_runner: generated PopId: ~p~n", [PopId1]),
             {PopId1, undefined};  % New lineage ID
         new_evo ->
-            io:format("exp_runner: calling generate_population_id for new_evo mode~n"),
             PopId2 = generate_population_id(1),
-            io:format("exp_runner: generated PopId: ~p~n", [PopId2]),
             {PopId2, undefined};  % Will be updated for subsequent runs
         {evo, SrcPopId} ->
-            io:format("exp_runner: calling generate_population_id for evo mode, SourcePopId=~p~n", [SrcPopId]),
             PopId3 = generate_population_id(1, SrcPopId),
-            io:format("exp_runner: generated PopId: ~p~n", [PopId3]),
             {PopId3, SrcPopId}  % Reuse lineage from source
     end,
     ExperimentId = PopId,  % Use first population ID as experiment ID
-    io:format("exp_runner: population ID generated: ~p (also used as experiment ID)~n", [PopId]),
     
     % 3. Apply run configs
     apply_run_configs(ExperimentId, 1, RunConfigs),
-    io:format("exp_runner: run configs applied~n"),
     
     % 4. Create PMP (Population Monitor Parameters) - like benchmarker
     PMP = #pmp{
@@ -390,19 +362,15 @@ start_internal(Mode, RunConfigs) ->
         fitness_goal = inf,
         benchmarker_pid = self()  % Will be updated in prep
     },
-    io:format("exp_runner: PMP created~n"),
     
     % 5. Calculate total runs
     TotRuns = case RunConfigs of
         [] -> config:tot_runs();
         _ -> lists:max([RunIndex || {RunIndex, _} <- RunConfigs])
     end,
-    io:format("exp_runner: total runs calculated: ~p~n", [TotRuns]),
     
     % 6. Create experiment record
-    io:format("exp_runner: getting init constraints...~n"),
     InitConstraints = get_init_constraints(),
-    io:format("exp_runner: init constraints obtained~n"),
     E = #experiment{
         id = ExperimentId,
         backup_flag = true,
@@ -415,21 +383,16 @@ start_internal(Mode, RunConfigs) ->
         started = {date(), time()},
         interruptions = []
     },
-    io:format("exp_runner: experiment record created~n"),
     
     % 7. Log experiment start
     qlog:exp_runner(experiment_start, {ExperimentId, PopId, TotRuns, length(RunConfigs)}),
-    io:format("exp_runner: experiment start logged~n"),
+    qlog:xLog(qStatus, "exp_runner:start | experiment_id=~p | tot_runs=~p | mode=~p", [ExperimentId, TotRuns, Mode]),
     
     % 8. Store experiment record
-    io:format("exp_runner: writing experiment to database...~n"),
     genotype:write(E),
-    io:format("exp_runner: experiment written to database~n"),
     
     % 9. Spawn prep process (like benchmarker) and return immediately
-    io:format("exp_runner: spawning prep process...~n"),
     ExpRunnerPid = spawn(exp_runner, prep, [E, Mode, SourcePopId]),
-    io:format("exp_runner: prep process spawned: ~p~n", [ExpRunnerPid]),
     {ok, ExpRunnerPid}.
 
 %% Apply run configs for a specific run index
@@ -486,23 +449,23 @@ get_run_configs() ->
         {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, size_first}, {tuning_duration, {const,3}}, {gt_start, 2000}, {gt_end, 1500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 5}, {survival_percentage, 1.0}]},
         {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,3}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.8}]},
         {3, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,3}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.7}]},
-        {4, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,2}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.6}]},
-        {5, [{fitness_function, phase0_close_trades}, {tuning_duration, {const,2}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.5}]},
+        {4, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.30}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {5, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.35}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
         
         %% Phase 1: Make Positive Trades (Runs 11-15) - Focus: Profit optimization with drawdown control
-        {6, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.30}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
-        {7, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.35}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
-        {8, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.60}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
-        {9, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.45}, {fitness_phase1_tradescore_weight, 0.55}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
-        {10, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.50}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {6, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {7, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.45}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {8, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.60}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {9, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.55}, {fitness_phase1_tradescore_weight, 0.55}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {10, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.60}, {fitness_phase1_tradescore_weight, 0.50}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
         
         %% Phase 2: Win Rate Focus (Runs 16-25) - Focus: More positive than negative trades
-        {11, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 0}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
-        {12, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 5}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
-        {13, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 10}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
-        {14, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 15}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 9000}, {gt_end, 5000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
-        {15, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 20}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 10000}, {gt_end, 5500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
-        {16, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 25}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {11, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 0}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 80}, {init_specie_size, 80}, {generation_limit, 75}]},
+        {12, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 5}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 90}, {init_specie_size, 90}, {generation_limit, 75}]},
+        {13, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 10}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 75}]},
+        {14, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 15}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 9000}, {gt_end, 5000}, {specie_size_limit, 120}, {init_specie_size, 120}, {generation_limit, 75}]},
+        {15, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 20}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 10000}, {gt_end, 5500}, {specie_size_limit, 140}, {init_specie_size, 140}, {generation_limit, 75}]},
+        {16, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 25}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 160}, {init_specie_size, 160}, {generation_limit, 75}]},
         {17, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 30}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
         {18, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 35}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
         {19, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 40}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
@@ -596,8 +559,10 @@ prep(E, Mode, SourcePopId) ->
 
 %% Loop function (similar to benchmarker:loop)
 loop(E, P_Id) ->
+    qlog:xLog(qStatus, "exp_runner:loop | waiting | pop_id=~p | run_index=~p/~p", [P_Id, E#experiment.run_index, E#experiment.tot_runs]),
     receive
         {P_Id, completed, Trace} ->
+            qlog:xLog(qStatus, "exp_runner:loop | completed | run=~p", [E#experiment.run_index]),
             U_TraceAcc = [Trace | E#experiment.trace_acc],
             U_RunIndex = E#experiment.run_index + 1,
             
@@ -605,9 +570,11 @@ loop(E, P_Id) ->
             qlog:exp_runner(run_end, {E#experiment.id, E#experiment.run_index, P_Id, Trace}),
             qlog:benchmarker(P_Id,io_lib:format("Run End: Experiment id: ~p Run Index: ~p/~p", [E#experiment.id, E#experiment.run_index, E#experiment.tot_runs])),
             
+            qlog:xLog(qStatus, "exp_runner:loop | next_run=~p | tot_runs=~p", [U_RunIndex, E#experiment.tot_runs]),
             case U_RunIndex > E#experiment.tot_runs of
                 true ->
                     % All runs completed
+                    qlog:xLog(qStatus, "exp_runner:loop | all_completed | runs=~p", [U_RunIndex - 1]),
                     config:clear(),
                     U_E = E#experiment{
                         trace_acc = U_TraceAcc,
@@ -621,10 +588,12 @@ loop(E, P_Id) ->
                     io:format("Experiment ~p completed with ~p runs~n", [E#experiment.id, U_RunIndex - 1]);
                 false ->
                     % Continue to next run
+                    qlog:xLog(qStatus, "exp_runner:loop | continuing | next_run=~p", [U_RunIndex]),
                     apply_run_configs(E#experiment.id, U_RunIndex, E#experiment.run_configs),
                     
                     % Generate new population ID for next run (reuse lineage from current)
                     NextPopId = generate_population_id(U_RunIndex, P_Id),
+                    qlog:xLog(qStatus, "exp_runner:loop | generated_next_pop | next_pop_id=~p | run=~p", [NextPopId, U_RunIndex]),
                     
                     Old_PMP = E#experiment.pm_parameters,
                     U_PMP = Old_PMP#pmp{
@@ -642,6 +611,7 @@ loop(E, P_Id) ->
                         pm_parameters = U_PMP
                     },
                     genotype:write(U_E),
+                    qlog:xLog(qStatus, "exp_runner:loop | updated_experiment | run_index=~p", [U_RunIndex]),
                     
                     % Log next run start
                     ConfigStr = format_config_summary(U_RunIndex, E#experiment.run_configs),
@@ -649,28 +619,33 @@ loop(E, P_Id) ->
                     qlog:benchmarker(P_Id, io_lib:format("Run Start: Experiment id: ~p Run Index: ~p, NextPopId: ~p", [E#experiment.id, U_RunIndex, NextPopId])),
                     
                     % Clone population for next run (new_evo mode clones from previous run, preserves artifacts)
+                    qlog:xLog(qStatus, "exp_runner:loop | cloning_population | from=~p | to=~p", [P_Id, NextPopId]),
                     case clone_population_for_next_run(P_Id, NextPopId) of
                         {atomic, _} ->
-                            io:format("Successfully cloned population from ~p to ~p~n", [P_Id, NextPopId]),
+                            qlog:xLog(qStatus, "exp_runner:loop | clone_success | next_pop_id=~p", [NextPopId]),
                             qlog:benchmarker(P_Id, io_lib:format("Successfully cloned population from ~p to ~p", [P_Id, NextPopId])),
                             Constraints = U_E#experiment.init_constraints,
                             % Population already exists, just start monitor
                             S = population_monitor:prep_PopState(U_PMP, Constraints),
+                            qlog:xLog(qStatus, "exp_runner:loop | starting_population_monitor | next_pop_id=~p", [NextPopId]),
                             population_monitor:start(S),
+                            qlog:xLog(qStatus, "exp_runner:loop | recursive_loop_call | next_pop_id=~p", [NextPopId]),
                             loop(U_E, NextPopId);
                         Error ->
-                            io:format("Error cloning population from ~p to ~p: ~p~n", [P_Id, NextPopId, Error]),
+                            qlog:xLog(qStatus, "exp_runner:loop | clone_failed | error=~p", [Error]),
                             qlog:exp_runner(run_failed, {E#experiment.id, U_RunIndex, {clone_failed, Error}}),
                             qlog:benchmarker(P_Id, io_lib:format("Error cloning population from ~p to ~p: ~p", [P_Id, NextPopId, Error])),
                             Error
                     end
             end;
         {P_Id, failed, Reason} ->
+            qlog:xLog(qStatus, "exp_runner:loop | run_failed | run=~p | reason=~p", [E#experiment.run_index, Reason]),
             qlog:exp_runner(run_failed, {E#experiment.id, E#experiment.run_index, Reason}),
             io:format("Run ~p failed for experiment ~p: ~p~n", [E#experiment.run_index, E#experiment.id, Reason]),
             qlog:benchmarker(P_Id, io_lib:format("Run ~p failed for experiment ~p: ~p", [E#experiment.run_index, E#experiment.id, Reason])),
             ok;
         terminate ->
+            qlog:xLog(qStatus, "exp_runner:loop | terminated | experiment=~p", [E#experiment.id]),
             qlog:exp_runner(experiment_terminate, {E#experiment.id, P_Id}),
             qlog:benchmarker(P_Id, io_lib:format("Experiment ~p terminated by request", [E#experiment.id])),
             ok
@@ -791,6 +766,7 @@ resume(E, Population_Id) ->
             [U_E#experiment.id, U_E#experiment.run_index, Population_Id]
         )
     ),
-
+    
+    qlog:xLog(qStatus, "exp_runner:resume | pop_id=~p | run_index=~p/~p", [Population_Id, U_E#experiment.run_index, U_E#experiment.tot_runs]),
     population_monitor:continue(Population_Id),
     loop(U_E, Population_Id).
