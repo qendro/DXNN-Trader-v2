@@ -27,6 +27,7 @@ DXNN-Trader-v2 is a sophisticated distributed neural network trading platform wr
 - **Benchmarking**: `benchmarker.erl` - Performance testing and reporting
 - **Fitness Processing**: `fitness_postprocessor.erl` - Agent evaluation and ranking
 - **Utilities**: `genotype_utils.erl` - Agent inspection and statistics
+- **Checkpointing**: `exp_runner.erl` - Automatic state persistence for AWS spot instances
 
 ## 🚀 Quick Start Guide
 
@@ -127,6 +128,11 @@ live_trading_main:start().
 - `live_position_size/0`, `live_max_daily_loss/0`
 - `live_currency_pairs/0`, `live_max_drawdown_limit/0`
 
+**Checkpoint System:**
+- `checkpoint_enabled/0` - Controls checkpoint creation (auto/true/false)
+- Auto-detects AWS environment via `/var/lib/dxnn/checkpoints/` and `S3_BUCKET` env var
+- Saves Mnesia database, logs, and config between runs
+
 **Validation Functions:**
 - `validate_ib_connection_config/0`, `validate_risk_parameters/0`
 - `validate_live_trading_config/0`
@@ -167,6 +173,17 @@ live_trading_main:start().
 4. live_scape:start_link/0 → Create live market environment
 5. live_trader:start_link/0 → Spawn trading agent
 6. Real-time data flow: IB → live_scape → sensor → neuron → actuator → IB
+```
+
+### 4. Checkpoint System (AWS Spot Instances)
+```
+1. exp_runner:loop/2 → Run completes
+2. exp_runner:checkpoint/0 → Check if checkpointing enabled
+3. exp_runner:detect_aws_environment/0 → Auto-detect AWS (dir + S3_BUCKET)
+4. exp_runner:checkpoint_mnesia/1 → Backup Mnesia to /var/lib/dxnn/checkpoints/
+5. exp_runner:checkpoint_logs/1 → Copy logs to checkpoint directory
+6. exp_runner:checkpoint_files/1 → Copy config and create metadata
+7. Continue to next run (checkpoints created between runs)
 ```
 
 ## 📊 Data Flow Patterns

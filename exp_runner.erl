@@ -570,11 +570,18 @@ loop(E, P_Id) ->
             qlog:exp_runner(run_end, {E#experiment.id, E#experiment.run_index, P_Id, Trace}),
             qlog:benchmarker(P_Id,io_lib:format("Run End: Experiment id: ~p Run Index: ~p/~p", [E#experiment.id, E#experiment.run_index, E#experiment.tot_runs])),
             
+            % Checkpoint between runs
+            checkpoint(),
+            
             qlog:xLog(qStatus, "exp_runner:loop | next_run=~p | tot_runs=~p", [U_RunIndex, E#experiment.tot_runs]),
             case U_RunIndex > E#experiment.tot_runs of
                 true ->
                     % All runs completed
                     qlog:xLog(qStatus, "exp_runner:loop | all_completed | runs=~p", [U_RunIndex - 1]),
+                    
+                    % Final checkpoint
+                    checkpoint(),
+                    
                     config:clear(),
                     U_E = E#experiment{
                         trace_acc = U_TraceAcc,
@@ -585,7 +592,10 @@ loop(E, P_Id) ->
                     genotype:write(U_E),
                     qlog:exp_runner(experiment_complete, {E#experiment.id, U_RunIndex - 1}),
                     qlog:benchmarker(P_Id, io_lib:format("Experiment ~p completed with ~p runs", [E#experiment.id, U_RunIndex - 1])),
-                    io:format("Experiment ~p completed with ~p runs~n", [E#experiment.id, U_RunIndex - 1]);
+                    io:format("Experiment ~p completed with ~p runs~n", [E#experiment.id, U_RunIndex - 1]),
+                    
+                    % Checkpoint and exit if running in AWS (triggers S3 upload and finalization)
+                    checkpoint_and_exit();
                 false ->
                     % Continue to next run
                     qlog:xLog(qStatus, "exp_runner:loop | continuing | next_run=~p", [U_RunIndex]),
@@ -770,3 +780,133 @@ resume(E, Population_Id) ->
     qlog:xLog(qStatus, "exp_runner:resume | pop_id=~p | run_index=~p/~p", [Population_Id, U_E#experiment.run_index, U_E#experiment.tot_runs]),
     population_monitor:continue(Population_Id),
     loop(U_E, Population_Id).
+
+%% ============================================================================
+%% CHECKPOINT SYSTEM
+%% ============================================================================
+
+%% Checkpoint configuration
+should_checkpoint() ->
+    case config:checkpoint_enabled() of
+        true -> true;
+        false -> false;
+        auto -> detect_aws_environment()
+    end.
+
+detect_aws_environment() ->
+    filelib:is_dir("/var/lib/dxnn/checkpoints") andalso 
+    os:getenv("S3_BUCKET") =/= false.
+
+%% Create checkpoint
+checkpoint() ->
+    case should_checkpoint() of
+        true -> do_checkpoint();
+        false -> ok
+    end.
+
+do_checkpoint() ->
+    % Pause population monitor
+    catch gen_server:call(population_monitor, pause, 500),
+    
+    % Generate checkpoint timestamp
+    Timestamp = integer_to_list(erlang:system_time(second)),
+    CheckpointDir = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp,
+    
+    % Create checkpoints
+    checkpoint_mnesia(Timestamp),
+    checkpoint_logs(CheckpointDir),
+    checkpoint_files(CheckpointDir),
+    
+    ok.
+
+%% Checkpoint Mnesia database
+checkpoint_mnesia(Timestamp) ->
+    catch mnesia:sync_log(),
+    catch filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
+    
+    Backup = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".dmp",
+    
+    case mnesia:backup(Backup) of
+        ok -> 
+            qlog:exp_runner(checkpoint_mnesia_success, {Backup}),
+            ok;
+        {error, Reason} ->
+            error_logger:error_msg("Mnesia checkpoint failed: ~p~n", [Reason]),
+            {error, Reason}
+    end.
+
+%% Checkpoint log files
+checkpoint_logs(CheckpointDir) ->
+    catch filelib:ensure_dir(CheckpointDir ++ "/"),
+    
+    LogFiles = [
+        {"logs/dxnn_run.log", "dxnn_run.log"},
+        {"logs/qlog.log", "qlog.log"}
+    ],
+    
+    lists:foreach(fun({SourcePath, DestName}) ->
+        case file:read_file_info(SourcePath) of
+            {ok, _} ->
+                DestFile = CheckpointDir ++ "/" ++ DestName,
+                case file:copy(SourcePath, DestFile) of
+                    {ok, _} -> ok;
+                    {error, Reason} ->
+                        error_logger:warning_msg("Failed to copy ~p: ~p~n", 
+                                                [SourcePath, Reason])
+                end;
+            _ -> ok
+        end
+    end, LogFiles).
+
+%% Checkpoint additional files (config, metadata, etc.)
+checkpoint_files(CheckpointDir) ->
+    catch filelib:ensure_dir(CheckpointDir ++ "/"),
+    
+    Files = [
+        {"config.erl", "config.erl"}
+    ],
+    
+    lists:foreach(fun({SourcePath, DestName}) ->
+        case file:read_file_info(SourcePath) of
+            {ok, _} ->
+                DestFile = CheckpointDir ++ "/" ++ DestName,
+                case file:copy(SourcePath, DestFile) of
+                    {ok, _} -> ok;
+                    {error, Reason} ->
+                        error_logger:warning_msg("Failed to copy ~p: ~p~n", 
+                                                [SourcePath, Reason])
+                end;
+            _ -> ok
+        end
+    end, Files),
+    
+    % Create checkpoint metadata
+    create_checkpoint_metadata(CheckpointDir).
+
+%% Create checkpoint metadata file
+create_checkpoint_metadata(CheckpointDir) ->
+    MetadataFile = CheckpointDir ++ "/checkpoint_metadata.json",
+    Metadata = io_lib:format(
+        "{\"timestamp\": ~p, \"node\": \"~s\", \"type\": \"checkpoint\"}~n",
+        [erlang:system_time(second), atom_to_list(node())]
+    ),
+    case file:write_file(MetadataFile, Metadata) of
+        ok -> ok;
+        {error, Reason} ->
+            error_logger:warning_msg("Failed to write metadata: ~p~n", [Reason])
+    end.
+
+%% Checkpoint and exit (for experiment completion and spot interruptions)
+%% Only exits if running in AWS environment to trigger S3 upload
+checkpoint_and_exit() ->
+    checkpoint(),
+    
+    case should_checkpoint() of
+        true ->
+            qlog:exp_runner(checkpoint_and_exit, {aws_detected, exiting}),
+            init:stop();
+        false ->
+            qlog:exp_runner(checkpoint_and_exit, {local_env, continuing}),
+            ok
+    end.
+

@@ -173,6 +173,11 @@ fitness_dd_lambda_late() -> get_val(fitness_dd_lambda_late, 4.0).  % Late genera
 %% are already defined in the "Curriculum Risk Penalty Fitness Configuration" section above
 
 %% ===================================================================
+%% Checkpoint Configuration
+%% ===================================================================
+checkpoint_enabled() -> get_val(checkpoint_enabled, auto).              % Options: auto, true, false (auto = detect AWS environment)
+
+%% ===================================================================
 %% Population Configuration
 %% ===================================================================
 population_id() -> get_val(population_id, test).                        % Options: test, or any atom/string identifier for the population
