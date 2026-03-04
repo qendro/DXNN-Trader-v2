@@ -936,34 +936,36 @@ trigger_s3_upload() ->
             qlog:exp_runner(s3_upload_triggered, {incremental_backup}),
             error_logger:info_msg("Triggering S3 upload for incremental backup~n"),
             
-            % Call the finalize script via os:cmd to upload to S3
-            % The script will upload the latest checkpoint without terminating the instance
-            case os:find_executable("finalize_run.sh", "/usr/local/bin") of
-                false ->
-                    error_logger:warning_msg("finalize_run.sh not found, skipping S3 upload~n"),
-                    ok;
-                FinalizerPath ->
-                    % Set environment variables for the finalizer
-                    PopulationId = case os:getenv("POPULATION_ID") of
-                        false -> "unknown";
-                        PopId -> PopId
-                    end,
-                    
-                    % Build command with environment variables
-                    Cmd = io_lib:format(
-                        "COMPLETION_STATUS=incremental EXIT_CODE=0 POPULATION_ID=~s ~s 2>&1 | head -20",
-                        [PopulationId, FinalizerPath]
-                    ),
-                    
-                    % Execute in background to avoid blocking
-                    spawn(fun() ->
-                        Result = os:cmd(lists:flatten(Cmd)),
-                        error_logger:info_msg("S3 upload result: ~s~n", [Result])
-                    end),
-                    
-                    qlog:exp_runner(s3_upload_initiated, {population_id, PopulationId}),
-                    ok
-            end;
+            % Get required environment variables
+            S3Bucket = case os:getenv("S3_BUCKET") of
+                false -> "dxnn-checkpoints";
+                Bucket -> Bucket
+            end,
+            
+            S3Prefix = case os:getenv("S3_PREFIX") of
+                false -> "dxnn-prod";
+                Prefix -> Prefix
+            end,
+            
+            PopulationId = case os:getenv("POPULATION_ID") of
+                false -> "unknown";
+                PopId -> PopId
+            end,
+            
+            % Extract lineage_id from population_id
+            LineageId = extract_lineage_from_string(PopulationId),
+            
+            % Build command with all required environment variables
+            Cmd = io_lib:format(
+                "S3_BUCKET=~s S3_PREFIX=~s POPULATION_ID=~s LINEAGE_ID=~s COMPLETION_STATUS=incremental EXIT_CODE=0 /usr/local/bin/finalize_run.sh >> /var/log/dxnn-run.log 2>&1 &",
+                [S3Bucket, S3Prefix, PopulationId, LineageId]
+            ),
+            
+            % Execute in background
+            Result = os:cmd(lists:flatten(Cmd)),
+            error_logger:info_msg("S3 upload triggered: ~s~n", [Result]),
+            qlog:exp_runner(s3_upload_initiated, {population_id, PopulationId}),
+            ok;
         false ->
             qlog:exp_runner(s3_upload_skipped, {local_env}),
             ok
