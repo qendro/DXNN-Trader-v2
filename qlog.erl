@@ -712,6 +712,26 @@ exp_runner(Event, Data) ->
             io:format(File, "[~s] | experiment: ~p | population: ~p | status: terminated~n",
                 [Timestamp, RunId, PopId]);
             
+        checkpoint_mnesia_copied ->
+            {CheckpointDir} = Data,
+            io:format(File, "[~s] | checkpoint: mnesia copied to ~s~n",
+                [Timestamp, CheckpointDir]);
+            
+        checkpoint_logs_copied ->
+            {CheckpointDir} = Data,
+            io:format(File, "[~s] | checkpoint: logs copied to ~s~n",
+                [Timestamp, CheckpointDir]);
+            
+        checkpoint_complete ->
+            {CheckpointDir} = Data,
+            io:format(File, "[~s] | checkpoint: complete at ~s~n",
+                [Timestamp, CheckpointDir]);
+            
+        checkpoint_and_exit ->
+            {Status, Action} = Data,
+            io:format(File, "[~s] | checkpoint_and_exit: ~p | action: ~p~n",
+                [Timestamp, Status, Action]);
+            
         population_monitor_terminated ->
             {Population_Id, Reason, OpTag, OpMode, TotAgents, PopGen, TotEvals} = Data,
             io:format(File, "[~s] | population_monitor: ~p | status: terminated | reason: ~p | op_tag: ~p | op_mode: ~p | total_agents: ~p | generation: ~p | total_evaluations: ~p~n",
