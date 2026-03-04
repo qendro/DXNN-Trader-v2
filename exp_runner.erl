@@ -573,6 +573,9 @@ loop(E, P_Id) ->
             % Checkpoint between runs
             checkpoint(),
             
+            % Trigger S3 upload after each run (incremental backup)
+            trigger_s3_upload(),
+            
             qlog:xLog(qStatus, "exp_runner:loop | next_run=~p | tot_runs=~p", [U_RunIndex, E#experiment.tot_runs]),
             case U_RunIndex > E#experiment.tot_runs of
                 true ->
@@ -909,6 +912,47 @@ format_timestamp() ->
     {{Year, Month, Day}, {Hour, Min, Sec}} = calendar:universal_time(),
     io_lib:format("~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
                   [Year, Month, Day, Hour, Min, Sec]).
+
+%% Trigger S3 upload without exiting (for incremental backups after each run)
+%% Calls the finalize script directly to upload current checkpoint to S3
+trigger_s3_upload() ->
+    case should_checkpoint() of
+        true ->
+            qlog:exp_runner(s3_upload_triggered, {incremental_backup}),
+            error_logger:info_msg("Triggering S3 upload for incremental backup~n"),
+            
+            % Call the finalize script via os:cmd to upload to S3
+            % The script will upload the latest checkpoint without terminating the instance
+            case os:find_executable("finalize_run.sh", "/usr/local/bin") of
+                false ->
+                    error_logger:warning_msg("finalize_run.sh not found, skipping S3 upload~n"),
+                    ok;
+                FinalizerPath ->
+                    % Set environment variables for the finalizer
+                    PopulationId = case os:getenv("POPULATION_ID") of
+                        false -> "unknown";
+                        PopId -> PopId
+                    end,
+                    
+                    % Build command with environment variables
+                    Cmd = io_lib:format(
+                        "COMPLETION_STATUS=incremental EXIT_CODE=0 POPULATION_ID=~s ~s 2>&1 | head -20",
+                        [PopulationId, FinalizerPath]
+                    ),
+                    
+                    % Execute in background to avoid blocking
+                    spawn(fun() ->
+                        Result = os:cmd(lists:flatten(Cmd)),
+                        error_logger:info_msg("S3 upload result: ~s~n", [Result])
+                    end),
+                    
+                    qlog:exp_runner(s3_upload_initiated, {population_id, PopulationId}),
+                    ok
+            end;
+        false ->
+            qlog:exp_runner(s3_upload_skipped, {local_env}),
+            ok
+    end.
 
 %% Checkpoint and exit (for experiment completion and spot interruptions)
 %% Only exits if running in AWS environment to trigger S3 upload

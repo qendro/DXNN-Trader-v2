@@ -717,6 +717,21 @@ exp_runner(Event, Data) ->
             io:format(File, "[~s] | checkpoint: mnesia copied to ~s~n",
                 [Timestamp, CheckpointDir]);
             
+        s3_upload_triggered ->
+            {Reason} = Data,
+            io:format(File, "[~s] | s3_upload: triggered for ~p~n",
+                [Timestamp, Reason]);
+            
+        s3_upload_initiated ->
+            {population_id, PopId} = Data,
+            io:format(File, "[~s] | s3_upload: initiated for population ~s~n",
+                [Timestamp, PopId]);
+            
+        s3_upload_skipped ->
+            {Reason} = Data,
+            io:format(File, "[~s] | s3_upload: skipped (~p)~n",
+                [Timestamp, Reason]);
+            
         checkpoint_logs_copied ->
             {CheckpointDir} = Data,
             io:format(File, "[~s] | checkpoint: logs copied to ~s~n",
