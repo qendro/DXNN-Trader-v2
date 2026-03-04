@@ -912,10 +912,12 @@ create_checkpoint_metadata(CheckpointDir, Timestamp) ->
     end.
 
 %% Extract lineage_id from population_id string (for metadata)
+%% Returns full lineage: "2026-03-04T04:09:10Z_7g6n" instead of just "7g6n"
 extract_lineage_from_string(PopulationId) when is_list(PopulationId) ->
     case string:split(PopulationId, "_", all) of
-        [_Timestamp, LineageId | _] when length(LineageId) =:= 4 ->
-            LineageId;
+        [Timestamp, LineageCode | _] when length(LineageCode) =:= 4 ->
+            % Return full lineage: timestamp_code
+            Timestamp ++ "_" ++ LineageCode;
         _ ->
             "unknown"
     end;
