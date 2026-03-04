@@ -513,7 +513,7 @@ init_population(Init_State,Specie_Constraints)->
 			Specie_Id;
 		create_specie(Population_Id,Specie_Id,Agent_Index,IdAcc,SpeCon,Fingerprint)->
 			Agent_Id = {genotype:generate_UniqueId(),agent},
-			genotype:construct_Agent(Specie_Id,Agent_Id,SpeCon),
+			genotype:construct_Agent(Specie_Id,Agent_Id,SpeCon,Population_Id),
 			create_specie(Population_Id,Specie_Id,Agent_Index-1,[Agent_Id|IdAcc],SpeCon,Fingerprint).
 %The create_Population/3 generates length(Specie_Constraints) number of specie, each composed of ?INIT_SPECIE_SIZE number of agents. The function uses the create_specie/4 to generate the species. The create_specie/3 and create_specie/4 functions are simplified versions which use default parameters to call the create_specie/6 function. The create_specie/6 function constructs the agents using the genotype:construct_Agent/3 function, accumulating the Agent_Ids in the IdAcc list. Once all the agents have been created, the function creates the specie record, fills in the required elements, writes the specie to database, and then finally returns the Specie_Id to the caller.
 

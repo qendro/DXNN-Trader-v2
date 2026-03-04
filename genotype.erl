@@ -5,7 +5,7 @@
 
 sync()->make:all([load]).
 
-construct_Agent(Specie_Id,Agent_Id,SpecCon)->
+construct_Agent(Specie_Id,Agent_Id,SpecCon,Population_Id)->
 	Generation = 0,
 	Encoding_Type = random_element(SpecCon#constraint.agent_encoding_types),
 	SPlasticity=random_element(SpecCon#constraint.substrate_plasticities),
@@ -18,6 +18,7 @@ construct_Agent(Specie_Id,Agent_Id,SpecCon)->
 		specie_id = Specie_Id,
 		constraint = SpecCon,
 		generation = Generation,
+		population_id = Population_Id,
 		pattern = Pattern,
 		tuning_selection_f = random_element(SpecCon#constraint.tuning_selection_fs),
 		annealing_parameter = random_element(SpecCon#constraint.annealing_parameters),
@@ -616,7 +617,7 @@ test()->
 	CloneAgent_Id = test_clone,
 	SpecCon = #constraint{morphology=pole_balancing,connection_architecture=feedforward, population_evo_alg_f=generational,neural_afs=[tanh],agent_encoding_types=[substrate],substrate_plasticities=[none]},
 	F = fun()->
-		construct_Agent(Specie_Id,Agent_Id,SpecCon),
+		construct_Agent(Specie_Id,Agent_Id,SpecCon,undefined),
 		clone_Agent(Specie_Id,CloneAgent_Id),
 		print(Agent_Id),
 		print(CloneAgent_Id),
@@ -633,11 +634,11 @@ create_test()->
 	F = fun()->
 		case genotype:read({agent,test}) of
 			undefined ->
-				construct_Agent(Specie_Id,Agent_Id,SpecCon),
+				construct_Agent(Specie_Id,Agent_Id,SpecCon,undefined),
 				print(Agent_Id);
 			_ ->
 				delete_Agent(Agent_Id),
-				construct_Agent(Specie_Id,Agent_Id,SpecCon),
+				construct_Agent(Specie_Id,Agent_Id,SpecCon,undefined),
 				print(Agent_Id)
 		end
 	end,
