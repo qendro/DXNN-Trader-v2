@@ -573,8 +573,8 @@ loop(E, P_Id) ->
             % Checkpoint between runs
             checkpoint(),
             
-            % Trigger S3 upload after each run (incremental backup)
-            trigger_s3_upload(),
+            % Trigger S3 upload after each run (incremental backup) with current population_id
+            trigger_s3_upload(P_Id),
             
             qlog:xLog(qStatus, "exp_runner:loop | next_run=~p | tot_runs=~p", [U_RunIndex, E#experiment.tot_runs]),
             case U_RunIndex > E#experiment.tot_runs of
@@ -930,7 +930,7 @@ format_timestamp() ->
 
 %% Trigger S3 upload without exiting (for incremental backups after each run)
 %% Calls the finalize script directly to upload current checkpoint to S3
-trigger_s3_upload() ->
+trigger_s3_upload(PopulationId) ->
     case should_checkpoint() of
         true ->
             qlog:exp_runner(s3_upload_triggered, {incremental_backup}),
@@ -947,24 +947,27 @@ trigger_s3_upload() ->
                 Prefix -> Prefix
             end,
             
-            PopulationId = case os:getenv("POPULATION_ID") of
-                false -> "unknown";
-                PopId -> PopId
+            % Convert population_id to string (handle both atom and binary)
+            PopIdStr = case PopulationId of
+                P when is_binary(P) -> binary_to_list(P);
+                P when is_atom(P) -> atom_to_list(P);
+                P when is_list(P) -> P;
+                _ -> "unknown"
             end,
             
             % Extract lineage_id from population_id
-            LineageId = extract_lineage_from_string(PopulationId),
+            LineageId = extract_lineage_from_string(PopIdStr),
             
             % Build command with all required environment variables
             Cmd = io_lib:format(
                 "S3_BUCKET=~s S3_PREFIX=~s POPULATION_ID=~s LINEAGE_ID=~s COMPLETION_STATUS=incremental EXIT_CODE=0 /usr/local/bin/finalize_run.sh >> /var/log/dxnn-run.log 2>&1 &",
-                [S3Bucket, S3Prefix, PopulationId, LineageId]
+                [S3Bucket, S3Prefix, PopIdStr, LineageId]
             ),
             
             % Execute in background
             Result = os:cmd(lists:flatten(Cmd)),
-            error_logger:info_msg("S3 upload triggered: ~s~n", [Result]),
-            qlog:exp_runner(s3_upload_initiated, {population_id, PopulationId}),
+            error_logger:info_msg("S3 upload triggered for population: ~s~n", [PopIdStr]),
+            qlog:exp_runner(s3_upload_initiated, {population_id, PopIdStr}),
             ok;
         false ->
             qlog:exp_runner(s3_upload_skipped, {local_env}),
