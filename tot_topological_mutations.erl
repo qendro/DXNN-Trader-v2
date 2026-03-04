@@ -8,7 +8,7 @@ ncount_exponential(Power,Agent_Id)->
 	A = genotype:read({agent,Agent_Id}),
 	Cx = genotype:read({cortex,A#agent.cx_id}),
 	TotNeurons = length(Cx#cortex.neuron_ids),
-	TotMutations = random:uniform(round(math:pow(TotNeurons,Power))),
+	TotMutations = rand:uniform(round(math:pow(TotNeurons,Power))),
 	%io:format("Tot neurons:~p Performing Tot mutations:~p on:~p~n",[TotNeurons,TotMutations,Agent_Id]),
 	TotMutations.
 

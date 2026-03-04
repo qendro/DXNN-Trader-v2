@@ -86,7 +86,7 @@ top3(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,_Survival_Pe
 		
 	breed(_Valid_AgentIds,0,Acc)-> Acc;
 	breed(Valid_AgentIds,OffspringIndex,Acc)->
-		Parent_AgentId = lists:nth(random:uniform(length(Valid_AgentIds)),Valid_AgentIds),
+		Parent_AgentId = lists:nth(rand:uniform(length(Valid_AgentIds)),Valid_AgentIds),
 		BatchSize = min(OffspringIndex,10),
 		MutantAgent_Ids = parallel_create_mutants(Parent_AgentId,BatchSize),
 		Remaining = OffspringIndex - BatchSize,
@@ -98,7 +98,7 @@ competition(ProperlySorted_AgentSummaries)->
 	TotNeurons = lists:sum([TotN || {_Fitness,TotN,_Agent_Id} <- ProperlySorted_AgentSummaries]),
 	NeuralEnergyCost = TotEnergy/TotNeurons,
 	{AlotmentsP,Normalizer} = calculate_alotments(ProperlySorted_AgentSummaries,NeuralEnergyCost,[],0),
-	Choice = random:uniform(),
+	Choice = rand:uniform(),
 	{WinnerFitness,WinnerTotN,WinnerAgent_Id}=choose_CompetitionWinner(AlotmentsP,Normalizer,Choice,0),
 	{WinnerFitness,WinnerTotN,WinnerAgent_Id}.
 		

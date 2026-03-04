@@ -46,7 +46,6 @@ start(Agent_Id,PM_PId,OpMode)->
 %The start/3 function spawns a new Agent_Id exoself process, belonging to the population_monitor process with the pid PM_PId, and using the OpMode with which it was spawned.
 
 prep(Agent_Id,PM_PId,OpMode)->
-	random:seed(now()),
 	IdsNPIds = ets:new(idsNpids,[set,private]),
 	A = genotype:dirty_read({agent,Agent_Id}),
 	case A of

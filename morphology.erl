@@ -11,7 +11,7 @@ get_InitSensors(Morphology)->
 			% No ETS table, use default behavior
 			Sensors = morphology:Morphology(sensors),
 			FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
-			[lists:nth(random:uniform(length(FilteredSensors)),FilteredSensors)];
+			[lists:nth(rand:uniform(length(FilteredSensors)),FilteredSensors)];
 		_ ->
 			% Check for custom sensors
 			case ets:lookup(agent_gen_overrides, {custom_sensors, Morphology}) of
@@ -19,7 +19,7 @@ get_InitSensors(Morphology)->
 					% No custom sensors, use default
 					Sensors = morphology:Morphology(sensors),
 					FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
-					[lists:nth(random:uniform(length(FilteredSensors)),FilteredSensors)];
+					[lists:nth(rand:uniform(length(FilteredSensors)),FilteredSensors)];
 				[{_, Custom_Sensors}] ->
 					% Use custom sensors from agent_gen
 					Custom_Sensors
@@ -33,14 +33,14 @@ get_InitActuators(Morphology)->
 		undefined ->
 			% No ETS table, use default behavior
 			Actuators = morphology:Morphology(actuators),
-			[lists:nth(random:uniform(length(Actuators)),Actuators)];
+			[lists:nth(rand:uniform(length(Actuators)),Actuators)];
 		_ ->
 			% Check for custom actuators
 			case ets:lookup(agent_gen_overrides, {custom_actuators, Morphology}) of
 				[] ->
 					% No custom actuators, use default
 					Actuators = morphology:Morphology(actuators),
-					[lists:nth(random:uniform(length(Actuators)),Actuators)];
+					[lists:nth(rand:uniform(length(Actuators)),Actuators)];
 				[{_, Custom_Actuators}] ->
 					% Use custom actuators from agent_gen
 					Custom_Actuators
@@ -57,12 +57,12 @@ get_Actuators(Morphology)->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Get Init Substrate_CPPs/Substrate_CEPs %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 get_InitSubstrateCPPs(Dimensions,Plasticity)->
 	Substrate_CPPs = get_SubstrateCPPs(Dimensions,Plasticity),
-	[lists:nth(random:uniform(length(Substrate_CPPs)),Substrate_CPPs)].
+	[lists:nth(rand:uniform(length(Substrate_CPPs)),Substrate_CPPs)].
 	%[lists:nth(1,Substrate_CPPs)].
 
 get_InitSubstrateCEPs(Dimensions,Plasticity)->
 	Substrate_CEPs = get_SubstrateCEPs(Dimensions,Plasticity),
-	[lists:nth(random:uniform(length(Substrate_CEPs)),Substrate_CEPs)].
+	[lists:nth(rand:uniform(length(Substrate_CEPs)),Substrate_CEPs)].
 	%[lists:nth(1,Substrate_CEPs)].
 
 get_SubstrateCPPs(Dimensions,Plasticity)->

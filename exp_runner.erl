@@ -46,7 +46,7 @@ generate_population_id_with_lineage(RunIndex, LineageId) when is_binary(LineageI
 %% Generate 4 random alphanumeric characters
 generate_lineage_id() ->
     Chars = "abcdefghijklmnopqrstuvwxyz0123456789",
-    RandomChars = [lists:nth(random:uniform(length(Chars)), Chars) 
+    RandomChars = [lists:nth(rand:uniform(length(Chars)), Chars) 
                    || _ <- lists:seq(1, 4)],
     list_to_binary(RandomChars).
 
@@ -413,7 +413,7 @@ generate_run_id() ->
     % Use a simple random ID or sequential counter
     % For now, use a random 8-character alphanumeric ID
     Chars = "abcdefghijklmnopqrstuvwxyz0123456789",
-    RandomChars = [lists:nth(random:uniform(length(Chars)), Chars) 
+    RandomChars = [lists:nth(rand:uniform(length(Chars)), Chars) 
                    || _ <- lists:seq(1, 8)],
     list_to_atom("run_" ++ RandomChars).
 
@@ -870,18 +870,39 @@ copy_directory(Source, Dest) ->
             error_logger:warning_msg("Failed to list directory ~p: ~p~n", [Source, Reason])
     end.
 
-%% Create checkpoint metadata file
+%% Create checkpoint metadata file with lineage_id and population_id
 create_checkpoint_metadata(CheckpointDir, Timestamp) ->
     MetadataFile = CheckpointDir ++ "/_CHECKPOINT_INFO",
+    
+    % Get current population_id from environment or experiment
+    PopulationId = case os:getenv("POPULATION_ID") of
+        false -> "unknown";
+        PopId -> PopId
+    end,
+    
+    % Extract lineage_id from population_id
+    LineageId = extract_lineage_from_string(PopulationId),
+    
     Metadata = io_lib:format(
-        "{\"timestamp\": ~p, \"node\": \"~s\", \"type\": \"checkpoint\", \"created_at\": \"~s\"}~n",
-        [Timestamp, atom_to_list(node()), format_timestamp()]
+        "{\"timestamp\": ~p, \"node\": \"~s\", \"type\": \"checkpoint\", \"created_at\": \"~s\", \"population_id\": \"~s\", \"lineage_id\": \"~s\"}~n",
+        [Timestamp, atom_to_list(node()), format_timestamp(), PopulationId, LineageId]
     ),
     case file:write_file(MetadataFile, Metadata) of
         ok -> ok;
         {error, Reason} ->
             error_logger:warning_msg("Failed to write metadata: ~p~n", [Reason])
     end.
+
+%% Extract lineage_id from population_id string (for metadata)
+extract_lineage_from_string(PopulationId) when is_list(PopulationId) ->
+    case string:split(PopulationId, "_", all) of
+        [_Timestamp, LineageId | _] when length(LineageId) =:= 4 ->
+            LineageId;
+        _ ->
+            "unknown"
+    end;
+extract_lineage_from_string(_) ->
+    "unknown".
 
 %% Format timestamp as ISO 8601
 format_timestamp() ->

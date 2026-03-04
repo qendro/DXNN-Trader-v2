@@ -17,7 +17,6 @@ none(_NeuralParameters,_IAcc,Input_PIdPs,_Output)->
 %none/3 returns the original Input_PIdPs to the caller.
 
 hebbian_w({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	InputIdPs = N#neuron.input_idps,
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
@@ -25,7 +24,7 @@ hebbian_w({N_Id,mutate})->
 hebbian_w(neural_parameters)->
 	[];
 hebbian_w(weight_parameters)->
-	[(random:uniform()-0.5)].
+	[(rand:uniform()-0.5)].
 %hebbian_w/1 function produces the necessary parameter list for the hebbian_w learning rule to operate. The parameter list for the simple hebbian_w learning rule is a parameter list composed of a single parameter H: [H], for every synaptic weight of the neuron. When hebbian_w/1 is called with the parameter neural_parameters, it returns []. When hebbian_w/1 is executed with the {N_Id,mutate} parameter, the function goes through every parameter in the neuron's input_idps, and perturbs the parameter value using the specified spread (?SAT_LIMIT).
 
 	perturb_parameters(InputIdPs,Spread)->
@@ -34,9 +33,9 @@ hebbian_w(weight_parameters)->
 		[{Input_Id,[{W,perturb(Ps,MutationProb,Spread,[])}|| {W,Ps} <- WPs]} || {Input_Id,WPs} <- InputIdPs].
 	
 		perturb([Val|Vals],MutationProb,Spread,Acc)->
-			case random:uniform() < MutationProb of
+			case rand:uniform() < MutationProb of
 				true ->
-					U_Val = sat((random:uniform()-0.5)*2*Spread+Val,Spread,Spread),
+					U_Val = sat((rand:uniform()-0.5)*2*Spread+Val,Spread,Spread),
 					perturb(Vals,MutationProb,Spread,[U_Val|Acc]);
 				false ->
 					perturb(Vals,MutationProb,Spread,[Val|Acc])
@@ -64,7 +63,6 @@ hebbian_w(_NeuralParameters,IAcc,Input_PIdPs,Output)->
 %hebbrule_w/4 applies the hebbian learning rule to each weight, using the input value I, the neuron's calculated output Output, and its own distinct learning parameter H associated with each synaptic weight.
 
 hebbian({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,ParameterList} = N#neuron.pf,
 	Spread = ?SAT_LIMIT*10,
@@ -73,7 +71,7 @@ hebbian({N_Id,mutate})->
 	U_PF = {PFName,U_ParameterList},
 	N#neuron{pf=U_PF};
 hebbian(neural_parameters)->
-	[(random:uniform()-0.5)];
+	[(rand:uniform()-0.5)];
 hebbian(weight_parameters)->
 	[].
 %hebbian/1 function produces the necessary parameter list for the hebbian learning rule to operate. The parameter list for the standard hebbian learning rule is a parameter list composed of a single parameter H: [H], used by the neuron for all its synaptic weights. When hebbian/1 is called with the parameter weight_parameters, it returns []. When the function is executed with the {N_Id,mutate} parameter, it uses the perturb/4 function to perturb the parameter list, which in this case is a list composed of a single floating point parameter.
@@ -98,7 +96,6 @@ hebbian([_M,H],IAcc,Input_PIdPs,Output)->
 %hebbrule/5 applies the hebbian learning rule to each weight, using the input value I, the neuron's calculated output Output, and the neuron's leraning parameter H.
 
 ojas_w({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	InputIdPs = N#neuron.input_idps,
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
@@ -106,7 +103,7 @@ ojas_w({N_Id,mutate})->
 ojas_w(neural_parameters)->
 	[];
 ojas_w(weight_parameters)->
-	[(random:uniform()-0.5)].
+	[(rand:uniform()-0.5)].
 %oja/1 function produces the necessary parameter list for the oja's learning rule to operate. The parameter list for oja's learning rule is a list composed of a single parameter H: [H] per synaptic weight. If the learning parameter is positive, then the postsynaptic neuron's synaptic weight increases if the two connected neurons produce output signals of the same sign. If the learning parameter is negative, and the two connected neurons produce output signals of the same sign, then the synaptic weight of the postsynaptic neuron, decreases in magnitude. Otherwise it increases.
 
 ojas_w(_Neural_Parameters,IAcc,Input_PIdPs,Output)->
@@ -130,7 +127,6 @@ tt(W,H,Output,I)->
 W + H*Output*(I - Output*W).
 
 ojas({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,ParameterList} = N#neuron.pf,
 	Spread = ?SAT_LIMIT*10,
@@ -139,7 +135,7 @@ ojas({N_Id,mutate})->
 	U_PF = {PFName,U_ParameterList},
 	N#neuron{pf=U_PF};
 ojas(neural_parameters)->
-	[(random:uniform()-0.5)];
+	[(rand:uniform()-0.5)];
 ojas(weight_parameters)->
 	[].
 %oja/1 function produces the necessary parameter list for the oja's learning rule to operate. The parameter list for oja's learning rule is a list composed of a single parameter H: [H], used by the neuron for all its synaptic weights. If the learning parameter is positive, and the two connected neurons produce output signals of the same sign, then the postsynaptic neuron's synaptic weight increases. Otherwise it decreases.
@@ -163,7 +159,6 @@ ojas(_H,[],[{bias,WPs}],_Output,Acc)->
 %ojas_rule/5 updates every synaptic weight using Oja's learning rule.
 
 self_modulationV1({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	InputIdPs = N#neuron.input_idps,
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
@@ -175,7 +170,7 @@ self_modulationV1(neural_parameters)->
 	D=0,
 	[A,B,C,D];
 self_modulationV1(weight_parameters)->
-	[(random:uniform()-0.5)].
+	[(rand:uniform()-0.5)].
 	
 self_modulationV1([_M,A,B,C,D],IAcc,Input_PIdPs,Output)->
 	H = math:tanh(dot_productV1(IAcc,Input_PIdPs)),
@@ -215,7 +210,6 @@ neuromodulation([H,A,B,C,D],[],[{bias,WPs}],Output,Acc)->
 %Updated_W(i)= W(i) + H*(A*I(i)*Output + B*I(i) + C*Output + D)
 
 self_modulationV2({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,[A|ParameterList]} = N#neuron.pf,
 	[U_A] = perturb([A],0.5,?SAT_LIMIT*10,[]),
@@ -224,20 +218,19 @@ self_modulationV2({N_Id,mutate})->
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
 	N#neuron{pf=U_PF,input_idps=U_InputIdPs};
 self_modulationV2(neural_parameters)->
-	A=(random:uniform()-0.5),
+	A=(rand:uniform()-0.5),
 	B=0,
 	C=0,
 	D=0,
 	[A,B,C,D];
 self_modulationV2(weight_parameters)->
-	[(random:uniform()-0.5)].
+	[(rand:uniform()-0.5)].
 	
 self_modulationV2([_M,A,B,C,D],IAcc,Input_PIdPs,Output)->
 	H = math:tanh(dot_productV1(IAcc,Input_PIdPs)),
 	neuromodulation([H,A,B,C,D],IAcc,Input_PIdPs,Output,[]).
 
 self_modulationV3({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,ParameterList} = N#neuron.pf,
 	MSpread = ?SAT_LIMIT*10,
@@ -248,20 +241,19 @@ self_modulationV3({N_Id,mutate})->
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
 	N#neuron{pf=U_PF,input_idps=U_InputIdPs};
 self_modulationV3(neural_parameters)->
-	A=(random:uniform()-0.5),
-	B=(random:uniform()-0.5),
-	C=(random:uniform()-0.5),
-	D=(random:uniform()-0.5),
+	A=(rand:uniform()-0.5),
+	B=(rand:uniform()-0.5),
+	C=(rand:uniform()-0.5),
+	D=(rand:uniform()-0.5),
 	[A,B,C,D];
 self_modulationV3(weight_parameters)->
-	[(random:uniform()-0.5)].
+	[(rand:uniform()-0.5)].
 
 self_modulationV3([_M,A,B,C,D],IAcc,Input_PIdPs,Output)->
 	H = math:tanh(dot_productV1(IAcc,Input_PIdPs)),
 	neuromodulation([H,A,B,C,D],IAcc,Input_PIdPs,Output,[]).
 
 self_modulationV4({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	InputIdPs = N#neuron.input_idps,
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
@@ -272,7 +264,7 @@ self_modulationV4(neural_parameters)->
 	D=0,
 	[B,C,D];
 self_modulationV4(weight_parameters)->
-	[(random:uniform()-0.5),(random:uniform()-0.5)].
+	[(rand:uniform()-0.5),(rand:uniform()-0.5)].
 
 self_modulationV4([_M,B,C,D],IAcc,Input_PIdPs,Output)->
 	{AccH,AccA} = dot_productV4(IAcc,Input_PIdPs),
@@ -296,7 +288,6 @@ self_modulationV4([_M,B,C,D],IAcc,Input_PIdPs,Output)->
 			{AccH,AccA}.
 
 self_modulationV5({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,ParameterList} = N#neuron.pf,
 	MSpread = ?SAT_LIMIT*10,
@@ -307,12 +298,12 @@ self_modulationV5({N_Id,mutate})->
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
 	N#neuron{pf=U_PF,input_idps=U_InputIdPs};
 self_modulationV5(neural_parameters)->
-	B=(random:uniform()-0.5),
-	C=(random:uniform()-0.5),
-	D=(random:uniform()-0.5),
+	B=(rand:uniform()-0.5),
+	C=(rand:uniform()-0.5),
+	D=(rand:uniform()-0.5),
 	[B,C,D];
 self_modulationV5(weight_parameters)->
-	[(random:uniform()-0.5),(random:uniform()-0.5)].
+	[(rand:uniform()-0.5),(rand:uniform()-0.5)].
 
 self_modulationV5([_M,B,C,D],IAcc,Input_PIdPs,Output)->
 	{AccH,AccA} = dot_productV4(IAcc,Input_PIdPs),
@@ -321,7 +312,6 @@ self_modulationV5([_M,B,C,D],IAcc,Input_PIdPs,Output)->
 	neuromodulation([H,A,B,C,D],IAcc,Input_PIdPs,Output,[]).
 
 self_modulationV6({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	InputIdPs = N#neuron.input_idps,
 	U_InputIdPs=perturb_parameters(InputIdPs,?SAT_LIMIT),
@@ -329,11 +319,11 @@ self_modulationV6({N_Id,mutate})->
 self_modulationV6(neural_parameters)->
 	[];
 self_modulationV6(weight_parameters)->
-	H = (random:uniform()-0.5),
-	A = (random:uniform()-0.5),
-	B = (random:uniform()-0.5),
-	C = (random:uniform()-0.5),
-	D = (random:uniform()-0.5),
+	H = (rand:uniform()-0.5),
+	A = (rand:uniform()-0.5),
+	B = (rand:uniform()-0.5),
+	C = (rand:uniform()-0.5),
+	D = (rand:uniform()-0.5),
 	[H,A,B,C,D].
 
 self_modulationV6(_Neural_Parameters,IAcc,Input_PIdPs,Output)->
@@ -361,7 +351,6 @@ self_modulationV6(_Neural_Parameters,IAcc,Input_PIdPs,Output)->
 			{AccH,AccA,AccB,AccC,AccD}.
 
 neuromodulation({N_Id,mutate})->
-	random:seed(now()),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,ParameterList} = N#neuron.pf,
 	MSpread = ?SAT_LIMIT*10,
@@ -370,11 +359,11 @@ neuromodulation({N_Id,mutate})->
 	U_PF = {PFName,U_ParameterList},
 	N#neuron{pf=U_PF};	
 neuromodulation(neural_parameters)->
-	H = (random:uniform()-0.5),
-	A = (random:uniform()-0.5),
-	B = (random:uniform()-0.5),
-	C = (random:uniform()-0.5),
-	D = (random:uniform()-0.5),
+	H = (rand:uniform()-0.5),
+	A = (rand:uniform()-0.5),
+	B = (rand:uniform()-0.5),
+	C = (rand:uniform()-0.5),
+	D = (rand:uniform()-0.5),
 	[H,A,B,C,D];
 neuromodulation(weight_parameters)->
 	[].

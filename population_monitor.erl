@@ -253,7 +253,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			end,
 			io:format("Valid_AgentSummaries:~p~n",[Valid_AgentSummaries]),
 			{WinnerFitness,WinnerProfile,WinnerAgent_Id} = selection_algorithm:SelectionAlgorithmName(Valid_AgentSummaries),
-			ActiveAgent_IdP = case random:uniform() < 0.1 of
+			ActiveAgent_IdP = case rand:uniform() < 0.1 of
 				true ->
 					U_DeadPool_AgentSummaries = lists:delete({WinnerFitness,WinnerProfile,WinnerAgent_Id},Valid_AgentSummaries),
 					WinnerAgent_PId = Agent_PId = exoself:start(WinnerAgent_Id,self()),
@@ -463,7 +463,6 @@ prep_PopState(PMP,Specie_Constraints)->
 	}.
 
 init_population(Init_State,Specie_Constraints)->
-	random:seed(now()),
 	Population_Id = Init_State#state.population_id,
 	F = fun()->
 		case genotype:read({population,Population_Id}) of
@@ -519,10 +518,8 @@ init_population(Init_State,Specie_Constraints)->
 %The create_Population/3 generates length(Specie_Constraints) number of specie, each composed of ?INIT_SPECIE_SIZE number of agents. The function uses the create_specie/4 to generate the species. The create_specie/3 and create_specie/4 functions are simplified versions which use default parameters to call the create_specie/6 function. The create_specie/6 function constructs the agents using the genotype:construct_Agent/3 function, accumulating the Agent_Ids in the IdAcc list. Once all the agents have been created, the function creates the specie record, fills in the required elements, writes the specie to database, and then finally returns the Specie_Id to the caller.
 
 continue()->
-	random:seed(now()),
 	population_monitor:start(#state{op_mode = [gt,benchmark]}).
 continue(Population_Id)->
-	random:seed(now()),
 	S = #state{population_id=Population_Id,op_mode = [gt,benchmark]},
 	population_monitor:start(S).
 %The function continue/0 and continue/1 are used to summon an already existing population with either the default population Id, or the specified Population_Id.

@@ -6,7 +6,6 @@
 sync()->make:all([load]).
 
 construct_Agent(Specie_Id,Agent_Id,SpecCon)->
-	random:seed(now()),
 	Generation = 0,
 	Encoding_Type = random_element(SpecCon#constraint.agent_encoding_types),
 	SPlasticity=random_element(SpecCon#constraint.substrate_plasticities),
@@ -110,9 +109,9 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 %construct_InitialNeuroLayer/7 creates a set of neurons for each Actuator in the actuator list. The neurons are initialized in the construct_InitialNeurons/6, where they are connected to the actuator, and from a random subset of the sensors passed to the function. The construct_InitialNEurons/6 function returns the updated sensors, some of which have now an updated set of fanout_ids which includes the new neuron ids they were connected to. The actuator's fanin_ids is then updated to include the neuron ids that were connected to it. Once all the actuators have been connected to, the sensors and the actuators are written to the database, and the set of neuron ids created within the function is returned to the caller.
 
 		construct_InitialNeurons(Cx_Id,Generation,SpecCon,[N_Id|N_Ids],Sensors,Actuator)->
-			case random:uniform() >= 0.5 of
+			case rand:uniform() >= 0.5 of
 				true ->
-					S = lists:nth(random:uniform(length(Sensors)),Sensors),
+					S = lists:nth(rand:uniform(length(Sensors)),Sensors),
 					U_Sensors = lists:keyreplace(S#sensor.id, 2, Sensors, S#sensor{fanout_ids=[N_Id|S#sensor.fanout_ids]}),
 					Input_Specs = [{S#sensor.id,S#sensor.vl}];
 				false ->
@@ -154,7 +153,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 				create_NeuralWeightsP(_PFName,0,Acc) ->
 					Acc; 
 				create_NeuralWeightsP(PFName,Index,Acc) ->
-					W = random:uniform()-0.5, 
+					W = rand:uniform()-0.5, 
 					create_NeuralWeightsP(PFName,Index-1,[{W,plasticity:PFName(weight_parameters)}|Acc]). 
 %Each neuron record is composed by the construct_Neuron/6 function. The construct_Neuron/6 creates the Input list from the tuples [{Id,Weights}...] using the vector lengths specified in the Input_Specs list. The create_InputIdPs/3 function uses create_NeuralWeightsP/2 to generate a tuple list with random weights in the range of -0.5 to 0.5, and plasticity parameters dependent on the PF function. The activation function that the neuron uses is chosen randomly from the neural_afs list within the constraint record passed to the construct_Neuron/6 function. construct_Neuron uses calculate_ROIds/3 to extract the list of recursive connection ids from the Output_Ids passed to it. Once the neuron record is filled in, it is saved to the database.
 		
@@ -163,7 +162,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 				[] ->
 					tanh;
 				Other ->
-					lists:nth(random:uniform(length(Other)),Other)
+					lists:nth(rand:uniform(length(Other)),Other)
 			end.
 %The generate_NeuronAF/1 accepts a list of activation function tags, and returns a randomly chosen one. If an empty list was passed as the parameter, the function returns the default tanh tag.
 
@@ -172,7 +171,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 				[] ->
 					{none,[]};
 				Other ->
-					PFName = lists:nth(random:uniform(length(Other)),Other),
+					PFName = lists:nth(rand:uniform(length(Other)),Other),
 					NLParameters = plasticity:PFName(neural_parameters),
 					{PFName,NLParameters}
 			end.
@@ -183,7 +182,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 				[] ->
 					none;
 				Other ->
-					lists:nth(random:uniform(length(Other)),Other)
+					lists:nth(rand:uniform(length(Other)),Other)
 			end.
 %The generate_NeuronAggrF/1 accepts a list of aggregation function tags, and returns a randomly chosen one. If an empty list was passed as the parameter, the function returns the default dot_product tag.
 
@@ -217,7 +216,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 %The generate_UniqueId/0 creates a unique Id using current time, the Id is a floating point value. The generate_ids/2 function creates a list of unique Ids.
 
 random_element(List)->
-	lists:nth(random:uniform(length(List)),List).
+	lists:nth(rand:uniform(length(List)),List).
 %The random_element/1 function accepts a list as input, and returns a single, randomly chosen element as output.
 
 calculate_OptimalSubstrateDimension(Sensors,Actuators)->

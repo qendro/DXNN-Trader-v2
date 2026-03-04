@@ -25,7 +25,6 @@ gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
 
 prep(ExoSelf)->
-	random:seed(now()),
 	receive
 		{ExoSelf,init,InitState}->
 			{Sensors,Actuators,SPIds,APIds,CPP_PIds,CEP_PIds,Densities,Plasticity,LinkForm}=InitState,

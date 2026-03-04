@@ -536,7 +536,7 @@ fix_isolated_self_recurrent(Agent_Id) ->
                         %qlog:xLog(qStatus, "Agent ~p fixed isolated neuron ~p: connected from sensor ~p", [Agent_Id, Isolated_N_Id, S_Id]);
                     _ ->
                         % Both available: randomly choose
-                        case random:uniform(2) of
+                        case rand:uniform(2) of
                             1 -> 
                                 S_Id = pick_random(S_Ids),
                                 link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, Isolated_N_Id);
@@ -604,5 +604,5 @@ actuator_has_capacity(A) -> length(A#actuator.fanin_ids) < A#actuator.vl.
 
 pick_random([Only]) -> Only;
 pick_random(List) when is_list(List), List =/= [] ->
-    lists:nth(random:uniform(length(List)), List).
+    lists:nth(rand:uniform(length(List)), List).
 

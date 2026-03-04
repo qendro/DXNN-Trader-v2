@@ -4,7 +4,7 @@
 -include("records.hrl").
 
 dynamic(N_Ids,AgentGeneration,PerturbationRange,AnnealingParameter)->
-	AgeLimit = math:sqrt(1/random:uniform()),
+	AgeLimit = math:sqrt(1/rand:uniform()),
 	ChosenN_IdPs = case extract_CurGenNIdPs(N_Ids,AgentGeneration,AgeLimit,PerturbationRange,AnnealingParameter,[]) of
 		[] ->
 			[N_Id|_] = N_Ids,
@@ -14,7 +14,7 @@ dynamic(N_Ids,AgentGeneration,PerturbationRange,AnnealingParameter)->
 	end,
 	%io:format("ChosenN_IdPs:~p~n",[ChosenN_IdPs]),
 	ChosenN_IdPs.
-%The dynamic/4 selection function randomly selects an age limit for its neuron id pool. The age limit is chosen by executing math:sqrt(1/random:uniform()), which creates a value between 1 and infinity. Using this function there is 75% that the number will be =<2, 25% that it will be >=2, 11% that it will be >=3... Everytime this selection function is executed, the AgeLimit is generated anew, thus different times it will produce different neuron id pools for tuning.
+%The dynamic/4 selection function randomly selects an age limit for its neuron id pool. The age limit is chosen by executing math:sqrt(1/rand:uniform()), which creates a value between 1 and infinity. Using this function there is 75% that the number will be =<2, 25% that it will be >=2, 11% that it will be >=3... Everytime this selection function is executed, the AgeLimit is generated anew, thus different times it will produce different neuron id pools for tuning.
 
 	extract_CurGenNIdPs([N_Id|N_Ids],Generation,AgeLimit,PR,AP,Acc)->
 		N = genotype:dirty_read({neuron,N_Id}),
@@ -32,7 +32,7 @@ dynamic(N_Ids,AgentGeneration,PerturbationRange,AnnealingParameter)->
 %The extract_CurGenNIdPs/6 composes a neuron id pool from neurons who are younger than the AgeLimit parameter. This is calculated by comparing the generation when they were created or touched by mutation, with that of the agent which ages with every topological mutation phase. Id pool accumulates not just the neurons but also the spread which will be used for the synaptic weight perturbation. The spread is calculated by multiplying the perturbation_range variable by math:pi(), and then multiplied by the annealing factor which is math:pow(AnnealingParameter,Age). Annealing parameter is less than 1, thus the greater the age of the neuron, the lower the Spread will be.
 
 dynamic_random(N_Ids,AgentGeneration,PerturbationRange,AnnealingParameter) ->
-			ChosenN_IdPs = case extract_CurGenNIdPs(N_Ids,AgentGeneration,math:sqrt(1/random:uniform()),PerturbationRange,AnnealingParameter,[]) of
+			ChosenN_IdPs = case extract_CurGenNIdPs(N_Ids,AgentGeneration,math:sqrt(1/rand:uniform()),PerturbationRange,AnnealingParameter,[]) of
 				[] ->
 					[N_Id|_] = N_Ids,
 					[{N_Id,PerturbationRange*math:pi()}];
@@ -48,13 +48,13 @@ dynamic_random(N_Ids,AgentGeneration,PerturbationRange,AnnealingParameter) ->
 	choose_randomNIdPs(MutationP,N_IdPs)->
 		case choose_randomNIdPs(N_IdPs,MutationP,[]) of
 			[] ->
-				{NId,Spread} = lists:nth(random:uniform(length(N_IdPs)),N_IdPs),
+				{NId,Spread} = lists:nth(rand:uniform(length(N_IdPs)),N_IdPs),
 				[{NId,Spread}];
 			Acc ->
 				Acc
 		end.
 	choose_randomNIdPs([{NId,Spread}|N_IdPs],MutationP,Acc)->
-		U_Acc = case random:uniform() < MutationP of
+		U_Acc = case rand:uniform() < MutationP of
 			true ->
 				[{NId,Spread}|Acc];
 			false ->

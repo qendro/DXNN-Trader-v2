@@ -44,7 +44,6 @@ test(Agent_Id,Mutator)->
 %test/2 function tests the mutation operator "Mutator" on the agent with an id Agent_Id.
 
 mutate(Agent_Id)->
-	random:seed(now()),
 	F = fun()->
 		mutate_SearchParameters(Agent_Id),
 		A = genotype:read({agent,Agent_Id}),
@@ -61,9 +60,9 @@ mutate(Agent_Id)->
 %The function mutate/1 first updates the generation of the agent to be mutated, then calculates the number of mutation operators to be applied to it by executing the tot_topological_mutations:TTM_Name/2 function, and then finally runs the apply_Mutators/2 function, which mutates the agent. Once the agent is mutated, the function updates its fingerprint by executing genotype:update_finrgerprint/1.
 
 	mutate_SearchParameters(Agent_Id)->
-		case random:uniform() < ?SEARCH_PARAMTERS_MUTATION_PROBABILITY of
+		case rand:uniform() < ?SEARCH_PARAMTERS_MUTATION_PROBABILITY of
 			true ->
-				TotMutations = random:uniform(length(?ES_MUTATORS)),
+				TotMutations = rand:uniform(length(?ES_MUTATORS)),
 				apply_ESMutators(Agent_Id,TotMutations);
 			false ->
 				ok
@@ -74,7 +73,7 @@ mutate(Agent_Id)->
 			done;
 		apply_ESMutators(Agent_Id,MutationIndex)->
 			ES_Mutators = ?ES_MUTATORS,
-			ES_Mutator = lists:nth(random:uniform(length(ES_Mutators)),ES_Mutators),
+			ES_Mutator = lists:nth(rand:uniform(length(ES_Mutators)),ES_Mutators),
 			%io:format("Evolutionary Strategy Mutation Operator:~p~n",[ES_Mutator]),
 			Result = genome_mutator:ES_Mutator(Agent_Id),
 			case Result of
@@ -111,7 +110,7 @@ mutate(Agent_Id)->
 			
 			select_random_MO(MutatorsP)->
 				TotSize = lists:sum([SliceSize || {_MO,SliceSize} <- MutatorsP]),
-				Choice=random:uniform(TotSize),
+				Choice=rand:uniform(TotSize),
 				select_random_MO(MutatorsP,Choice,0).
 				
 				select_random_MO([{MO,SliceSize}|MOs],Choice,Range_From)->
@@ -132,7 +131,7 @@ mutate_tuning_selection(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_tuning_selection/1:: Nothing to mutate, only a single function available.");
 		Tuning_Selection_Functions->
-			New_TSF = lists:nth(random:uniform(length(Tuning_Selection_Functions)),Tuning_Selection_Functions),
+			New_TSF = lists:nth(rand:uniform(length(Tuning_Selection_Functions)),Tuning_Selection_Functions),
 			U_A = A#agent{tuning_selection_f = New_TSF},
 			genotype:write(U_A)
 	end.
@@ -144,7 +143,7 @@ mutate_tuning_annealing(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_tuning_annealing/1:: Nothing to mutate, only a single function available.");
 		Tuning_Annealing_Parameters->
-			New_TAP = lists:nth(random:uniform(length(Tuning_Annealing_Parameters)),Tuning_Annealing_Parameters),
+			New_TAP = lists:nth(rand:uniform(length(Tuning_Annealing_Parameters)),Tuning_Annealing_Parameters),
 			U_A = A#agent{annealing_parameter = New_TAP},
 			genotype:write(U_A)
 	end.
@@ -156,7 +155,7 @@ mutate_tot_topological_mutations(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_tuning_selection/1:: Nothing to mutate, only a single function available.");
 		Tuning_Selection_Functions->
-			New_TSF = lists:nth(random:uniform(length(Tuning_Selection_Functions)),Tuning_Selection_Functions),
+			New_TSF = lists:nth(rand:uniform(length(Tuning_Selection_Functions)),Tuning_Selection_Functions),
 			U_A = A#agent{tuning_selection_f = New_TSF},
 			genotype:write(U_A)
 	end.
@@ -168,7 +167,7 @@ mutate_heredity_type(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_heredity_type/1:: Nothing to mutate, only a single function available.");
 		Heredity_Type_Pool->
-			New_HT = lists:nth(random:uniform(length(Heredity_Type_Pool)),Heredity_Type_Pool),
+			New_HT = lists:nth(rand:uniform(length(Heredity_Type_Pool)),Heredity_Type_Pool),
 			U_A = A#agent{heredity_type = New_HT},
 			genotype:write(U_A)
 	end.
@@ -180,7 +179,7 @@ mutate_weights(Agent_Id)->
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
 
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
 	Input_IdPs = N#neuron.input_idps,
 	U_Input_IdPs = perturb_IdPs(Input_IdPs),
@@ -204,9 +203,9 @@ mutate_weights(Agent_Id)->
 %perturb_IdPs/1 accepts the Input_IdPs list of the format:[{Id,Weights}...], calculates the total number of weights in the Input_IdPs, and then calculates the mutation probability MP, which is 1/sqrt(Tot_Weights). Once the mutation probability is calculated, each weight in the Input_IdPs list has a chance of MP to be perturbed/mutated. Once all the weights in the Input_IdPs list had a chance of being mutated, the updated Input_IdPs is returned to the caller.
 
 	perturb_weightsP(MP,[{W,PL}|Weights],Acc)->
-		U_W = case random:uniform() < MP of
+		U_W = case rand:uniform() < MP of
 			true->
-				sat((random:uniform()-0.5)*?DELTA_MULTIPLIER+W,-?SAT_LIMIT,?SAT_LIMIT);
+				sat((rand:uniform()-0.5)*?DELTA_MULTIPLIER+W,-?SAT_LIMIT,?SAT_LIMIT);
 			false ->
 				W
 		end,
@@ -227,16 +226,16 @@ add_bias(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	Generation = A#agent.generation,
 	
 	N = genotype:read({neuron,N_Id}),
 	SI_IdPs = N#neuron.input_idps,
 	MI_IdPs = N#neuron.input_idps_modulation,
 	{PFName,_NLParameters} = N#neuron.pf,
-	case {lists:keymember(bias,1,SI_IdPs), lists:keymember(bias,1,MI_IdPs), PFName == neuromodulation, random:uniform(2)} of
+	case {lists:keymember(bias,1,SI_IdPs), lists:keymember(bias,1,MI_IdPs), PFName == neuromodulation, rand:uniform(2)} of
 		{_,false,true,2} ->
-			U_MI_IdPs = lists:append(MI_IdPs,[{bias,[{random:uniform()-0.5,plasticity:PFName(weight_parameters)}]}]),
+			U_MI_IdPs = lists:append(MI_IdPs,[{bias,[{rand:uniform()-0.5,plasticity:PFName(weight_parameters)}]}]),
 			U_N = N#neuron{
 				input_idps_modulation = U_MI_IdPs,
 				generation = Generation},
@@ -248,7 +247,7 @@ add_bias(Agent_Id)->
 		{true,_,_,_} ->
 			exit("********ERROR:add_bias:: This Neuron already has a bias in input_idps.");
 		{false,_,_,_} ->
-			U_SI_IdPs = lists:append(SI_IdPs,[{bias,[{random:uniform()-0.5,plasticity:PFName(weight_parameters)}]}]),
+			U_SI_IdPs = lists:append(SI_IdPs,[{bias,[{rand:uniform()-0.5,plasticity:PFName(weight_parameters)}]}]),
 			U_N = N#neuron{
 				input_idps = U_SI_IdPs,
 				generation = Generation},
@@ -265,14 +264,14 @@ remove_bias(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	Generation = A#agent.generation,
 	
 	N = genotype:read({neuron,N_Id}),
 	SI_IdPs = N#neuron.input_idps,
 	MI_IdPs = N#neuron.input_idps_modulation,
 	{PFName,_NLParameters} = N#neuron.pf,
-	case {lists:keymember(bias,1,SI_IdPs), lists:keymember(bias,1,MI_IdPs), PFName == neuromodulation, random:uniform(2)} of
+	case {lists:keymember(bias,1,SI_IdPs), lists:keymember(bias,1,MI_IdPs), PFName == neuromodulation, rand:uniform(2)} of
 		{_,true,true,2} ->%Remove modulatory bias
 			U_MI_IdPs = lists:keydelete(bias,1,MI_IdPs),
 			U_N = N#neuron{
@@ -303,7 +302,7 @@ mutate_af(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	Generation = A#agent.generation,
 	
 	N = genotype:read({neuron,N_Id}),
@@ -312,7 +311,7 @@ mutate_af(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_af:: There are no other activation functions to use.");
 		Activation_Functions ->
-			NewAF = lists:nth(random:uniform(length(Activation_Functions)),Activation_Functions),
+			NewAF = lists:nth(rand:uniform(length(Activation_Functions)),Activation_Functions),
 			U_N = N#neuron{af=NewAF,generation=Generation},
 			EvoHist = A#agent.evo_hist,
 			U_EvoHist = [{mutate_af,N_Id}|EvoHist],
@@ -327,7 +326,7 @@ mutate_pf(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	Generation = A#agent.generation,
 	
 	N = genotype:read({neuron,N_Id}),
@@ -336,7 +335,7 @@ mutate_pf(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_pf:: There are no other plasticity functions to use.");
 		Other_PFNames ->
-			New_PFName = lists:nth(random:uniform(length(Other_PFNames)),Other_PFNames),
+			New_PFName = lists:nth(rand:uniform(length(Other_PFNames)),Other_PFNames),
 			New_NLParameters = plasticity:New_PFName(neural_parameters),
 			NewPF = {New_PFName,New_NLParameters},
 			InputIdPs = N#neuron.input_idps,
@@ -358,7 +357,7 @@ mutate_plasticity_parameters(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
 	{PFName,_Parameters} = N#neuron.pf,
 	U_N = plasticity:PFName({N_Id,mutate}),
@@ -374,7 +373,7 @@ mutate_aggrf(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	Generation = A#agent.generation,
 	
 	N = genotype:read({neuron,N_Id}),
@@ -383,7 +382,7 @@ mutate_aggrf(Agent_Id)->
 		[] ->
 			exit("********ERROR:mutate_aggrf:: There are no other aggregation functions to use.");
 		Aggregation_Functions ->
-			NewAggrF = lists:nth(random:uniform(length(Aggregation_Functions)),Aggregation_Functions),
+			NewAggrF = lists:nth(rand:uniform(length(Aggregation_Functions)),Aggregation_Functions),
 			U_N = N#neuron{aggr_f=NewAggrF,generation=Generation},
 			EvoHist = A#agent.evo_hist,
 			U_EvoHist = [{mutate_aggrf,N_Id}|EvoHist],
@@ -456,7 +455,7 @@ link_FromNeuronToNeuron(Agent_Id,From_NeuronId,To_NeuronId)->
 					true -> qlog:xLog(qStatus, "link_ToNeuron OVL mismatch FromId=~p ToId=~p FromOVL=~p WLen=~p", [FromId, ToN#neuron.id, FromOVL, length(WeightsP)]);
 					false -> ok
 				end,
-				case {PFName == neuromodulation, random:uniform(2)} of
+				case {PFName == neuromodulation, rand:uniform(2)} of
 					{true,2} ->
 						U_ToMI_IdPs = [{FromId, WeightsP}|ToMI_IdPs],
 						ToN#neuron{
@@ -642,7 +641,7 @@ add_outlink(Agent_Id)->
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
 	%A_Ids = Cx#cortex.actuator_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
 	Output_Ids = N#neuron.output_ids,
 	Outlink_NIdPool = filter_OutlinkIdPool(A#agent.constraint,N_Id,N_Ids),
@@ -650,7 +649,7 @@ add_outlink(Agent_Id)->
 		[] ->
 			exit("********ERROR:add_outlink:: Neuron already connected to all ids");
 		Available_Ids ->
-			To_Id = lists:nth(random:uniform(length(Available_Ids)),Available_Ids),
+			To_Id = lists:nth(rand:uniform(length(Available_Ids)),Available_Ids),
 			link_FromElementToElement(Agent_Id,N_Id,To_Id),
 			EvoHist = A#agent.evo_hist,
 			U_EvoHist = [{add_outlink,N_Id,To_Id}|EvoHist],
@@ -682,7 +681,7 @@ add_inlink(Agent_Id)->
 			Substrate=genotype:read({substrate,Substrate_Id}),
 			Substrate#substrate.cpp_ids
 	end,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
 	{I_Ids,_WeightPLists} = lists:unzip(N#neuron.input_idps),
 	Inlink_NIdPool = filter_InlinkIdPool(A#agent.constraint,N_Id,N_Ids),
@@ -690,7 +689,7 @@ add_inlink(Agent_Id)->
 		[] ->
 			exit("********ERROR:add_INLink:: Neuron already connected from all ids");
 		Available_Ids ->
-			From_Id = lists:nth(random:uniform(length(Available_Ids)),Available_Ids),
+			From_Id = lists:nth(rand:uniform(length(Available_Ids)),Available_Ids),
 			link_FromElementToElement(Agent_Id,From_Id,N_Id),
 			EvoHist = A#agent.evo_hist,
 			U_EvoHist = [{add_inlink,From_Id,N_Id}|EvoHist],
@@ -723,7 +722,7 @@ add_neuron(Agent_Id)->%Adds neuron and connects it to other neurons, not sensors
 			Substrate=genotype:read({substrate,Substrate_Id}),
 			Substrate#substrate.cpp_ids
 	end,
-	{TargetLayer,TargetNeuron_Ids} = lists:nth(random:uniform(length(Pattern)),Pattern),
+	{TargetLayer,TargetNeuron_Ids} = lists:nth(rand:uniform(length(Pattern)),Pattern),
 	NewN_Id = {{TargetLayer,genotype:generate_UniqueId()},neuron},
 	U_N_Ids = [NewN_Id|N_Ids],
 	U_Pattern = lists:keyreplace(TargetLayer, 1, Pattern, {TargetLayer,[NewN_Id|TargetNeuron_Ids]}),
@@ -737,8 +736,8 @@ add_neuron(Agent_Id)->%Adds neuron and connects it to other neurons, not sensors
 		true ->
 			exit("********ERROR::add_neuron(Agent_Id)::Can't add new neuron here, Inlink_NIdPool or Outlink_NIdPool is empty.");
 		false ->
-			From_ElementId = lists:nth(random:uniform(length(FromElementId_Pool)),FromElementId_Pool),
-			To_ElementId = lists:nth(random:uniform(length(ToElementId_Pool)),ToElementId_Pool),
+			From_ElementId = lists:nth(rand:uniform(length(FromElementId_Pool)),FromElementId_Pool),
+			To_ElementId = lists:nth(rand:uniform(length(ToElementId_Pool)),ToElementId_Pool),
 			link_FromElementToElement(Agent_Id,From_ElementId,NewN_Id),
 			link_FromElementToElement(Agent_Id,NewN_Id,To_ElementId),
 			U_EvoHist = [{add_neuron,From_ElementId,NewN_Id,To_ElementId}|A#agent.evo_hist],
@@ -755,11 +754,11 @@ outsplice(Agent_Id)->
 	Cx_Id = A#agent.cx_id,
 	Cx = genotype:read({cortex,Cx_Id}),
 	N_Ids = Cx#cortex.neuron_ids,
-	N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
 	{{LayerIndex,_UId},neuron} = N_Id,
 %Choose a random neuron in the output_ids for splicing.
-	O_Id = lists:nth(random:uniform(length(N#neuron.output_ids)),N#neuron.output_ids),
+	O_Id = lists:nth(rand:uniform(length(N#neuron.output_ids)),N#neuron.output_ids),
 	{{OutputLayerIndex,_Output_UId},_OutputType} = O_Id,
 %Create a new Layer, or select an existing one between N_Id and the O_Id, and create the new unlinked neuron.
 	NewLI = case OutputLayerIndex >= LayerIndex of
@@ -850,13 +849,13 @@ add_sensorlink(Agent_Id)->
 			Substrate=genotype:read({substrate,Substrate_Id}),
 			Substrate#substrate.cpp_ids
 	end,
-	S_Id = lists:nth(random:uniform(length(S_Ids)),S_Ids),
+	S_Id = lists:nth(rand:uniform(length(S_Ids)),S_Ids),
 	S = genotype:read({sensor,S_Id}),
 	case N_Ids -- S#sensor.fanout_ids of
 		[] ->
 			exit("********ERROR:add_sensorlink:: Sensor already connected to all N_Ids");
 		Available_Ids ->
-			N_Id = lists:nth(random:uniform(length(Available_Ids)),Available_Ids),
+			N_Id = lists:nth(rand:uniform(length(Available_Ids)),Available_Ids),
 			link_FromElementToElement(Agent_Id,S_Id,N_Id),
 			EvoHist = A#agent.evo_hist,
 			U_EvoHist = [{add_sensorlink,S_Id,N_Id}|EvoHist],
@@ -877,13 +876,13 @@ add_actuatorlink(Agent_Id)->%TODO: There should be a preference towards non full
 			Substrate=genotype:read({substrate,Substrate_Id}),
 			Substrate#substrate.cep_ids
 	end,
-	A_Id = lists:nth(random:uniform(length(A_Ids)),A_Ids),
+	A_Id = lists:nth(rand:uniform(length(A_Ids)),A_Ids),
 	A = genotype:read({actuator,A_Id}),
 	case N_Ids -- A#actuator.fanin_ids of
 		[] ->
 			exit("********ERROR:add_actuatorlink:: Actuator already connected from all N_Ids");
 		Available_Ids ->
-			N_Id = lists:nth(random:uniform(length(Available_Ids)),Available_Ids),
+			N_Id = lists:nth(rand:uniform(length(Available_Ids)),Available_Ids),
 			link_FromElementToElement(Agent_Id,N_Id,A_Id),
 			EvoHist = Agent#agent.evo_hist,
 			U_EvoHist = [{add_actuatorlink,N_Id,A_Id}|EvoHist],
@@ -903,13 +902,13 @@ add_sensor(Agent_Id)->%TODO: There should be a preference towards adding sensors
 			exit("********ERROR:add_sensor(Agent_Id):: NN system is already using all available sensors");
 		Available_Sensors ->
 			NewS_Id = {{-1,genotype:generate_UniqueId()},sensor},
-			NewSensor=(lists:nth(random:uniform(length(Available_Sensors)),Available_Sensors))#sensor{id=NewS_Id,cx_id=Cx_Id},
+			NewSensor=(lists:nth(rand:uniform(length(Available_Sensors)),Available_Sensors))#sensor{id=NewS_Id,cx_id=Cx_Id},
 			EvoHist = Agent#agent.evo_hist,
 			case Agent#agent.encoding_type of
 				neural->
 					genotype:write(NewSensor),
 					N_Ids = Cx#cortex.neuron_ids,
-					N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+					N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 					link_FromElementToElement(Agent_Id,NewS_Id,N_Id),
 					U_EvoHist = [{add_sensor,NewS_Id,N_Id}|EvoHist];
 				substrate ->
@@ -935,13 +934,13 @@ add_actuator(Agent_Id)->%TODO: There should be a preference towards adding actua
 			exit("********ERROR:add_actuator(Agent_Id):: NN system is already using all available actuators");
 		Available_Actuators ->
 			NewA_Id = {{1,genotype:generate_UniqueId()},actuator},
-			NewActuator=(lists:nth(random:uniform(length(Available_Actuators)),Available_Actuators))#actuator{id=NewA_Id,cx_id=Cx_Id},
+			NewActuator=(lists:nth(rand:uniform(length(Available_Actuators)),Available_Actuators))#actuator{id=NewA_Id,cx_id=Cx_Id},
 			EvoHist = Agent#agent.evo_hist,
 			case Agent#agent.encoding_type of
 				neural ->
 					genotype:write(NewActuator),
 					N_Ids = Cx#cortex.neuron_ids,
-					N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+					N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 					link_FromElementToElement(Agent_Id,N_Id,NewA_Id),
 					U_EvoHist = [{add_actuator,N_Id,NewA_Id}|EvoHist];
 				substrate ->
@@ -973,11 +972,11 @@ add_cpp(Agent_Id)->%TODO: There should be a preference towards adding substrate_
 					exit("********ERROR:add_cpp(Agent_Id):: NN system is already using all available substrate_cpps");
 				Available_CPPs ->
 					NewCPP_Id = {{-1,genotype:generate_UniqueId()},sensor},
-					NewCPP=(lists:nth(random:uniform(length(Available_CPPs)),Available_CPPs))#sensor{id=NewCPP_Id,cx_id=Cx_Id},
+					NewCPP=(lists:nth(rand:uniform(length(Available_CPPs)),Available_CPPs))#sensor{id=NewCPP_Id,cx_id=Cx_Id},
 					EvoHist = Agent#agent.evo_hist,
 					genotype:write(NewCPP),
 					N_Ids = Cx#cortex.neuron_ids,
-					N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+					N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 					link_FromElementToElement(Agent_Id,NewCPP_Id,N_Id),
 					U_EvoHist = [{add_cpp,NewCPP_Id,N_Id}|EvoHist],
 					U_Substrate = Substrate#substrate{cpp_ids=[NewCPP_Id|CPP_Ids]},
@@ -1004,11 +1003,11 @@ add_cep(Agent_Id)->
 					exit("********ERROR:add_cep(Agent_Id):: NN system is already using all available substrate_cpps");
 				Available_CEPs ->
 					NewCEP_Id = {{-1,genotype:generate_UniqueId()},actuator},
-					NewCEP=(lists:nth(random:uniform(length(Available_CEPs)),Available_CEPs))#actuator{id=NewCEP_Id,cx_id=Cx_Id},
+					NewCEP=(lists:nth(rand:uniform(length(Available_CEPs)),Available_CEPs))#actuator{id=NewCEP_Id,cx_id=Cx_Id},
 					EvoHist = Agent#agent.evo_hist,
 					genotype:write(NewCEP),
 					N_Ids = Cx#cortex.neuron_ids,
-					N_Id = lists:nth(random:uniform(length(N_Ids)),N_Ids),
+					N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 					link_FromElementToElement(Agent_Id,N_Id,NewCEP_Id),
 					U_EvoHist = [{add_cep,NewCEP_Id,N_Id}|EvoHist],
 					U_Substrate = Substrate#substrate{cep_ids=[NewCEP_Id|CEP_Ids]},

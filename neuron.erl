@@ -28,7 +28,6 @@ gen(ExoSelf_PId,Node)->
 prep(ExoSelf_PId) ->
 	try
 		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
-		random:seed(now()),
 		receive 
 			{ExoSelf_PId,{Id,Cx_PId,AF,PF,AggrF,HeredityType,SI_PIdPs,MI_PIdPs,Output_PIds,RO_PIds}} ->
 				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p recieved init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
@@ -212,9 +211,9 @@ perturb_IPIdPs(_Spread,_MP,[],Acc)->
 %The perturb_IPIdPs/1 function calculates the probability with which each neuron in the Input_PIdPs is chosen to be perturbed. The probablity is based on the total number of weights in the Input_PIdPs list, with the actual mutation probablity equating to the inverse of square root of total number of weights. The perturb_IPIdPs/3 function goes through each weights block and calls the perturb_weights/3 to perturb the weights.
 
 	perturb_weightsP(Spread,MP,[{W,LPs}|Weights],Acc)->
-		U_W = case random:uniform() < MP of
+		U_W = case rand:uniform() < MP of
 			true->
-				sat((random:uniform()-0.5)*2*Spread+W,-?SAT_LIMIT,?SAT_LIMIT);
+				sat((rand:uniform()-0.5)*2*Spread+W,-?SAT_LIMIT,?SAT_LIMIT);
 			false ->
 				W
 		end,

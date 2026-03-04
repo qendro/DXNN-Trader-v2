@@ -8,8 +8,6 @@ gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
 
 prep(ExoSelf_PId) ->
-	{V1,V2,V3} = now(),
-	random:seed(V1,V2,V3),
 		%qlog:xLog(pid_to_list(ExoSelf_PId), "Cortex: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 	receive 
 		{ExoSelf_PId,Id,SPIds,NPIds,APIds} ->

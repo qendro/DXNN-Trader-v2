@@ -34,7 +34,7 @@ rng(ExoSelf_PId,VL,_Scape)->
 rng1(0,Acc)->
 	Acc;
 rng1(VL,Acc)-> 
-	rng1(VL-1,[random:uniform()|Acc]).
+	rng1(VL-1,[rand:uniform()|Acc]).
 %rng/2 is a simple random number generator that produces a vector of random values, each between 0 and 1. The length of the vector is defined by the VL, which itself is specified within the sensor record.
 
 %This function encodes the Price Chart Input (PCI) sensor data.

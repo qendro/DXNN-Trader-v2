@@ -43,8 +43,6 @@ stop()->
 	 
 %%============================================ gen_server callbacks 
 init({Mods,PublicScapes}) -> 
-	{A,B,C} = now(), 
-	random:seed(A,B,C), 
 	process_flag(trap_exit,true), 
 	register(polis,self()), 
 	io:format("Parameters:~p~n",[{Mods,PublicScapes}]), 
