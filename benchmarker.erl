@@ -308,103 +308,15 @@ trace2graph(TraceFileName)->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% AWS Spot Instance Support %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-% Checkpoint with fsync before shutdown
+%% Checkpoint and exit - delegates to exp_runner
 checkpoint_and_exit() ->
 	qlog:benchmarker(self(),"CHECKPOINT_AND_EXIT"),
-	checkpoint(),
-	
-	%% Graceful shutdown
-    init:stop().
+	exp_runner:checkpoint_and_exit().
 
+%% Checkpoint - delegates to exp_runner
 checkpoint() ->
-    %% Stop new work (best-effort, fast)
-    catch gen_server:call(population_monitor, pause, 500),
-    
-    %% Sync Mnesia and create backup with timestamp
-    catch mnesia:sync_log(),
-    catch filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
-    
-    Timestamp = integer_to_list(erlang:system_time(second)),
-    Backup = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".dmp",
-    
-    case mnesia:backup(Backup) of
-        ok -> 
-            %% Copy logs to checkpoint directory
-            copy_logs_to_checkpoint("/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp),
-            ok;
-        {error, Reason} ->
-            error_logger:error_msg("Backup failed: ~p~n", [Reason])
-    end.
+    exp_runner:checkpoint().
 
-
-% Restore from latest checkpoint (no-op if absent)
+%% Restore - delegates to exp_runner
 maybe_restore() ->
-    case filelib:wildcard("/var/lib/dxnn/checkpoints/checkpoint-*.dmp") of
-        [] -> 
-            error_logger:info_msg("No checkpoint files found~n"),
-            ok;
-        Files ->
-            Latest = lists:last(lists:sort(Files)),
-            error_logger:info_msg("Restoring from: ~p~n", [Latest]),
-            case mnesia:restore(Latest, [{default_op, recreate_tables}]) of
-                {atomic, _} -> 
-                    error_logger:info_msg("Restore successful~n"),
-                    
-                    %% Restore logs from checkpoint
-                    restore_logs_from_checkpoint(Latest),
-                    
-                    ok;
-                {aborted, Reason} ->
-                    error_logger:error_msg("Restore failed: ~p~n", [Reason]),
-                    {error, Reason}
-            end
-    end.
-
-% Copy logs to checkpoint directory
-copy_logs_to_checkpoint(CheckpointDir) ->
-    case file:read_file_info("logs/dxnn_run.log") of
-        {ok, _} ->
-            DestFile = CheckpointDir ++ "/dxnn_run.log",
-            file:copy("logs/dxnn_run.log", DestFile), 
-			qlog:benchmarker(self(),"LOGS_COPIED_TO_CHECKPOINT");
-        _ -> ok
-    end.
-
-% Restore logs from checkpoint
-restore_logs_from_checkpoint(CheckpointFile) ->
-    BaseName = filename:basename(CheckpointFile, ".dmp"),
-    LogFile = "/var/lib/dxnn/checkpoints/" ++ BaseName ++ "/dxnn_run.log",
-    case file:read_file_info(LogFile) of
-        {ok, _} ->
-            file:copy(LogFile, "logs/dxnn_run.log");
-        _ -> ok
-    end.
-
-% Completion signal for normal training completion
-% Creates completion checkpoint with timestamp and backup file info
-% NO IMDS, NO S3, NO HTTP dependencies - minimal DXNN change
-completion_signal() ->
-    error_logger:info_msg("Training completed - creating completion checkpoint~n"),
-    
-    %% Sync Mnesia and create completion backup
-    catch mnesia:sync_log(),
-    catch filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
-    
-    Timestamp = integer_to_list(erlang:system_time(second)),
-    Backup = "/var/lib/dxnn/checkpoints/completion-" ++ Timestamp ++ ".dmp",
-    
-    case mnesia:backup(Backup) of
-        ok -> 
-            %% Create completion metadata
-            MetadataFile = "/var/lib/dxnn/checkpoints/completion-" ++ Timestamp ++ ".metadata.json",
-            {ok, Fd} = file:open(MetadataFile, [write]),
-            io:format(Fd, "{\"timestamp\": ~p, \"backup_file\": ~p, \"type\": \"completion\"}~n", 
-                     [Timestamp, Backup]),
-            file:sync(Fd),
-            file:close(Fd),
-            error_logger:info_msg("Completion checkpoint created: ~p~n", [Backup]),
-            ok;
-        {error, Reason} ->
-            error_logger:error_msg("Completion backup failed: ~p~n", [Reason]),
-            {error, Reason}
-    end.
+    exp_runner:maybe_restore().

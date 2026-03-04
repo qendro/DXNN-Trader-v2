@@ -797,7 +797,7 @@ detect_aws_environment() ->
     filelib:is_dir("/var/lib/dxnn/checkpoints") andalso 
     os:getenv("S3_BUCKET") =/= false.
 
-%% Create checkpoint
+%% Create checkpoint - copies full Mnesia and logs directories
 checkpoint() ->
     case should_checkpoint() of
         true -> do_checkpoint();
@@ -808,93 +808,86 @@ do_checkpoint() ->
     % Pause population monitor
     catch gen_server:call(population_monitor, pause, 500),
     
-    % Generate checkpoint timestamp
+    % Sync Mnesia before checkpoint
+    catch mnesia:sync_log(),
+    
+    % Generate checkpoint timestamp and directory
     Timestamp = integer_to_list(erlang:system_time(second)),
     CheckpointDir = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp,
     
-    % Create checkpoints
-    checkpoint_mnesia(Timestamp),
-    checkpoint_logs(CheckpointDir),
-    checkpoint_files(CheckpointDir),
-    
-    ok.
-
-%% Checkpoint Mnesia database
-checkpoint_mnesia(Timestamp) ->
-    catch mnesia:sync_log(),
-    catch filelib:ensure_dir("/var/lib/dxnn/checkpoints/"),
-    
-    Backup = "/var/lib/dxnn/checkpoints/checkpoint-" ++ Timestamp ++ ".dmp",
-    
-    case mnesia:backup(Backup) of
-        ok -> 
-            qlog:exp_runner(checkpoint_mnesia_success, {Backup}),
-            ok;
-        {error, Reason} ->
-            error_logger:error_msg("Mnesia checkpoint failed: ~p~n", [Reason]),
-            {error, Reason}
-    end.
-
-%% Checkpoint log files
-checkpoint_logs(CheckpointDir) ->
+    % Ensure checkpoint directory exists
     catch filelib:ensure_dir(CheckpointDir ++ "/"),
     
-    LogFiles = [
-        {"logs/dxnn_run.log", "dxnn_run.log"},
-        {"logs/qlog.log", "qlog.log"}
-    ],
+    % Copy full Mnesia directory if it exists
+    case filelib:is_dir("Mnesia.nonode@nohost") of
+        true ->
+            copy_directory("Mnesia.nonode@nohost", CheckpointDir ++ "/Mnesia.nonode@nohost"),
+            qlog:exp_runner(checkpoint_mnesia_copied, {CheckpointDir});
+        false ->
+            error_logger:warning_msg("Mnesia directory not found, skipping~n")
+    end,
     
-    lists:foreach(fun({SourcePath, DestName}) ->
-        case file:read_file_info(SourcePath) of
-            {ok, _} ->
-                DestFile = CheckpointDir ++ "/" ++ DestName,
-                case file:copy(SourcePath, DestFile) of
-                    {ok, _} -> ok;
-                    {error, Reason} ->
-                        error_logger:warning_msg("Failed to copy ~p: ~p~n", 
-                                                [SourcePath, Reason])
-                end;
-            _ -> ok
-        end
-    end, LogFiles).
-
-%% Checkpoint additional files (config, metadata, etc.)
-checkpoint_files(CheckpointDir) ->
-    catch filelib:ensure_dir(CheckpointDir ++ "/"),
+    % Copy full logs directory if it exists
+    case filelib:is_dir("logs") of
+        true ->
+            copy_directory("logs", CheckpointDir ++ "/logs"),
+            qlog:exp_runner(checkpoint_logs_copied, {CheckpointDir});
+        false ->
+            error_logger:warning_msg("Logs directory not found, skipping~n")
+    end,
     
-    Files = [
-        {"config.erl", "config.erl"}
-    ],
-    
-    lists:foreach(fun({SourcePath, DestName}) ->
-        case file:read_file_info(SourcePath) of
-            {ok, _} ->
-                DestFile = CheckpointDir ++ "/" ++ DestName,
-                case file:copy(SourcePath, DestFile) of
-                    {ok, _} -> ok;
-                    {error, Reason} ->
-                        error_logger:warning_msg("Failed to copy ~p: ~p~n", 
-                                                [SourcePath, Reason])
-                end;
-            _ -> ok
-        end
-    end, Files),
+    % Copy config.erl if it exists
+    case filelib:is_file("config.erl") of
+        true ->
+            file:copy("config.erl", CheckpointDir ++ "/config.erl");
+        false ->
+            ok
+    end,
     
     % Create checkpoint metadata
-    create_checkpoint_metadata(CheckpointDir).
+    create_checkpoint_metadata(CheckpointDir, Timestamp),
+    
+    qlog:exp_runner(checkpoint_complete, {CheckpointDir}),
+    ok.
+
+%% Copy directory recursively
+copy_directory(Source, Dest) ->
+    catch filelib:ensure_dir(Dest ++ "/"),
+    case file:list_dir(Source) of
+        {ok, Files} ->
+            lists:foreach(fun(File) ->
+                SourcePath = filename:join(Source, File),
+                DestPath = filename:join(Dest, File),
+                case filelib:is_dir(SourcePath) of
+                    true ->
+                        copy_directory(SourcePath, DestPath);
+                    false ->
+                        catch filelib:ensure_dir(DestPath),
+                        file:copy(SourcePath, DestPath)
+                end
+            end, Files);
+        {error, Reason} ->
+            error_logger:warning_msg("Failed to list directory ~p: ~p~n", [Source, Reason])
+    end.
 
 %% Create checkpoint metadata file
-create_checkpoint_metadata(CheckpointDir) ->
-    MetadataFile = CheckpointDir ++ "/checkpoint_metadata.json",
+create_checkpoint_metadata(CheckpointDir, Timestamp) ->
+    MetadataFile = CheckpointDir ++ "/_CHECKPOINT_INFO",
     Metadata = io_lib:format(
-        "{\"timestamp\": ~p, \"node\": \"~s\", \"type\": \"checkpoint\"}~n",
-        [erlang:system_time(second), atom_to_list(node())]
+        "{\"timestamp\": ~p, \"node\": \"~s\", \"type\": \"checkpoint\", \"created_at\": \"~s\"}~n",
+        [Timestamp, atom_to_list(node()), format_timestamp()]
     ),
     case file:write_file(MetadataFile, Metadata) of
         ok -> ok;
         {error, Reason} ->
             error_logger:warning_msg("Failed to write metadata: ~p~n", [Reason])
     end.
+
+%% Format timestamp as ISO 8601
+format_timestamp() ->
+    {{Year, Month, Day}, {Hour, Min, Sec}} = calendar:universal_time(),
+    io_lib:format("~4..0B-~2..0B-~2..0BT~2..0B:~2..0B:~2..0BZ",
+                  [Year, Month, Day, Hour, Min, Sec]).
 
 %% Checkpoint and exit (for experiment completion and spot interruptions)
 %% Only exits if running in AWS environment to trigger S3 upload
@@ -908,5 +901,70 @@ checkpoint_and_exit() ->
         false ->
             qlog:exp_runner(checkpoint_and_exit, {local_env, continuing}),
             ok
+    end.
+
+%% Restore from latest checkpoint (no-op if absent)
+maybe_restore() ->
+    case filelib:wildcard("/var/lib/dxnn/checkpoints/checkpoint-*/_CHECKPOINT_INFO") of
+        [] -> 
+            error_logger:info_msg("No checkpoint files found~n"),
+            ok;
+        Files ->
+            % Get latest checkpoint directory
+            Latest = lists:last(lists:sort(Files)),
+            CheckpointDir = filename:dirname(Latest),
+            error_logger:info_msg("Restoring from: ~p~n", [CheckpointDir]),
+            
+            % Restore Mnesia if exists
+            MnesiaSource = CheckpointDir ++ "/Mnesia.nonode@nohost",
+            case filelib:is_dir(MnesiaSource) of
+                true ->
+                    restore_directory(MnesiaSource, "Mnesia.nonode@nohost"),
+                    error_logger:info_msg("Mnesia restored from checkpoint~n");
+                false ->
+                    error_logger:warning_msg("No Mnesia directory in checkpoint~n")
+            end,
+            
+            % Restore logs if exists
+            LogsSource = CheckpointDir ++ "/logs",
+            case filelib:is_dir(LogsSource) of
+                true ->
+                    restore_directory(LogsSource, "logs"),
+                    error_logger:info_msg("Logs restored from checkpoint~n");
+                false ->
+                    error_logger:warning_msg("No logs directory in checkpoint~n")
+            end,
+            
+            % Restore config if exists
+            ConfigSource = CheckpointDir ++ "/config.erl",
+            case filelib:is_file(ConfigSource) of
+                true ->
+                    file:copy(ConfigSource, "config.erl"),
+                    error_logger:info_msg("Config restored from checkpoint~n");
+                false ->
+                    ok
+            end,
+            
+            ok
+    end.
+
+%% Restore directory recursively
+restore_directory(Source, Dest) ->
+    catch filelib:ensure_dir(Dest ++ "/"),
+    case file:list_dir(Source) of
+        {ok, Files} ->
+            lists:foreach(fun(File) ->
+                SourcePath = filename:join(Source, File),
+                DestPath = filename:join(Dest, File),
+                case filelib:is_dir(SourcePath) of
+                    true ->
+                        restore_directory(SourcePath, DestPath);
+                    false ->
+                        catch filelib:ensure_dir(DestPath),
+                        file:copy(SourcePath, DestPath)
+                end
+            end, Files);
+        {error, Reason} ->
+            error_logger:warning_msg("Failed to restore directory ~p: ~p~n", [Source, Reason])
     end.
 
