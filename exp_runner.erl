@@ -800,6 +800,19 @@ detect_aws_environment() ->
     filelib:is_dir("/var/lib/dxnn/checkpoints") andalso 
     os:getenv("S3_BUCKET") =/= false.
 
+%% Find Mnesia directory (handles both nonode@nohost and distributed node names)
+find_mnesia_directory() ->
+    % Try standard name first
+    case filelib:is_dir("Mnesia.nonode@nohost") of
+        true -> {ok, "Mnesia.nonode@nohost"};
+        false ->
+            % Look for any Mnesia.* directory
+            case filelib:wildcard("Mnesia.*") of
+                [] -> not_found;
+                [Dir | _] -> {ok, Dir}
+            end
+    end.
+
 %% Create checkpoint - copies full Mnesia and logs directories
 checkpoint() ->
     case should_checkpoint() of
@@ -821,12 +834,14 @@ do_checkpoint() ->
     % Ensure checkpoint directory exists
     catch filelib:ensure_dir(CheckpointDir ++ "/"),
     
-    % Copy full Mnesia directory if it exists
-    case filelib:is_dir("Mnesia.nonode@nohost") of
-        true ->
-            copy_directory("Mnesia.nonode@nohost", CheckpointDir ++ "/Mnesia.nonode@nohost"),
+    % Find and copy Mnesia directory (name varies based on node name)
+    MnesiaDir = find_mnesia_directory(),
+    case MnesiaDir of
+        {ok, SourceDir} ->
+            % Always copy to standard name for portability
+            copy_directory(SourceDir, CheckpointDir ++ "/Mnesia.nonode@nohost"),
             qlog:exp_runner(checkpoint_mnesia_copied, {CheckpointDir});
-        false ->
+        not_found ->
             error_logger:warning_msg("Mnesia directory not found, skipping~n")
     end,
     
