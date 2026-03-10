@@ -1,6 +1,6 @@
 
 -module(qlog).
--export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, log_agent_metadata/3, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0, print_genotype/1, agent_gen/2]).
+-export([agent/2, l1msg/2, l2msg/2, l3msg/2, morph/2, agent_morph/2, delete_agent_folder/1, init_debug/2, spawn_debug/2, ets_debug/2, process_debug/2, population/2, architecture/2, training/2, trading/2, agent_trades/2, agent_trades_generation/2, log_agent_metadata/3, genotype_snapshot/2, genotype_creation/1, genotype_mutation/3, genotype_fitness/3, genotype_weight_update/3, log_comment/2, generation_boundary/3, lineage_tracking/3, population_summary/2, evolution_milestone/2, benchmarker/2, exp_runner/2, delete_log_folder/0, delete_all/0, xLog/3, register_agent/2, process_monitor/1, genotype_log/3, pid_map_log/4, agent_reductions_log/3, get_run_id_from_population_id/1, log_agent_memory_usage/0, print_genotype/1, agent_gen/2]).
 -include("records.hrl").
 
 -define(AGENT_PID_MAP, agent_pid_map).
@@ -93,6 +93,29 @@ agent_trades(Agent_Id, Msg) ->
     {ok, File} = file:open(Filename, [append]),
     Timestamp = format_timestamp(),
     io:format(File, "~s | [AGENT:~p] ~s~n", [Timestamp, Agent_Id, Msg]),
+    file:close(File).
+
+%% Agent trades generation boundaries (generation start/end markers)
+%% Writes to logs/Benchmarker/agent_trades.log
+agent_trades_generation(Event, Data) ->
+    Dir = filename:join(get_log_root_dir(), "Benchmarker"),
+    ensure_directory_exists(Dir),
+    Filename = filename:join(Dir, "agent_trades.log"),
+    {ok, File} = file:open(Filename, [append]),
+    Timestamp = format_timestamp(),
+    
+    case Event of
+        generation_start ->
+            {_PopId, Generation, TotAgents} = Data,
+            io:format(File, "~s | generation_start | generation: ~p | total_agents: ~p~n",
+                [Timestamp, Generation, TotAgents]);
+        
+        generation_end ->
+            {_PopId, Generation, TotAgents} = Data,
+            io:format(File, "~s | generation_end   | generation: ~p | total_agents: ~p~n",
+                [Timestamp, Generation, TotAgents])
+    end,
+    
     file:close(File).
 
 %% Agent metadata tracking (encoding type, neurons, sensors, generation, run number, ex_pid)

@@ -101,6 +101,7 @@ init(S) ->
 	},
 	% Log generation_start for generation 0
 	qlog:exp_runner(generation_start, {Population_Id, 0, length(Agent_Ids)}),
+	qlog:agent_trades_generation(generation_start, {Population_Id, 0, length(Agent_Ids)}),
 	qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, 0, length(Agent_Ids)])),
 	{ok, State}.
 %In init/1 the population_monitor proces registers itself with the node under the name monitor, and sets all the needed parameters within its #state record. The function first extracts all the Agent_Ids that belong to the population using the extract_AgentIds/2 function. Each agent is then spawned/activated, converted from genotype to phenotype in the summon_agents/2 function. The summon_agents/2 function summons the agents and returns to the caller a list of tuples with the following format: [{Agent_Id,Agent_PId}...]. Once the state record's parameters have been set, the function drops into the main gen_server loop.
@@ -144,6 +145,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			% Log generation_end for the CURRENT generation that just finished
 			CurrentGen = S#state.pop_gen,
 			qlog:exp_runner(generation_end, {Population_Id, CurrentGen, S#state.tot_agents}),
+			qlog:agent_trades_generation(generation_end, {Population_Id, CurrentGen, S#state.tot_agents}),
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, CurrentGen, S#state.tot_agents])),
 			
 			% Now mutate to create next generation
@@ -152,6 +154,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			
 			% Log generation_start for the NEW generation
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, S#state.tot_agents])),
+			qlog:agent_trades_generation(generation_start, {Population_Id, U_PopGen, S#state.tot_agents}),
 			qlog:exp_runner(generation_start, {Population_Id, U_PopGen, S#state.tot_agents}),
 			case OpTag of
 				continue ->
@@ -168,6 +171,7 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 							FinalAgent_Ids = extract_AgentIds(Population_Id,all),
 							FinalTotAgents = length(FinalAgent_Ids),
 							qlog:exp_runner(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
+							qlog:agent_trades_generation(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
 							qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, FinalTotAgents])),
 							TotAgents=FinalTotAgents,
 							U_S=S#state{agent_ids=FinalAgent_Ids, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},

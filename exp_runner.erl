@@ -35,27 +35,51 @@ generate_population_id(RunIndex, SourcePopId) when is_binary(SourcePopId), byte_
     LineageId = extract_lineage_id(SourcePopId),
     generate_population_id_with_lineage(RunIndex, LineageId).
 
-%% Internal helper with lineage ID (4-char binary)
-generate_population_id_with_lineage(RunIndex, LineageId) when is_binary(LineageId), byte_size(LineageId) =:= 4 ->
+%% Internal helper with lineage ID (now includes timestamp: "2026-03-09T15-30-45Z_a3f9")
+generate_population_id_with_lineage(RunIndex, LineageId) when is_binary(LineageId) ->
     % Format: <<"<ISO8601>_<LineageId>_run<RunIndex>">>
-    % Example: <<"2025-02-11T15-30-45Z_a3f9_run1">>
+    % Example: <<"2025-02-11T15-30-45Z_2026-03-09T15-30-45Z_a3f9_run1">>
+    % Wait, that's redundant. Let me fix this.
+    %
+    % Better format: Just use lineage_id directly since it already has timestamp
+    % Population ID: <run_timestamp>_<lineage_id>_run<N>
+    % Where lineage_id = <experiment_start_timestamp>_<code>
+    %
+    % Example: 2025-02-11T15-30-45Z_2026-03-09T15-30-45Z_a3f9_run1
+    %          ↑ run start time      ↑ experiment start (lineage)
     Timestamp = format_iso8601(erlang:timestamp()),
     RunIndexStr = integer_to_list(RunIndex),
     <<Timestamp/binary, "_", LineageId/binary, "_run", (list_to_binary(RunIndexStr))/binary>>.
 
-%% Generate 4 random alphanumeric characters
+%% Generate 4 random alphanumeric characters + timestamp prefix for experiment folder
+%% Returns format: "2026-03-09T15-30-45Z_a3f9" (timestamp + 4-char code)
 generate_lineage_id() ->
     Chars = "abcdefghijklmnopqrstuvwxyz0123456789",
     RandomChars = [lists:nth(rand:uniform(length(Chars)), Chars) 
                    || _ <- lists:seq(1, 4)],
-    list_to_binary(RandomChars).
+    Timestamp = format_iso8601(erlang:timestamp()),
+    % Replace colons with hyphens for filesystem compatibility
+    TimestampStr = binary:replace(Timestamp, <<":">>, <<"-">>, [global]),
+    <<TimestampStr/binary, "_", (list_to_binary(RandomChars))/binary>>.
 
 %% Extract lineage ID from source population ID
 %% Format: <<"<ISO8601>_<LineageId>_run<RunIndex>">>
+%% LineageId is now: "2026-03-09T15-30-45Z_a3f9" (timestamp + 4-char code)
 extract_lineage_id(SourcePopId) ->
     case binary:split(SourcePopId, <<"_">>, [global]) of
-        [_Timestamp, LineageId | _] when byte_size(LineageId) =:= 4 ->
-            LineageId;
+        [_Timestamp, Part2, Part3 | _] ->
+            % LineageId is the middle parts: timestamp_code
+            % Reconstruct: _Timestamp is first part, Part2 is the timestamp of lineage, Part3 is the 4-char code
+            % Actually the format is: <timestamp>_<lineage_timestamp>_<lineage_code>_run<N>
+            % Wait, that's wrong. Let me reconsider.
+            % 
+            % New format should be:
+            % Population ID: <timestamp>_<lineage_id>_run<N>
+            % Where lineage_id itself is: <timestamp>_<code>
+            %
+            % So split gives: [timestamp, lineage_timestamp, code, "runN"]
+            % We want lineage_id = lineage_timestamp_code
+            <<Part2/binary, "_", Part3/binary>>;
         _ ->
             % Fallback: generate new if parsing fails
             generate_lineage_id()
@@ -576,9 +600,6 @@ loop(E, P_Id) ->
             % Checkpoint between runs
             checkpoint(),
             
-            % Trigger S3 upload after each run (incremental backup) with current population_id
-            trigger_s3_upload(P_Id),
-            
             qlog:xLog(qStatus, "exp_runner:loop | next_run=~p | tot_runs=~p", [U_RunIndex, E#experiment.tot_runs]),
             case U_RunIndex > E#experiment.tot_runs of
                 true ->
@@ -603,6 +624,10 @@ loop(E, P_Id) ->
                     % Checkpoint and exit if running in AWS (triggers S3 upload and finalization)
                     checkpoint_and_exit();
                 false ->
+                    % Trigger S3 upload only when another run is pending.
+                    % For the final run, wrapper-driven finalization handles upload/termination.
+                    trigger_s3_upload(P_Id),
+
                     % Continue to next run
                     qlog:xLog(qStatus, "exp_runner:loop | continuing | next_run=~p", [U_RunIndex]),
                     apply_run_configs(E#experiment.id, U_RunIndex, E#experiment.run_configs),
@@ -915,12 +940,16 @@ create_checkpoint_metadata(CheckpointDir, Timestamp) ->
     end.
 
 %% Extract lineage_id from population_id string (for metadata)
-%% Returns just the 4-char code: "7g6n" instead of full timestamp
+%% New format: population_id has embedded lineage with timestamp
+%% Population: 2025-02-11T15-30-45Z_2026-03-09T15-30-45Z_a3f9_run1
+%% Lineage: 2026-03-09T15-30-45Z_a3f9
 extract_lineage_from_string(PopulationId) when is_list(PopulationId) ->
-    case string:split(PopulationId, "_", all) of
-        [_Timestamp, LineageCode | _] when length(LineageCode) =:= 4 ->
-            % Return just the 4-char code
-            LineageCode;
+    % Split by underscore
+    Parts = string:split(PopulationId, "_", all),
+    case Parts of
+        [_RunTimestamp, LineageTimestamp, LineageCode, _Run] ->
+            % Reconstruct lineage: timestamp_code
+            LineageTimestamp ++ "_" ++ LineageCode;
         _ ->
             "unknown"
     end;
