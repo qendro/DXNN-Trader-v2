@@ -1,27 +1,54 @@
+# DXNN-Trader-v2: Distributed Neural Network Trading Platform
+
+## 🎯 System Overview
+
+DXNN-Trader-v2 is a sophisticated distributed neural network trading platform written in Erlang that combines neuro-evolution, dynamic substrates, and live trading capabilities. The system evolves trading agents through genetic algorithms and deploys them in both simulated and live market environments.
+
+### Core Architecture Components
+
+**Neuro-Evolution Engine:**
+- **Genotype Management**: `genotype.erl` - Agent blueprints stored as genomes
+- **Mutation Engine**: `genome_mutator.erl` - Evolutionary operators for genome modification
+- **Population Control**: `population_monitor.erl` - Manages agent populations and speciation
+- **Selection**: `selection_algorithm.erl` - Survival strategies (competition, top3)
+
+**Neural Network Runtime:**
+- **Agent Controller**: `exoself.erl` - Maps genotype→phenotype, manages agent lifecycle
+- **Central Coordinator**: `cortex.erl` - Synchronizes Sense-Think-Act cycles
+- **Neural Components**: `sensor.erl`, `neuron.erl`, `actuator.erl` - Distributed neural processes
+- **Substrate Layers**: `substrate.erl`, `substrate_cep.erl`, `substrate_cpp.erl` - Advanced neural structures
+
+**Market Environment:**
+- **Simulation**: `fx.erl`, `scape.erl` - Historical data and account simulation
+- **Live Trading**: `ib_connector.erl`, `live_trader.erl`, `live_scape.erl` - Interactive Brokers integration
+- **Data Management**: `fx_tables/` - Historical FX data (EURUSD 1m, 15m intervals)
+
+**Analysis & Monitoring:**
+- **Benchmarking**: `benchmarker.erl` - Performance testing and reporting
+- **Fitness Processing**: `fitness_postprocessor.erl` - Agent evaluation and ranking
+- **Utilities**: `genotype_utils.erl` - Agent inspection and statistics
+- **Checkpointing**: `exp_runner.erl` - Automatic state persistence for AWS spot instances
+
+## 🚀 Quick Start Guide
+
+### Prerequisites
+- Docker
+- Erlang/OTP 26+ (provided in Docker image)
+
+### Build & Run
 ```bash
+# Compile all modules
 make all
-make shell
-```
-``` erlang
-make_all:all().
-```
 
-# Build once
-```bash
+# Build and run Docker container
 docker build -t erlang-dev .
-
-# Run your neural network system
 docker run -it --rm -v ${PWD}:/app -w /app erlang-dev
-docker run -it --rm --network host -v ${PWD}:/app -w /app erlang-dev
-
-make:all([load]).
-launcher:start().
 ```
-``` erlang
-# Inside container:
+
+### Initialize System
+```erlang
+% Inside Erlang shell
 make:all().
-make:all([load]).
-qlog:delete_all().
 mnesia:create_schema([node()]).
 mnesia:start().
 fx:init().
@@ -29,530 +56,256 @@ fx:start().
 polis:create().
 polis:start().
 polis:sync().
-exp_runner:start(new_evo).
-exp_runner:start(fresh). 
+```
 
-process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, message_queue}, {format, per_line}]).
-process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, memory}, {format, per_line}]).
-process_monitor:log_process_info([{full_system, true}, {limit, 20}, {sort_by, reductions}, {format, per_line}]).
-
-process_monitor:log_process_info([{full_system, true}, {sort_by, memory}, {format, per_line}]).
-
-benchmarker:start(sliding_window_5, 
-bench_configs:get_run_configs()).
-
-benchmarker:start(sliding_window_5, 
-benchmarker:get_run_configs()).
-
-exp_runner:start(fresh).        % Uses configs from get_run_configs()
-exp_runner:start(new_evo)      % Uses configs from get_run_configs()
-exp_runner:start({evo, PopId})  % Uses configs from get_run_configs()
-
-%%Continue by experiment id (recommended)
-exp_runner:continue(<<"2026-02-22T03:38:47Z_p08s_run6">>).
-
-%%Start a NEW experiment seeded from an old population (not resume)
-exp_runner:start({evo, <<"2026-02-20T23:05:10Z_p08s_run7">>}).
-
-make:all().
-mnesia:start().
-fx:start().
-polis:start().
-exp_runner:continue(<<"2026-02-20T22:28:05Z_p08s_run4">>).
-
-
-
+### Common Operations
+```erlang
+% Start benchmark experiment
 benchmarker:start(sliding_window_5).
 
-benchmarker:start(sliding_window_5, []).
+% View best performing agent
+genotype_utils:print_best_genotype().
 
-benchmarker:start(sliding_window_5, benchmarker:get_run_configs()).
+% Run specific agent
+exoself:start(BestAgentId, self(), benchmark).
 
-benchmarker:start(chart_plane_5x10).
-# ... your neural network commands
-
+% Start live trading
+live_trading_main:start().
 ```
-## Reseting Mnesia
-```bash
-find . -name "*.beam" -delete
 
-fprof:trace([start, {file, "/tmp/profiling_trace.trace"}]).
-fprof:trace(stop).
+## 📁 Repository Structure
+
+### Core Neural Components
+| Module | Purpose | Key Functions |
+|--------|---------|---------------|
+| `exoself.erl` | Agent lifecycle manager | `start/1`, `prep/3`, `loop/2` |
+| `cortex.erl` | Neural network coordinator | `gen/2`, `prep/1`, `loop/9` |
+| `sensor.erl` | Data input processes | `gen/2`, `prep/1`, `loop/8` |
+| `neuron.erl` | Neural computation units | `gen/2`, `prep/1`, `loop/8` |
+| `actuator.erl` | Output/trading processes | `gen/2`, `prep/1`, `loop/8` |
+
+### Evolution & Genetics
+| Module | Purpose | Key Functions |
+|--------|---------|---------------|
+| `genotype.erl` | Genome persistence & construction | `construct_Agent/3`, `sync/0` |
+| `genome_mutator.erl` | Mutation operators | `mutate/1`, `apply_ESMutators/2` |
+| `population_monitor.erl` | Population management | `create_MutantAgentCopy/1`, `continue/1` |
+| `selection_algorithm.erl` | Survival strategies | `competition/3`, `top3/3` |
+
+### Market & Trading
+| Module | Purpose | Key Functions |
+|--------|---------|---------------|
+| `fx.erl` | FX data & simulation | `create_account/0`, `go/0` |
+| `ib_connector.erl` | Interactive Brokers gateway | `start_connection/3`, `place_order/4` |
+| `live_trader.erl` | Live trading supervisor | `start_link/0` |
+| `live_scape.erl` | Live market environment | `start_link/0` |
+
+### Analysis & Utilities
+| Module | Purpose | Key Functions |
+|--------|---------|---------------|
+| `benchmarker.erl` | Performance testing | `start/1`, `report/2` |
+| `genotype_utils.erl` | Agent inspection | `print_best_genotype/0`, `get_agent_stats/0` |
+| `fitness_postprocessor.erl` | Fitness evaluation | `none/1`, `size_proportional/1` |
+
+## 🔧 Configuration System
+
+### Configuration Categories (`config.erl`)
+
+**Account Settings:**
+- `account_leverage/0`, `account_initial_balance/0`, `account_lot_size/0`
+- `account_spread/0`, `account_margin/0`, `order_size_percentage/0`
+
+**Data Parameters:**
+- `primary_currency_pair/0`, `data_start_index/0`, `data_end_index/0`
+- `benchmark_end_index/0`, `market_props_start/0`, `market_props_end/0`
+
+**Neural Architecture:**
+- `neural_activation_functions/0`, `neural_plasticity_functions/0`
+- `connection_architecture/0`, `agent_encoding_types/0`
+
+**Live Trading:**
+- `ib_host/0`, `ib_port/0`, `ib_client_id/0`
+- `live_position_size/0`, `live_max_daily_loss/0`
+- `live_currency_pairs/0`, `live_max_drawdown_limit/0`
+
+**Checkpoint System:**
+- `checkpoint_enabled/0` - Controls checkpoint creation (auto/true/false)
+- Auto-detects AWS environment via `/var/lib/dxnn/checkpoints/` and `S3_BUCKET` env var
+- Saves Mnesia database, logs, and config between runs
+
+**Validation Functions:**
+- `validate_ib_connection_config/0`, `validate_risk_parameters/0`
+- `validate_live_trading_config/0`
+
+## 🔄 System Workflows
+
+### 1. Agent Evolution Cycle
 ```
+1. genotype:construct_Agent/3 → Create initial agent
+2. population_monitor:create_specie/3 → Group similar agents
+3. exoself:start/1 → Execute agent in simulation
+4. benchmarker:start/1 → Run performance tests
+5. fitness_postprocessor:none/1 → Rank agents by fitness
+6. selection_algorithm:competition/3 → Select survivors
+7. genome_mutator:mutate/1 → Create new variants
+8. Repeat from step 2
+```
+
+### 2. Neural Network Execution
+```
+1. exoself:start/1 → Spawn agent processes
+2. cortex:gen/2 → Create central coordinator
+3. sensor:gen/2 → Spawn input processes
+4. neuron:gen/2 → Spawn computation units
+5. actuator:gen/2 → Spawn output processes
+6. cortex:loop/9 → Coordinate Sense-Think-Act cycles
+7. sensor:loop/8 → Gather market data
+8. neuron:loop/8 → Process neural signals
+9. actuator:loop/8 → Execute trading decisions
+10. cortex:loop/9 → Accumulate fitness
+```
+
+### 3. Live Trading Pipeline
+```
+1. live_trading_main:start/0 → Initialize live system
+2. live_trading_integration:start_live_trading/1 → Start components
+3. ib_connector:start_connection/3 → Connect to Interactive Brokers
+4. live_scape:start_link/0 → Create live market environment
+5. live_trader:start_link/0 → Spawn trading agent
+6. Real-time data flow: IB → live_scape → sensor → neuron → actuator → IB
+```
+
+### 4. Checkpoint System (AWS Spot Instances)
+```
+1. exp_runner:loop/2 → Run completes
+2. exp_runner:checkpoint/0 → Check if checkpointing enabled
+3. exp_runner:detect_aws_environment/0 → Auto-detect AWS (dir + S3_BUCKET)
+4. exp_runner:checkpoint_mnesia/1 → Backup Mnesia to /var/lib/dxnn/checkpoints/
+5. exp_runner:checkpoint_logs/1 → Copy logs to checkpoint directory
+6. exp_runner:checkpoint_files/1 → Copy config and create metadata
+7. Continue to next run (checkpoints created between runs)
+```
+
+## 📊 Data Flow Patterns
+
+### Input Data Sources
+- **Historical FX Data**: `fx_tables/EURUSD1.txt`, `fx_tables/EURUSD15.txt`
+- **Live Market Data**: Interactive Brokers via `ib_connector`
+- **Internal Sensors**: Account balance, position status via `fx_Internals`
+
+### Output Actions
+- **Trading Signals**: Buy/sell orders sent to `scape` (simulation) or `ib_connector` (live)
+- **Fitness Metrics**: Performance scores returned to `cortex`
+- **Logging**: Traces and statistics via `benchmarker`
+
+### Message Patterns
+```
+% Sensor → Neuron
+{forward, InputId, Input, NeuronPid}
+
+% Neuron → Actuator  
+{forward, OutputId, Output, ActuatorPid}
+
+% Actuator → Scape
+{actuator, ExoSelfPid, Action, ScapePid}
+
+% Scape → Actuator
+{result, Fitness, EndFlag}
+```
+
+## 🧪 Testing & Validation
+
+### Test Suites
 ```erlang
+% Quick system test
+test_live_trading_integration:quick_test().
+
+% Comprehensive test suite
+test_live_trading_integration:full_test().
+
+% Component-specific tests
+test_live_trading_integration:run_test_suite(configuration_validation).
+test_live_trading_integration:run_test_suite(startup_sequence).
+```
+
+### Performance Monitoring
+```erlang
+% View system status
+live_trading_main:status().
+
+% Get agent statistics
+genotype_utils:get_agent_stats().
+
+% Monitor population
+population_monitor:get_stats().
+```
+
+## 🔍 Key Data Structures
+
+### Records (`records.hrl`)
+- `agent` - Complete agent definition
+- `cortex` - Neural network coordinator state
+- `neuron` - Individual neuron configuration
+- `sensor` - Input sensor specification
+- `actuator` - Output actuator specification
+- `substrate` - Substrate layer configuration
+
+### Configuration Records
+- `constraint` - Evolution constraints
+- `mutation_operator` - Mutation parameters
+- `tuning_selection` - Neuron selection strategies
+
+## ⚠️ Important Notes
+
+### Safety Considerations
+- Live trading defaults to paper trading (port 7497)
+- Risk parameters validated before live execution
+- Emergency shutdown available via `live_trading_integration:emergency_shutdown/0`
+
+### Performance Considerations
+- Mnesia database for persistent storage
+- Distributed Erlang processes for scalability
+- Circuit breakers in `ib_connector` for fault tolerance
+
+### Development Workflow
+- Use `make all` to recompile after changes
+- Reset Mnesia with `mnesia:delete_schema([node()])` for clean state
+- Check `logs/` directory for runtime information
+
+## 🎯 Common Use Cases
+
+### Research & Development
+```erlang
+% Run evolutionary experiment
+benchmarker:start(chart_plane_5x10).
+
+% Analyze results
+genotype_utils:print_top_agents(10).
+
+% Test specific agent
+exoself:start(AgentId, self(), test).
+```
+
+### Live Trading
+```erlang
+% Start live system
+live_trading_main:start().
+
+% Monitor status
+live_trading_main:status().
+
+% Emergency stop
+live_trading_main:stop().
+```
+
+### System Maintenance
+```erlang
+% Reset database
 mnesia:stop().
 mnesia:delete_schema([node()]).
-q().
 
-make:all([load]).
-launcher:start().
+% Clean compiled files
+find . -name "*.beam" -delete
 ```
 
-4. **Print the best genotype:**
-   ```erlang
-  
-   rr("records.hrl").
-   c(genotype_utils).
-   % Print the best genotype from the default 'test' population
-   genotype_utils:get_active_agents().
-   genotype_utils:list_active_agents_info().
-
-   genotype_utils:print_active_agent_genotypes().
-
-   genotype_utils:active_agents_process_check().
-   genotype_utils:active_agents_process_check({5.663284600923985e-10,agent}).
-
-   qlog:print_genotype({5.660575282997371e-10,agent}).
-
-   genotype_utils:terminate_agent({5.660525142447517e-10,agent}).
-
-
-
-   % Get total agents in database
-    genotype_utils:get_total_agents().
-
-    % Get total agents for a specific population
-    genotype_utils:get_total_agents_by_population(test).
-
-    % List all agents grouped by population
-    genotype_utils:list_agents_by_population().
-
-   genotype_utils:print_best_genotype().
-
-   genotype_utils:print_best_genotype(all).
-
-   mnesia:dirty_all_keys(agent).
-   genotype:print({5.668233514606392e-10,agent}).
-
-[{5.668784164536763e-10,agent},
- {5.668784164526907e-10,agent}]
-   
-   % Or specify a population ID
-   genotype_utils:print_best_genotype(your_population_id).
-   
-   % List all agents with their fitness scores
-   genotype_utils:list_all_agents().
-   
-   % Print top N agents
-   genotype_utils:print_top_agents(5).
-   genotype_utils:print_top_agents(1, all).
-   
-   % Get agent statistics
-   genotype_utils:get_agent_stats().
-
-   BestAgentId = {5.699247180669372e-10,agent}.
-   exoself:start(Best_Agent_Id, self(),benchmark).
-   exoself:start(Best_Agent_Id, self(),live_trading).
-
-
-   % 1. Load and start your best agent
-   Best_Agent_Id = {5.693207755943648e-10,agent}.  % Update with your latest
-   Agent_PId = exoself:start(Best_Agent_Id, self()).
-
-   % 2. Monitor the agent
-   is_process_alive(Agent_PId).
-   is_process_alive(<0.567.0>).
-
-   % 3. Simple test run
-   run_best_agent() ->
-      {atomic, Best_Agent_Id} = genotype_utils:find_best_agent(all),
-      Agent_PId = exoself:start(Best_Agent_Id, self()),
-      timer:sleep(30000),  % Run for 30 seconds
-      Agent_PId ! {self(), terminate}.
-
-
-
-
-
-    benchmarker:start(sliding_window_10).
-    benchmarker:start(sliding_window_20).
-    benchmarker:start(sliding_window_50).
-    benchmarker:start(sliding_window_100).
-    benchmarker:start(chart_plane_5x10).
-    benchmarker:start(chart_plane_5x20).
-    benchmarker:start(chart_plane_10x10).
-    benchmarker:start(chart_plane_10x20).
-    benchmarker:start(chart_plane_20x10).
-    benchmarker:start(chart_plane_20x20).
-    benchmarker:start(chart_plane_50x10).
-    benchmarker:start(chart_plane_50x20).
-    benchmarker:start(chart_plane_100x10).
-
-    make:all([load]).
-    fx:clear_log().
-    mnesia:start().
-    polis:start().
-    polis:sync().
-    {atomic, Best} = genotype_utils:find_best_agent(all).
-    exoself:start(Best, self(), live_trading).
-    <CX_ID> ! {<ActuatorPID>, sync, 0.5, 1}.
-    <0.337.0> ! {<0.339.0>, sync, 0.5, 0}.
-
-    {atomic, Best} = genotype_utils:find_best_agent(all).
-    exoself:start(Best, self(), benchmark).
-
-    live_scape:start_link().
-    fx:sim(<0.323.0>).
-   ```
-
-## IB Python Service Calls
-
-### Connection & Setup
-```python
-# Start the comprehensive IB service
-python3 priv/ib_service.py
-
-# Key service operations (handled automatically):
-await ib_service.start_service()
-await connection_manager.connect(host="host.docker.internal", port=7497, client_id=101)
-await historical_loader.load_weeks_of_data("EUR.USD", weeks=4, bar_size="1 min")
-```
-
-### Trading Operations
-```python
-# Execute trades with risk management
-await trade_executor.execute_trade("EUR.USD", "BUY", 1000, "MKT")
-await trade_executor.execute_trade("EUR.USD", "SELL", 1000, "LMT", limit_price=1.0850)
-
-# Risk management controls
-trade_executor.activate_kill_switch("Emergency stop")
-trade_executor.deactivate_kill_switch()
-trade_executor.reset_daily_counters()
-```
-
-### Data & Monitoring
-```python
-# Get service status
-connection_manager.get_connection_status()
-trade_executor.get_trading_status()
-
-# Live data streaming (automatic)
-tick_aggregator.process_tick("EUR.USD", price, volume, timestamp)
-bridge.send_ohlc_bar(ohlc_bar)
-```
-
-## Live_Scape Complete Setup & Trading Guide
-
-### 1. System Initialization & Compilation
-```erlang
-% Compile all modules and load them
-make:all([load]).
-
-% Load record definitions (required for data structures)
-rr("records.hrl").
-
-% Initialize Mnesia database if not already done
-mnesia:create_schema([node()]).
-mnesia:start().
-
-% Start the live trading system
-{ok, Pid} = live_scape:start_link().
-
-% Verify system is running
-is_process_alive(Pid).
-whereis(live_scape).
-```
-
-### 2. Python Service Setup & Market Data Loading
-```erlang
-% The Python IB service should be running in background
-% Start it externally: python3 priv/ib_service.py
-
-% Check if Python port handler is running
-whereis(python_port_handler).
-
-% Wait for initial market data to load (automatic via Python service)
-% Check ETS table for data availability
-ets:info(ohlc_data, size).
-
-% If no data, wait a few moments for Python service to load historical data
-timer:sleep(5000).
-ets:info(ohlc_data, size).
-```
-
-### 3. Verify Market Data in ETS
-```erlang
-% Check if we have OHLC data
-ets:info(ohlc_data).
-
-% Get the latest data key
-LastKey = ets:last(ohlc_data).
-
-% Look at the most recent bar
-case LastKey of
-    '$end_of_table' -> 
-        io:format("No data available yet~n");
-    Key ->
-        Bar = ets:lookup(ohlc_data, Key),
-        io:format("Latest bar: ~p~n", [Bar])
-end.
-
-% Get last 10 bars to verify data flow
-collect_recent_bars(ohlc_data, ets:last(ohlc_data), 10, []).
-```
-
-### 4. Start Live Simulation Mode
-```erlang
-% Create an ExoSelf process ID (neural network coordinator)
-ExoSelfPid = self().
-
-% Start live simulation - this connects the system to live data
-live_scape ! {ExoSelfPid, live_sim}.
-
-% The system is now ready to receive sensor requests and trade signals
-```
-
-### 5. Neural Network Sensor Operations (Market Data Access)
-```erlang
-% Test sensor functionality - get price list for neural network
-% Request 100 bars of close prices (list_sensor format)
-live_scape ! {self(), sense, ohlc_data, close, [100, list_sensor], undefined, undefined}.
-
-% Wait for response
-FromPid = whereis(live_scape),
-receive
-    {FromPid, PriceList} ->
-        io:format("Received ~p price points~n", [length(PriceList)]),
-        io:format("Latest prices: ~p~n", [lists:sublist(PriceList, 5)])
-after 5000 ->
-    io:format("Timeout waiting for sensor data~n")
-end.
-
-% Test graph sensor (for substrate neural networks)
-live_scape ! {self(), sense, ohlc_data, close, [20, 10, graph_sensor], undefined, undefined}.
-
-FromPid2 = whereis(live_scape),
-receive
-    {FromPid2, GraphData} ->
-        io:format("Received graph data with ~p points~n", [length(GraphData)])
-after 5000 ->
-    io:format("Timeout waiting for graph sensor data~n")
-end.
-
-% Get internal state (position, entry price, P&L)
-live_scape ! {self(), sense, internals, []}.
-
-FromPid3 = whereis(live_scape),
-receive
-    {FromPid3, [Position, EntryPrice, PreviousPC]} ->
-        io:format("Position: ~p, Entry: ~p, Previous P&L: ~p~n", [Position, EntryPrice, PreviousPC])
-after 5000 ->
-    io:format("Timeout waiting for internals~n")
-end.
-```
-
-### 6. Direct ETS Data Access (Advanced)
-```erlang
-% Get the latest OHLC data key
-LastKey = ets:last(ohlc_data).
-
-% Look up specific OHLC bar by key {Symbol, Timestamp}
-% Note: Timestamp format is ISO string like "2024-01-01T10:00:00"
-case LastKey of
-    '$end_of_table' -> 
-        io:format("No data in table~n");
-    {Symbol, Timestamp} ->
-        io:format("Latest key: ~p~n", [{Symbol, Timestamp}]),
-        Bar = live_scape:lookup(ohlc_data, LastKey),
-        io:format("Latest bar: ~p~n", [Bar])
-end.
-
-% Navigate through data
-NextKey = live_scape:next(ohlc_data, LastKey).
-PrevKey = live_scape:prev(ohlc_data, LastKey, prev, 1).
-
-% Get multiple previous bars
-PrevKey10 = live_scape:prev(ohlc_data, LastKey, prev, 10).
-
-% Check table size and info
-ets:info(ohlc_data, size).
-ets:info(ohlc_data, memory).
-
-% WARNING: Only use this for small datasets
-% ets:tab2list(ohlc_data).  % Shows all data - can be large!
-```
-
-### 7. Trading Operations (Live Trading Signals)
-```erlang
-% IMPORTANT: Ensure Python IB service is connected to Interactive Brokers
-% and ALLOW_LIVE_ORDERS environment variable is set if using live trading
-
-% Send BUY signal (go long)
-live_scape ! {self(), trade, ohlc_data, 1}.
-
-% Wait for trade confirmation
-FromPid4 = whereis(live_scape),
-receive
-    {FromPid4, Fitness, Halt} ->
-        io:format("Trade result - Fitness: ~p, Halt: ~p~n", [Fitness, Halt])
-after 10000 ->
-    io:format("Timeout waiting for trade confirmation~n")
-end.
-
-% Send SELL signal (go short)
-live_scape ! {self(), trade, ohlc_data, -1}.
-
-FromPid5 = whereis(live_scape),
-receive
-    {FromPid5, Fitness, Halt} ->
-        io:format("Trade result - Fitness: ~p, Halt: ~p~n", [Fitness, Halt])
-after 10000 ->
-    io:format("Timeout waiting for trade confirmation~n")
-end.
-
-% Close position (exit current trade)
-live_scape ! {self(), trade, ohlc_data, 0}.
-
-FromPid6 = whereis(live_scape),
-receive
-    {FromPid6, Fitness, Halt} ->
-        io:format("Close position result - Fitness: ~p, Halt: ~p~n", [Fitness, Halt])
-after 10000 ->
-    io:format("Timeout waiting for close confirmation~n")
-end.
-
-% Check current position and P&L
-live_scape ! {self(), sense, internals, []}.
-
-FromPid7 = whereis(live_scape),
-receive
-    {FromPid7, [Position, EntryPrice, PreviousPC]} ->
-        io:format("Current Position: ~p~n", [Position]),
-        io:format("Entry Price: ~p~n", [EntryPrice]),
-        io:format("Previous P&L Change: ~p~n", [PreviousPC])
-after 5000 ->
-    io:format("Timeout waiting for position info~n")
-end.
-```
-
-### 8. Complete Trading Session Example
-```erlang
-% Complete workflow from start to trade execution
-make:all([load]).
-rr("records.hrl").
-mnesia:start().
-
-% Start live system
-{ok, Pid} = live_scape:start_link().
-
-% Wait for data to load
-timer:sleep(10000).
-
-% Check data availability
-DataSize = ets:info(ohlc_data, size),
-io:format("Available bars: ~p~n", [DataSize]).
-
-% Start live simulation
-ExoSelfPid = self(),
-live_scape ! {ExoSelfPid, live_sim}.
-
-% Get market data for decision making
-live_scape ! {self(), sense, ohlc_data, close, [50, list_sensor], undefined, undefined}.
-
-FromPid8 = whereis(live_scape),
-receive
-    {FromPid8, PriceList} ->
-        io:format("Got ~p prices, latest: ~p~n", [length(PriceList), lists:last(PriceList)]),
-        
-        % Simple trading logic example
-        [Latest | _] = lists:reverse(PriceList),
-        [Previous | _] = lists:reverse(lists:sublist(PriceList, length(PriceList)-1)),
-        
-        if Latest > Previous ->
-            io:format("Price rising, sending BUY signal~n"),
-            live_scape ! {self(), trade, ohlc_data, 1};
-        Latest < Previous ->
-            io:format("Price falling, sending SELL signal~n"),
-            live_scape ! {self(), trade, ohlc_data, -1};
-        true ->
-            io:format("Price stable, no trade~n")
-        end
-after 5000 ->
-    io:format("No market data received~n")
-end.
-
-% Wait for trade result
-FromPid9 = whereis(live_scape),
-receive
-    {FromPid9, Fitness, Halt} ->
-        io:format("Trade executed - Fitness: ~p, Halt: ~p~n", [Fitness, Halt])
-after 15000 ->
-    io:format("Trade timeout~n")
-end.
-```
-
-### 9. Integration with Evolved Neural Networks
-```erlang
-% Load the best evolved agent for live trading
-rr("records.hrl").
-
-% Find the best agent from evolution
-Best_Agent_Id = case genotype_utils:find_best_agent(all) of
-    {atomic, AgentId} -> AgentId;
-    _ -> {5.693207755943648e-10, agent}  % Fallback example ID
-end.
-
-% Start the best agent in live trading mode
-% This connects the evolved neural network to live_scape
-Agent_PId = exoself:start(Best_Agent_Id, self(), live_trading).
-
-% Monitor the agent
-is_process_alive(Agent_PId).
-
-% The agent will now automatically:
-% 1. Request market data via live_scape sensors
-% 2. Process data through its evolved neural network
-% 3. Send trading signals via live_scape actuators
-% 4. Receive real-time P&L feedback
-
-% Check agent performance
-timer:sleep(60000),  % Let it trade for 1 minute
-Agent_PId ! {self(), get_backup}.
-
-receive
-    {Agent_PId, backup, AgentBackup} ->
-        io:format("Agent backup received: ~p~n", [AgentBackup])
-after 5000 ->
-    io:format("No backup received~n")
-end.
-```
-
-### 10. System Monitoring & Troubleshooting
-```erlang
-% Check all system components
-io:format("=== System Status ===~n"),
-io:format("live_scape: ~p~n", [whereis(live_scape)]),
-io:format("python_port_handler: ~p~n", [whereis(python_port_handler)]),
-io:format("OHLC data size: ~p~n", [ets:info(ohlc_data, size)]),
-io:format("Mnesia running: ~p~n", [mnesia:system_info(is_running)]).
-
-% Check for recent market data
-case ets:last(ohlc_data) of
-    '$end_of_table' ->
-        io:format("No market data available~n");
-    LastKey ->
-        [LastBar] = ets:lookup(ohlc_data, LastKey),
-        io:format("Latest bar: ~p~n", [LastBar])
-end.
-
-% Restart components if needed
-% live_scape ! terminate.  % Stop current instance
-% {ok, NewPid} = live_scape:start_link().  % Start fresh
-
-% Force Python service restart (if needed)
-% Kill existing: pkill -f "python3 priv/ib_service.py"
-% Then restart: python3 priv/ib_service.py &
-```
-
-### 11. Environment Variables for Trading
-```bash
-# Set these before starting Python service for live trading
-export ALLOW_LIVE_ORDERS=1        # Enable live order execution
-export AUTO_BACKFILL=1             # Auto-load historical data
-export IB_HOST=host.docker.internal # IB TWS host
-export IB_PORT=7497                # Paper trading (7496 for live)
-export IB_CLIENT_ID=101            # Unique client ID
-
-# Start Python service with environment
-python3 priv/ib_service.py
-```
+This comprehensive guide provides AI systems with complete understanding of the DXNN-Trader-v2 architecture, workflows, and operational patterns for effective code analysis and modification.
