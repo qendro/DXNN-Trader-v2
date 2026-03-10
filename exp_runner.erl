@@ -447,82 +447,70 @@ generate_run_id() ->
 
 %% Get run configs - customize this function with your experiment configs
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
-%%
-%% PROFIT-FIRST PROGRESSION:
-%% Phase A (Runs 1-2):    Behavior bootstrap with phase0_close_trades
-%% Phase B (Runs 3-6):    phase1_profit_risk with PnL-heavy weights
-%% Phase C (Runs 7-12):   phase2_profit_optimization for direct profit pressure
-%%
+
 get_run_configs() ->
     [
-        %% Phase A: Behavior bootstrap (short)
-        {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none},
-             {tuning_duration, {const,3}}, {gt_start, 2600}, {gt_end, 1800},
-             {specie_size_limit, 12}, {init_specie_size, 12}, {generation_limit, 10},
-             {survival_percentage, 0.90}]},
-
-        {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none},
-             {tuning_duration, {const,3}}, {gt_start, 3600}, {gt_end, 2600},
-             {specie_size_limit, 14}, {init_specie_size, 14}, {generation_limit, 12},
-             {survival_percentage, 0.80}]},
-
-        %% Phase B: Profit + risk (PnL-weighted)
-        {3, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none},
-             {fitness_phase1_pscore_weight, 0.72}, {fitness_phase1_tradescore_weight, 0.28},
-             {tuning_duration, {const,8}}, {gt_start, 5000}, {gt_end, 3400},
-             {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 40},
-             {survival_percentage, 0.65}]},
-
-        {4, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none},
-             {fitness_phase1_pscore_weight, 0.78}, {fitness_phase1_tradescore_weight, 0.22},
-             {tuning_duration, {const,8}}, {gt_start, 6200}, {gt_end, 4600},
-             {specie_size_limit, 24}, {init_specie_size, 24}, {generation_limit, 50},
-             {survival_percentage, 0.60}]},
-
-        {5, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none},
-             {fitness_phase1_pscore_weight, 0.84}, {fitness_phase1_tradescore_weight, 0.16},
-             {tuning_duration, {const,8}}, {gt_start, 7400}, {gt_end, 5600},
-             {specie_size_limit, 28}, {init_specie_size, 28}, {generation_limit, 60},
-             {survival_percentage, 0.55}]},
-
-        {6, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none},
-             {fitness_phase1_pscore_weight, 0.88}, {fitness_phase1_tradescore_weight, 0.12},
-             {tuning_duration, {const,8}}, {gt_start, 8600}, {gt_end, 6600},
-             {specie_size_limit, 32}, {init_specie_size, 32}, {generation_limit, 60},
-             {survival_percentage, 0.50}]},
-
-        %% Phase C: Profit optimization (direct objective pressure)
-        {7, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none},
-             {tuning_duration, {const,8}}, {gt_start, 7000}, {gt_end, 5200},
-             {specie_size_limit, 32}, {init_specie_size, 32}, {generation_limit, 70},
-             {survival_percentage, 0.50}]},
-
-        {8, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none},
-             {tuning_duration, {const,8}}, {gt_start, 8200}, {gt_end, 6200},
-             {specie_size_limit, 36}, {init_specie_size, 36}, {generation_limit, 70},
-             {survival_percentage, 0.50}]},
-
-        {9, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none},
-             {tuning_duration, {const,8}}, {gt_start, 9400}, {gt_end, 7000},
-             {specie_size_limit, 40}, {init_specie_size, 40}, {generation_limit, 80},
-             {survival_percentage, 0.50}]},
-
-        {10, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none},
-              {tuning_duration, {const,8}}, {gt_start, 10600}, {gt_end, 7800},
-              {specie_size_limit, 44}, {init_specie_size, 44}, {generation_limit, 80},
-              {survival_percentage, 0.45}]},
-
-        {11, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none},
-              {tuning_duration, {const,8}}, {gt_start, 11800}, {gt_end, 8600},
-              {specie_size_limit, 48}, {init_specie_size, 48}, {generation_limit, 90},
-              {survival_percentage, 0.45}]},
-
-        {12, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none},
-              {tuning_duration, {const,8}}, {gt_start, 13000}, {gt_end, 9400},
-              {specie_size_limit, 48}, {init_specie_size, 48}, {generation_limit, 100},
-              {survival_percentage, 0.45}]}
+        %% Phase -1: Size Reward (Runs 1-5) - Focus: Pure size focus in run 1, gradually transitioning
+        %% Run 1: fitness_size_focus_weight=0.0 means constant fitness (1.0), size_first postprocessor
+        %%        sorts primarily by neuron count (larger networks win regardless of trading performance)
+        %% Runs 2-5: Gradually increase focus_weight so trading performance becomes important alongside size
+        %{1, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.0}, {tuning_duration, {const,4}}, {gt_start, 1000}, {gt_end, 500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 1.0}]},
+        %{2, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.2}, {tuning_duration, {const,4}}, {gt_start, 2000}, {gt_end, 1000}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.9}]},
+        %{3, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.4}, {tuning_duration, {const,4}}, {gt_start, 3000}, {gt_end, 1500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.8}]},
+        %{4, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.6}, {tuning_duration, {const,4}}, {gt_start, 4000}, {gt_end, 2000}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.7}]},
+        %{5, [{fitness_function, phase_size_reward}, {population_fitness_postprocessor_f, size_first}, {fitness_size_focus_weight, 0.8}, {tuning_duration, {const,4}}, {gt_start, 5000}, {gt_end, 2500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 5}, {survival_percentage, 0.6}]},
+        
+        %% Phase 0: Learn to Trade (Runs 6-10) - Focus: Close trades without blowing up
+        %% Runs 1-3: Use size_first postprocessor to encourage network growth
+        {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, size_first}, {tuning_duration, {const,3}}, {gt_start, 2000}, {gt_end, 1500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 5}, {survival_percentage, 1.0}]},
+        {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,3}}, {gt_start, 3000}, {gt_end, 2000}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.8}]},
+        {3, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,3}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 10}, {init_specie_size, 10}, {generation_limit, 10}, {survival_percentage, 0.7}]},
+        {4, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.30}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {5, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.35}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        
+        %% Phase 1: Make Positive Trades (Runs 11-15) - Focus: Profit optimization with drawdown control
+        {6, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.40}, {fitness_phase1_tradescore_weight, 0.70}, {tuning_duration, {const,10}}, {gt_start, 4000}, {gt_end, 2500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {7, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.45}, {fitness_phase1_tradescore_weight, 0.65}, {tuning_duration, {const,10}}, {gt_start, 5000}, {gt_end, 3000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {8, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.50}, {fitness_phase1_tradescore_weight, 0.60}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {9, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.55}, {fitness_phase1_tradescore_weight, 0.55}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        {10, [{fitness_function, phase1_profit_risk}, {fitness_phase1_pscore_weight, 0.60}, {fitness_phase1_tradescore_weight, 0.50}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 50}]},
+        
+        %% Phase 2: Win Rate Focus (Runs 16-25) - Focus: More positive than negative trades
+        {11, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 0}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 6000}, {gt_end, 3500}, {specie_size_limit, 80}, {init_specie_size, 80}, {generation_limit, 75}]},
+        {12, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 5}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 7000}, {gt_end, 4000}, {specie_size_limit, 90}, {init_specie_size, 90}, {generation_limit, 75}]},
+        {13, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 10}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 8000}, {gt_end, 4500}, {specie_size_limit, 100}, {init_specie_size, 100}, {generation_limit, 75}]},
+        {14, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 15}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 9000}, {gt_end, 5000}, {specie_size_limit, 120}, {init_specie_size, 120}, {generation_limit, 75}]},
+        {15, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 20}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 10000}, {gt_end, 5500}, {specie_size_limit, 140}, {init_specie_size, 140}, {generation_limit, 75}]},
+        {16, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 25}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 160}, {init_specie_size, 160}, {generation_limit, 75}]},
+        {17, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 30}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {18, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 35}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {19, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 40}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        {20, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 45}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_dd_lambda_early, 1.0}, {fitness_dd_lambda_late, 3.0}, {tuning_duration, {const,10}}, {gt_start, 15000}, {gt_end, 8000}, {specie_size_limit, 200}, {init_specie_size, 200}, {generation_limit, 75}]},
+        
+        %% Phase 3: Big Wins Focus (Runs 26-35) - Focus: Large positive trades
+        {21, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 50}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.005}, {fitness_target_bigwins_per_1000, 5.0}, {fitness_bigwin_sum_scale, 1.0}, {fitness_dd_lambda_early, 1.5}, {fitness_dd_lambda_late, 4.0}, {tuning_duration, {const,10}}, {gt_start, 10000}, {gt_end, 5500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {22, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 55}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.005}, {fitness_target_bigwins_per_1000, 5.0}, {fitness_bigwin_sum_scale, 1.2}, {fitness_dd_lambda_early, 1.5}, {fitness_dd_lambda_late, 4.0}, {tuning_duration, {const,10}}, {gt_start, 11000}, {gt_end, 6000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {23, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 60}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.007}, {fitness_target_bigwins_per_1000, 5.0}, {fitness_bigwin_sum_scale, 1.2}, {fitness_dd_lambda_early, 1.5}, {fitness_dd_lambda_late, 4.0}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {24, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 65}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.007}, {fitness_target_bigwins_per_1000, 6.0}, {fitness_bigwin_sum_scale, 1.5}, {fitness_dd_lambda_early, 2.0}, {fitness_dd_lambda_late, 4.5}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {25, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 70}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.007}, {fitness_target_bigwins_per_1000, 6.0}, {fitness_bigwin_sum_scale, 1.5}, {fitness_dd_lambda_early, 2.0}, {fitness_dd_lambda_late, 4.5}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {26, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 75}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 6.0}, {fitness_bigwin_sum_scale, 2.0}, {fitness_dd_lambda_early, 2.5}, {fitness_dd_lambda_late, 5.0}, {tuning_duration, {const,10}}, {gt_start, 15000}, {gt_end, 8000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {27, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 80}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 7.0}, {fitness_bigwin_sum_scale, 2.0}, {fitness_dd_lambda_early, 2.5}, {fitness_dd_lambda_late, 5.0}, {tuning_duration, {const,10}}, {gt_start, 16000}, {gt_end, 8500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {28, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 85}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 7.0}, {fitness_bigwin_sum_scale, 2.5}, {fitness_dd_lambda_early, 3.0}, {fitness_dd_lambda_late, 5.5}, {tuning_duration, {const,10}}, {gt_start, 17000}, {gt_end, 9000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {29, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 90}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 8.0}, {fitness_bigwin_sum_scale, 2.5}, {fitness_dd_lambda_early, 3.0}, {fitness_dd_lambda_late, 5.5}, {tuning_duration, {const,10}}, {gt_start, 18000}, {gt_end, 9500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        {30, [{fitness_function, curriculum_trade_quality_profit}, {fitness_curriculum_generation, 95}, {fitness_curriculum_g1, 20}, {fitness_curriculum_g2, 80}, {fitness_target_trades_per_1000, 50.0}, {fitness_bigwin_pct, 0.01}, {fitness_target_bigwins_per_1000, 8.0}, {fitness_bigwin_sum_scale, 3.0}, {fitness_dd_lambda_early, 3.5}, {fitness_dd_lambda_late, 6.0}, {tuning_duration, {const,10}}, {gt_start, 19000}, {gt_end, 10000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 250}]},
+        
+        %% Phase 4: Profit Optimization (Runs 36-45) - Focus: Maximum P/L with strong risk control
+        {31, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 12000}, {gt_end, 6500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {32, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 13000}, {gt_end, 7000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {33, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 14000}, {gt_end, 7500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {34, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 15000}, {gt_end, 8000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {35, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 16000}, {gt_end, 8500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {36, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 17000}, {gt_end, 9000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {37, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 18000}, {gt_end, 9500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {38, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 19000}, {gt_end, 10000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {39, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 20000}, {gt_end, 10500}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]},
+        {40, [{fitness_function, phase2_profit_optimization}, {tuning_duration, {const,10}}, {gt_start, 21000}, {gt_end, 11000}, {specie_size_limit, 300}, {init_specie_size, 300}, {generation_limit, 300}]}
     ].
-
 %% Prep function (similar to benchmarker:prep)
 prep(E, Mode, SourcePopId) ->
     % Ensure config is applied for this run BEFORE reading config valuess
