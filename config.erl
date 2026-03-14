@@ -70,6 +70,8 @@ tot_topological_mutations_functions() -> get_val(tot_topological_mutations_funct
 %% ===================================================================
 substrate_plasticities() -> get_val(substrate_plasticities, [none, modular_none, hebbian, ojas]).            %Options: none, iterative, abcn, modular_none, hebbian, ojas (iterative - high CPU / Memory usage)
 substrate_linkforms() -> get_val(substrate_linkforms, [l2l_feedforward, jordan_recurrent, neuronself_recurrent]).    % Options: l2l_feedforward, fully_interconnected, jordan_recurrent, neuronself_recurrent (l2l_feedforward - best general-purpose choice, fast and stable)
+substrate_density() -> get_val(substrate_density, 50).                  % Options: 1-1000 (neurode resolution per dimension, typical: 10, 20, 50, 100)
+substrate_depth() -> get_val(substrate_depth, 10).                    % Options: 1-100 (number of hidden layers in substrate, typical: 1, 5, 10, 20)
 
 %% ===================================================================
 %% NEAT Neuron Configuration (Applies to neurons if fully_interconnected is used in both Neural and Substrate encoding)
@@ -77,7 +79,7 @@ substrate_linkforms() -> get_val(substrate_linkforms, [l2l_feedforward, jordan_r
 
 morphology() -> get_val(morphology, forex_trader).                  % Options: forex_trader, forex_trader_1m
 connection_architecture() -> get_val(connection_architecture, recurrent).        % Options: feedforward, recurrent
-agent_encoding_types() -> get_val(agent_encoding_types, [neural]).         % Options: neural, substrate
+agent_encoding_types() -> get_val(agent_encoding_types, [substrate]).         % Options: neural, substrate
 tuning_duration() -> get_val(tuning_duration, {const,10}).               % Options: {const,N}, {wsize_proportional,N}, {nsize_proportional,N}
 tuning_selection_functions() -> get_val(tuning_selection_functions, [dynamic, dynamic_random, active, active_random, current, current_random, all, all_random]). % Note: lastgen/lastgen_random not implemented
 annealing_parameters() -> get_val(annealing_parameters, [0.1, 0.5, 1]).                 % Options: [0.1], [0.5], [1], [0.5,1], [0.1,0.5,1]
@@ -104,13 +106,13 @@ mutation_operators() -> get_val(mutation_operators, [
     {remove_bias,10},
 
     %% Topology Growth
-    {add_neuron,95},
+    {add_neuron,60},
     {add_inlink,50},
     {add_outlink,40},
     {outsplice,15},
 
     %% Sensor & Actuator Expansion
-    {add_sensor,15},
+    {add_sensor,10},
     {add_actuator,1},
     {add_sensorlink,30},
     {add_actuatorlink,20},

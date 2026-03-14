@@ -65,8 +65,8 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 			AllSensors = morphology:get_Sensors(Morphology),
 			AllActuators = morphology:get_Actuators(Morphology),
 			Dimensions=calculate_OptimalSubstrateDimension(AllSensors,AllActuators),
-			Density = 50,
-			Depth = 10,
+			Density = config:substrate_density(),
+			Depth = config:substrate_depth(),
 			Densities = [Depth,1|lists:duplicate(Dimensions-2,Density)], %[X,Y,Z,T...]
 			Substrate_CPPs = [CPP#sensor{id={{-1,generate_UniqueId()},sensor},cx_id=Cx_Id,generation=Generation}|| CPP<- morphology:get_InitSubstrateCPPs(Dimensions,SPlasticity)],
 			[case CPP#sensor.vl =< 0 of true -> qlog:xLog(qStatus, "sensor_zero_vl name=~p params=~p", [CPP#sensor.name, CPP#sensor.parameters]); false -> ok end || CPP <- Substrate_CPPs],
