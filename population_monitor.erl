@@ -39,7 +39,17 @@ get_init_constraints() ->
 	evaluations_limit = config:evaluations_limit(),
 	fitness_goal = inf,
 	benchmarker_pid,
-	goal_reached=false
+	goal_reached=false,
+	% Phase 1 & 4: Runtime tracking for managed agents
+	agent_pid_to_id = #{},          % ExoSelfPid => AgentId
+	agent_id_to_pid = #{},          % AgentId => ExoSelfPid
+	agent_id_to_ref = #{},          % AgentId => MonitorRef
+	agent_id_to_runref = #{},       % AgentId => RunRef
+	runtime_status = #{},           % AgentId => running|evicting|evicted|restarting|completed|crashed
+	inflight_evictions = #{},       % AgentId => #{run_ref => RunRef, requested_ts_ms => Ts, reason => Reason}
+	restart_queue = queue:new(),    % queue of AgentId
+	% Phase 5: Auditor process
+	auditor_pid = undefined         % Auditor gen_server PID
 }).
 %%==================================================================== API
 %%--------------------------------------------------------------------
@@ -75,20 +85,30 @@ init(Pid,InitState)->
 init(S) ->
 	process_flag(trap_exit,true),
 	register(monitor,self()),
+	% Phase 2: Initialize runtime registry
+	agent_runtime_registry:init(),
 	Population_Id = S#state.population_id,
 	OpMode = S#state.op_mode,
 	qlog:benchmarker(Population_Id,io_lib:format("POP_MONITOR_INIT | op_mode=~p | population_id=~p",[OpMode,Population_Id])),
 	io:format("******** Population monitor started with parameters:~p~n",[S]),
 	Agent_Ids = extract_AgentIds(Population_Id,all),
-	ActiveAgent_IdPs = summon_agents(OpMode,Agent_Ids),
+	SpawnedAgents = summon_agents(OpMode,Agent_Ids),
 	P = genotype:dirty_read({population,Population_Id}),
 	[put({evaluations,Specie_Id},0) || Specie_Id<-P#population.specie_ids],
 	T = P#population.trace,
 	TotEvaluations=T#trace.tot_evaluations,
 	io:format("Initial Tot Evaluations:~p~n",[TotEvaluations]),
+	% Phase 5: Start auditor if enabled
+	AuditorPid = case config:auditor_enabled() of
+		true ->
+			{ok, Pid} = agent_auditor:start_link(self(), Population_Id),
+			qlog:benchmarker(Population_Id, io_lib:format("AUDITOR_STARTED | auditor_pid=~p", [Pid])),
+			Pid;
+		false ->
+			undefined
+	end,
 	State = S#state{
 		population_id = Population_Id,
-		activeAgent_IdPs = ActiveAgent_IdPs,
 		tot_agents = length(Agent_Ids),
 		agents_left = length(Agent_Ids),
 		op_tag = continue,
@@ -97,13 +117,15 @@ init(S) ->
 		selection_algorithm = P#population.selection_f,
 		best_fitness = 0,
 		step_size = T#trace.step_size,
-		tot_evaluations = TotEvaluations
+		tot_evaluations = TotEvaluations,
+		auditor_pid = AuditorPid
 	},
+	U_State = register_spawned_agents(SpawnedAgents, State),
 	% Log generation_start for generation 0
 	qlog:exp_runner(generation_start, {Population_Id, 0, length(Agent_Ids)}),
 	qlog:agent_trades_generation(generation_start, {Population_Id, 0, length(Agent_Ids)}),
 	qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, 0, length(Agent_Ids)])),
-	{ok, State}.
+	{ok, U_State}.
 %In init/1 the population_monitor proces registers itself with the node under the name monitor, and sets all the needed parameters within its #state record. The function first extracts all the Agent_Ids that belong to the population using the extract_AgentIds/2 function. Each agent is then spawned/activated, converted from genotype to phenotype in the summon_agents/2 function. The summon_agents/2 function summons the agents and returns to the caller a list of tuples with the following format: [{Agent_Id,Agent_PId}...]. Once the state record's parameters have been set, the function drops into the main gen_server loop.
 
 %%--------------------------------------------------------------------
@@ -126,7 +148,34 @@ handle_call(get_active_agents, _From, S) ->
 	AgentsLeft = S#state.agents_left,
 	TotAgents = S#state.tot_agents,
 	Reply = {active_agents, ActiveAgent_IdPs, AgentsLeft, TotAgents},
-	{reply, Reply, S}.
+	{reply, Reply, S};
+handle_call({request_agent_eviction, AgentId, Reason}, _From, S) ->
+	% Phase 4: External eviction request (e.g., from genotype_utils)
+	CurrentStatus = maps:get(AgentId, S#state.runtime_status, undefined),
+	case CurrentStatus of
+		running ->
+			case maps:get(AgentId, S#state.agent_id_to_pid, undefined) of
+				Pid when is_pid(Pid) ->
+					U_S = evict_running_agent(AgentId, Reason, S),
+					{reply, {ok, eviction_requested}, U_S};
+				_ ->
+					{reply, {error, agent_not_found}, S}
+			end;
+		undefined ->
+			{reply, {error, agent_not_found}, S};
+		OtherStatus ->
+			{reply, {error, {invalid_status, OtherStatus}}, S}
+	end;
+handle_call(get_runtime_state, _From, S) ->
+	% Phase 4: Return runtime state for debugging/monitoring
+	RuntimeState = #{
+		agent_pid_to_id => S#state.agent_pid_to_id,
+		agent_id_to_pid => S#state.agent_id_to_pid,
+		runtime_status => S#state.runtime_status,
+		inflight_evictions => S#state.inflight_evictions,
+		restart_queue_length => queue:len(S#state.restart_queue)
+	},
+	{reply, RuntimeState, S}.
 %If the population_monitor process receives a {stop,normal} call, it checks if there are any still active agents. If there are any, it terminates them, and then itself terminates.
 
 %%--------------------------------------------------------------------
@@ -135,121 +184,255 @@ handle_call(get_active_agents, _From, S) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling cast messages
 %%--------------------------------------------------------------------
-handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm == generational ->
+handle_cast({agent_runtime_event,RunRef,Agent_Id,completed,EventData},S) ->
+	% Phase 4: Handle managed agent completion
+	case current_run_matches(Agent_Id, RunRef, S) of
+		true ->
+			% Valid completion from current run
+			Fitness = maps:get(fitness, EventData, 0),
+			U_S = mark_agent_status(Agent_Id, completed, normal_completion, S),
+			handle_agent_completion(Agent_Id, Fitness, true, U_S);
+		false ->
+			% Stale event from old run, ignore
+			io:format("Ignoring stale completion event for Agent ~p~n", [Agent_Id]),
+			{noreply, S}
+	end;
+
+handle_cast({agent_runtime_event,RunRef,Agent_Id,evicted,EventData},S) ->
+	% Phase 4: Handle managed agent eviction
+	case current_run_matches(Agent_Id, RunRef, S) of
+		true ->
+			Reason = maps:get(reason, EventData, unknown),
+			AgentBytes = eviction_agent_bytes(Agent_Id, Reason, S),
+			io:format("Agent ~p evicted: ~p~n", [Agent_Id, Reason]),
+			qlog:xLog(qStatus, "GRACEFUL_STOP_CONFIRMED | population_id=~p | agent_id=~p | run_ref=~p | agent_bytes=~p | reason=~p", [S#state.population_id, Agent_Id, RunRef, AgentBytes, Reason]),
+			qlog:benchmarker(S#state.population_id, io_lib:format("AGENT_EVICTED | agent_id=~p | reason=~p", [Agent_Id, Reason])),
+			{noreply, finalize_eviction(Agent_Id, Reason, S)};
+		false ->
+			io:format("Ignoring stale evicted event for Agent ~p~n", [Agent_Id]),
+			{noreply, S}
+	end;
+
+handle_cast({Agent_Id,terminated,Fitness},S) ->
+	% Legacy unmanaged agent termination
+	handle_agent_completion(Agent_Id, Fitness, false, S);
+%This clause accepts the cast signals sent by the agents which terminate after finishing with their evaluations. The clause specialises in the "competition" selection algorithm, which is a generational selection algorithm. As a generation selection algorithm, it waits untill the entire population has finished being evaluated, and only then selects the fit from the unfit, and creates the updated population of the next generation. The OpTag can be set from the outsie to shutdown the population_monitor by setting it to done. Once an ending condition is reached, either through a generation limit, an evaluations limit, or fitness goal, the population_monitor exits normally. If the ending condition is not reached, the population_monitor spawns the new generation of agents and awaits again for all the agents in the population to complete their evaluations. If the OpTag is set to pause, it does not generate a new population, and instead goes into a waiting mode, and awaits to be restarted or terminated.
+
+	handle_cast({op_tag,pause},S) when S#state.op_tag == continue ->
+	U_S = S#state{op_tag = pause},
+	{noreply,U_S};
+%The population_monitor process accepts a pause command cast, which if it recieves, it then goes into pause mode after all the agents have completed with their evaluations. The process can only go into pause mode if it is currently in the continue mode (its op_tag is set to continue).
+
+	handle_cast({op_tag,continue},S) when S#state.op_tag == pause ->
+		Population_Id = S#state.population_id,
+		OpMode = S#state.op_mode,
+		Agent_Ids = extract_AgentIds(Population_Id,all),
+		SpawnedAgents = summon_agents(OpMode,Agent_Ids),
+		TotAgents=length(Agent_Ids),
+		U_S0=S#state{
+			tot_agents=TotAgents,
+			agents_left=TotAgents,
+			op_tag=continue,
+			inflight_evictions = #{},
+			restart_queue = queue:new()
+		},
+		U_S = register_spawned_agents(SpawnedAgents, U_S0),
+		{noreply,U_S};
+%The population_monitor process can accept a continue command if its current op_tag is set to pause. When it receives a continue command, it summons all the agents in the population, and continues with its neuroevolution synchronization duties.
+
+handle_cast({agent_runtime_event,RunRef,Agent_Id,evaluations,EventData},S)->
+	% Phase 1: Handle managed agent evaluation events
+	case maps:get(Agent_Id, S#state.agent_id_to_runref, undefined) of
+		RunRef ->
+			% Valid event from current run
+			Specie_Id = maps:get(specie_id, EventData),
+			AgentEvalAcc = maps:get(evals, EventData, 0),
+			AgentCycleAcc = maps:get(cycles, EventData, 0),
+			AgentTimeAcc = maps:get(time, EventData, 0),
+			handle_evaluations(Specie_Id, AgentEvalAcc, AgentCycleAcc, AgentTimeAcc, S);
+		_ ->
+			% Stale event, ignore
+			{noreply, S}
+	end;
+
+handle_cast({_From,evaluations,Specie_Id,AEA,AgentCycleAcc,AgentTimeAcc},S)->
+	% Legacy unmanaged evaluation event
+	handle_evaluations(Specie_Id, AEA, AgentCycleAcc, AgentTimeAcc, S);
+
+handle_cast({_From,goal_reached},S)->
+	U_S=S#state{goal_reached=true},
+	{noreply,U_S};
+
+handle_cast({agent_runtime_event,RunRef,Agent_Id,goal_reached,_EventData},S)->
+	% Phase 1: Handle managed agent goal_reached event
+	case maps:get(Agent_Id, S#state.agent_id_to_runref, undefined) of
+		RunRef ->
+			U_S=S#state{goal_reached=true},
+			{noreply,U_S};
+		_ ->
+			{noreply, S}
+	end;
+
+handle_cast({auditor_evict_candidate, AgentId, AgentBytes, TotalMemory, _ProcessMemory}, S) ->
+	% Phase 4: Handle auditor eviction suggestion
+	CurrentStatus = maps:get(AgentId, S#state.runtime_status, undefined),
+	InFlight = maps:is_key(AgentId, S#state.inflight_evictions),
+	Reason = {memory_pressure, TotalMemory, AgentBytes},
+	case {CurrentStatus, InFlight} of
+		{running, false} ->
+			io:format("Auditor suggests evicting Agent ~p (~p bytes)~n", [AgentId, AgentBytes]),
+			case maps:get(AgentId, S#state.agent_id_to_pid, undefined) of
+				Pid when is_pid(Pid) ->
+					{noreply, evict_running_agent(AgentId, Reason, S)};
+				_ ->
+					io:format("Cannot evict Agent ~p: PID not found~n", [AgentId]),
+					{noreply, S}
+			end;
+		{running, true} ->
+			io:format("Ignoring duplicate eviction request for Agent ~p~n", [AgentId]),
+			{noreply, S};
+		{OtherStatus, _} ->
+			io:format("Ignoring eviction request for Agent ~p in status ~p~n", [AgentId, OtherStatus]),
+			{noreply, S}
+	end;
+
+handle_cast({auditor_restart_permit, RestartBatchSize, TotalMemory, ProcessMemory}, S) ->
+	% Phase 6: Handle auditor restart permit (hysteresis - only restart when below low water)
+	QueueLength = queue:len(S#state.restart_queue),
+	case QueueLength of
+		0 ->
+			% No agents waiting to restart
+			{noreply, S};
+		_ ->
+			io:format("Auditor permits restart of ~p agents (memory: ~p/~p, queue: ~p)~n", 
+				[RestartBatchSize, ProcessMemory, TotalMemory, QueueLength]),
+			qlog:benchmarker(S#state.population_id, 
+				io_lib:format("RESTART_PERMIT | batch_size=~p | total_memory=~p | process_memory=~p | queue_length=~p", 
+					[RestartBatchSize, TotalMemory, ProcessMemory, QueueLength])),
+			U_S = restart_batch(RestartBatchSize, S),
+			{noreply, U_S}
+	end;
+
+handle_cast({_From,print_TRACE},S)->
+	Population_Id = S#state.population_id,
+	P = genotype:dirty_read({population,Population_Id}),
+	io:format("******** TRACE ********:~n~p~n",[P#population.trace]),
+	{noreply,S};
+
+handle_cast({init,InitState},_State)->
+	{noreply,InitState};
+handle_cast({stop,normal},State)->
+	{stop, normal,State};
+handle_cast({stop,shutdown},State)->
+	{stop, shutdown, State}.
+
+%% Helper function for agent completion (both managed and unmanaged)
+handle_agent_completion(Agent_Id, Fitness, Managed, S) ->
+	case S#state.evolutionary_algorithm of
+		generational ->
+			handle_generational_completion(Agent_Id, Fitness, Managed, S);
+		steady_state ->
+			handle_steady_state_completion(Agent_Id, Fitness, Managed, S)
+	end.
+
+handle_generational_completion(Agent_Id, _Fitness, Managed, S) ->
 	Population_Id = S#state.population_id,
 	OpTag = S#state.op_tag,
 	OpMode = S#state.op_mode,
 	AgentsLeft = S#state.agents_left,
-			case (AgentsLeft-1) =< 0 of
+	S1 = cleanup_completed_agent(Agent_Id, Managed, S),
+	case (AgentsLeft-1) =< 0 of
 		true ->
-			% Log generation_end for the CURRENT generation that just finished
-			CurrentGen = S#state.pop_gen,
-			qlog:exp_runner(generation_end, {Population_Id, CurrentGen, S#state.tot_agents}),
-			qlog:agent_trades_generation(generation_end, {Population_Id, CurrentGen, S#state.tot_agents}),
-			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, CurrentGen, S#state.tot_agents])),
-			
-			% Now mutate to create next generation
-			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm,S#state.survival_percentage),
-			U_PopGen = S#state.pop_gen+1,
-			
-			% Log generation_start for the NEW generation
-			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, S#state.tot_agents])),
-			qlog:agent_trades_generation(generation_start, {Population_Id, U_PopGen, S#state.tot_agents}),
-			qlog:exp_runner(generation_start, {Population_Id, U_PopGen, S#state.tot_agents}),
+			CurrentGen = S1#state.pop_gen,
+			qlog:exp_runner(generation_end, {Population_Id, CurrentGen, S1#state.tot_agents}),
+			qlog:agent_trades_generation(generation_end, {Population_Id, CurrentGen, S1#state.tot_agents}),
+			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, CurrentGen, S1#state.tot_agents])),
+			mutate_population(Population_Id,S1#state.specie_size_limit,S1#state.fitness_postprocessor,S1#state.selection_algorithm,S1#state.survival_percentage),
+			U_PopGen = S1#state.pop_gen+1,
+			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, S1#state.tot_agents])),
+			qlog:agent_trades_generation(generation_start, {Population_Id, U_PopGen, S1#state.tot_agents}),
+			qlog:exp_runner(generation_start, {Population_Id, U_PopGen, S1#state.tot_agents}),
 			case OpTag of
 				continue ->
 					Specie_Ids = (genotype:dirty_read({population,Population_Id}))#population.specie_ids,
 					SpecFitList=[(genotype:dirty_read({specie,Specie_Id}))#specie.fitness || Specie_Id <- Specie_Ids],
 					BestFitness=lists:nth(1,lists:reverse(lists:sort([MaxFitness || {_,_,MaxFitness,_} <- SpecFitList]))),
-					Generation_Limit=S#state.generation_limit,
-					Evaluation_Limit=S#state.evaluations_limit,
-					Fitness_Goal=S#state.fitness_goal,
-					qlog:benchmarker(Population_Id,io_lib:format("Total Evaluations: ~p, Total Generations: ~p", [S#state.tot_evaluations, U_PopGen])),
-					case (U_PopGen >= Generation_Limit) or (S#state.tot_evaluations >= Evaluation_Limit) or (BestFitness >= Fitness_Goal) or S#state.goal_reached of
-						true ->%ENDING_CONDITION_REACHED
-							% Log generation_end for the final generation before stopping
+					Generation_Limit=S1#state.generation_limit,
+					Evaluation_Limit=S1#state.evaluations_limit,
+					Fitness_Goal=S1#state.fitness_goal,
+					qlog:benchmarker(Population_Id,io_lib:format("Total Evaluations: ~p, Total Generations: ~p", [S1#state.tot_evaluations, U_PopGen])),
+					case (U_PopGen >= Generation_Limit) or (S1#state.tot_evaluations >= Evaluation_Limit) or (BestFitness >= Fitness_Goal) or S1#state.goal_reached of
+						true ->
 							FinalAgent_Ids = extract_AgentIds(Population_Id,all),
 							FinalTotAgents = length(FinalAgent_Ids),
 							qlog:exp_runner(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
 							qlog:agent_trades_generation(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
 							qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, FinalTotAgents])),
 							TotAgents=FinalTotAgents,
-							U_S=S#state{agent_ids=FinalAgent_Ids, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
+							U_S=S1#state{agent_ids=FinalAgent_Ids, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
 							{stop,normal,U_S};
-						false ->%IN_PROGRESS
+						false ->
 							Agent_Ids = extract_AgentIds(Population_Id,all),
-							% Log genotypes for generation 0 (initial generation)
-							%case U_PopGen == 0 of
-							%	true ->
-							%		Run_Id = qlog:get_run_id_from_population_id(Population_Id),
-							%		[begin
-							%			A = genotype:dirty_read({agent, Agent_Id}),
-							%			qlog:genotype_log(Run_Id, A#agent.generation, Agent_Id)
-							%		end || Agent_Id <- Agent_Ids];
-							%	false ->
-							%		ok
-							%end,
-							U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
+							SpawnedAgents = summon_agents(OpMode,Agent_Ids),
 							TotAgents=length(Agent_Ids),
-							U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
+							U_S0=S1#state{
+								tot_agents=TotAgents,
+								agents_left=TotAgents,
+								pop_gen=U_PopGen,
+								inflight_evictions = #{},
+								restart_queue = queue:new()
+							},
+							U_S = register_spawned_agents(SpawnedAgents, U_S0),
 							{noreply,U_S}
 					end;
 				done ->
 					io:format("Shutting down Population Monitor~n"),
-					U_S = S#state{agents_left = 0,pop_gen=U_PopGen},
+					U_S = S1#state{agents_left = 0,pop_gen=U_PopGen},
 					{stop,normal,U_S};
 				pause ->
 					io:format("Population Monitor has paused.~n"),
-					U_S = S#state{agents_left=0,pop_gen=U_PopGen},
+					U_S = S1#state{agents_left=0,pop_gen=U_PopGen},
 					{noreply,U_S}
 			end;
 		false ->
 			io:format("Agents Left:~p~n",[AgentsLeft-1]),
-			ActiveAgent_IdPs = S#state.activeAgent_IdPs,
-			U_ActiveAgent_Ids = lists:keydelete(Agent_Id,1,ActiveAgent_IdPs),
-			U_S = S#state{activeAgent_IdPs = U_ActiveAgent_Ids,agents_left = AgentsLeft-1},
+			U_S = S1#state{agents_left = AgentsLeft-1},
 			{noreply,U_S}
-	end;
-%This clause accepts the cast signals sent by the agents which terminate after finishing with their evaluations. The clause specialises in the "competition" selection algorithm, which is a generational selection algorithm. As a generation selection algorithm, it waits untill the entire population has finished being evaluated, and only then selects the fit from the unfit, and creates the updated population of the next generation. The OpTag can be set from the outsie to shutdown the population_monitor by setting it to done. Once an ending condition is reached, either through a generation limit, an evaluations limit, or fitness goal, the population_monitor exits normally. If the ending condition is not reached, the population_monitor spawns the new generation of agents and awaits again for all the agents in the population to complete their evaluations. If the OpTag is set to pause, it does not generate a new population, and instead goes into a waiting mode, and awaits to be restarted or terminated.
+	end.
 
-handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm == steady_state ->
-	Population_Id = S#state.population_id,
-	Evaluation_Limit=S#state.evaluations_limit,
-	Fitness_Goal=S#state.fitness_goal,
+handle_steady_state_completion(Agent_Id, Fitness, Managed, S) ->
+	Evaluation_Limit = S#state.evaluations_limit,
+	Fitness_Goal = S#state.fitness_goal,
 	NewBestFitness = case Fitness >= S#state.best_fitness of
 		true ->
 			Fitness;
 		false ->
 			S#state.best_fitness
 	end,
+	S1 = cleanup_completed_agent(Agent_Id, Managed, S),
 	case (S#state.tot_evaluations >= Evaluation_Limit) or (NewBestFitness > Fitness_Goal) or S#state.goal_reached of
 		true ->
-			case lists:keydelete(Agent_Id,1,S#state.activeAgent_IdPs) of
+			case S1#state.activeAgent_IdPs of
 				[] ->
-					U_S=S#state{activeAgent_IdPs=[]},
+					U_S = S1#state{best_fitness = NewBestFitness},
 					{stop,normal,U_S};
-				U_ActiveAgent_IdPs ->
-					U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs},
+				_ ->
+					U_S = S1#state{best_fitness = NewBestFitness},
 					{noreply,U_S}
 			end;
 		false ->
 			FitnessPostprocessorName = S#state.fitness_postprocessor,
 			SelectionAlgorithmName = S#state.selection_algorithm,
 			A = genotype:dirty_read({agent,Agent_Id}),
-			Morphology= (A#agent.constraint)#constraint.morphology,
-			%io:format("Agent_Id:~p of morphology:~p with fitness:~p terminated.~n",[Agent_Id,Morphology,Fitness]),
 			Specie_Id = A#agent.specie_id,
 			Specie = genotype:dirty_read({specie,Specie_Id}),
 			Old_DeadPool_AgentSummaries = Specie#specie.dead_pool,
-			Old_Agent_Ids = Specie#specie.agent_ids,
 			[AgentSummary] = construct_AgentSummaries([Agent_Id],[]),
 			DeadPool_AgentSummaries = [AgentSummary|Old_DeadPool_AgentSummaries],
 			ProperlySorted_AgentSummaries = fitness_postprocessor:FitnessPostprocessorName(DeadPool_AgentSummaries),
-	
 			Valid_AgentSummaries = case length(ProperlySorted_AgentSummaries) >= S#state.specie_size_limit of
 				true ->
-					[{InvalidFitness,InvalidTotN,InvalidAgent_Id}|Remaining_AgentSummaries] = lists:reverse(ProperlySorted_AgentSummaries),
-%					io:format("Informationtheoretic Death:~p::~p~n",[InvalidAgent_Id,{InvalidFitness,InvalidTotN,InvalidAgent_Id}]),
+					[{_InvalidFitness,_InvalidTotN,InvalidAgent_Id}|Remaining_AgentSummaries] = lists:reverse(ProperlySorted_AgentSummaries),
 					genotype:delete_Agent(InvalidAgent_Id,safe),
 					lists:reverse(Remaining_AgentSummaries);
 				false ->
@@ -257,47 +440,38 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			end,
 			io:format("Valid_AgentSummaries:~p~n",[Valid_AgentSummaries]),
 			{WinnerFitness,WinnerProfile,WinnerAgent_Id} = selection_algorithm:SelectionAlgorithmName(Valid_AgentSummaries),
-			ActiveAgent_IdP = case rand:uniform() < 0.1 of
+			{U_DeadPool_AgentSummaries, U_S2} = case rand:uniform() < 0.1 of
 				true ->
-					U_DeadPool_AgentSummaries = lists:delete({WinnerFitness,WinnerProfile,WinnerAgent_Id},Valid_AgentSummaries),
-					WinnerAgent_PId = Agent_PId = exoself:start(WinnerAgent_Id,self()),
-					{WinnerAgent_Id,WinnerAgent_PId};
+					U_DeadPool = lists:delete({WinnerFitness,WinnerProfile,WinnerAgent_Id},Valid_AgentSummaries),
+					case Managed of
+						true ->
+							{_WinnerAgent_PId, _RunRef, _MonRef, U_Spawned} = spawn_managed_agent(WinnerAgent_Id, S#state.op_mode, S1),
+							{U_DeadPool, U_Spawned};
+						false ->
+							WinnerAgent_PId = exoself:start(WinnerAgent_Id,self(),agent_run_mode(S#state.op_mode)),
+							{U_DeadPool, S1#state{activeAgent_IdPs = [{WinnerAgent_Id,WinnerAgent_PId}|S1#state.activeAgent_IdPs]}}
+					end;
 				false ->
-					U_DeadPool_AgentSummaries = Valid_AgentSummaries,
 					CloneAgent_Id = create_MutantAgentCopy(WinnerAgent_Id,safe),
-					CloneAgent_PId = exoself:start(CloneAgent_Id,self()),
-					{CloneAgent_Id,CloneAgent_PId}
+					case Managed of
+						true ->
+							{_CloneAgent_PId, _RunRef, _MonRef, U_Spawned} = spawn_managed_agent(CloneAgent_Id, S#state.op_mode, S1),
+							{Valid_AgentSummaries, U_Spawned};
+						false ->
+							CloneAgent_PId = exoself:start(CloneAgent_Id,self(),agent_run_mode(S#state.op_mode)),
+							{Valid_AgentSummaries, S1#state{activeAgent_IdPs = [{CloneAgent_Id,CloneAgent_PId}|S1#state.activeAgent_IdPs]}}
+					end
 			end,
 			Top_AgentSummaries = lists:sublist(U_DeadPool_AgentSummaries,round(S#state.specie_size_limit*S#state.survival_percentage)),
 			{_,_,TopAgent_Ids} = lists:unzip3(lists:sublist(Top_AgentSummaries,3)),
-%			io:format("TopAgent_Ids:~p~n",[TopAgent_Ids]),
 			USpecie=genotype:dirty_read({specie,Specie_Id}),
 			genotype:write(USpecie#specie{dead_pool = U_DeadPool_AgentSummaries,champion_ids = TopAgent_Ids}),
-			ActiveAgent_IdPs = S#state.activeAgent_IdPs,
-			U_ActiveAgent_IdPs = [ActiveAgent_IdP|lists:keydelete(Agent_Id,1,ActiveAgent_IdPs)],
-			U_S=S#state{
-				activeAgent_IdPs=U_ActiveAgent_IdPs,
-				best_fitness=NewBestFitness
-			},
+			U_S=U_S2#state{best_fitness=NewBestFitness},
 			{noreply,U_S}
-	end;
+	end.
 
-handle_cast({op_tag,pause},S) when S#state.op_tag == continue ->
-	U_S = S#state{op_tag = pause},
-	{noreply,U_S};
-%The population_monitor process accepts a pause command cast, which if it recieves, it then goes into pause mode after all the agents have completed with their evaluations. The process can only go into pause mode if it is currently in the continue mode (its op_tag is set to continue).
-
-handle_cast({op_tag,continue},S) when S#state.op_tag == pause ->
-	Population_Id = S#state.population_id,
-	OpMode = S#state.op_mode,
-	Agent_Ids = extract_AgentIds(Population_Id,all),
-	U_ActiveAgent_IdPs=summon_agents(OpMode,Agent_Ids),
-	TotAgents=length(Agent_Ids),
-	U_S=S#state{activeAgent_IdPs=U_ActiveAgent_IdPs,tot_agents=TotAgents,agents_left=TotAgents,op_tag=continue},
-	{noreply,U_S};
-%The population_monitor process can accept a continue command if its current op_tag is set to pause. When it receives a continue command, it summons all the agents in the population, and continues with its neuroevolution synchronization duties.
-
-handle_cast({From,evaluations,Specie_Id,AEA,AgentCycleAcc,AgentTimeAcc},S)->
+%% Helper function for evaluation events (both managed and unmanaged)
+handle_evaluations(Specie_Id, AEA, AgentCycleAcc, AgentTimeAcc, S) ->
 	AgentEvalAcc = case S#state.goal_reached of
 		true ->
 			0;
@@ -331,30 +505,123 @@ handle_cast({From,evaluations,Specie_Id,AEA,AgentCycleAcc,AgentTimeAcc},S)->
 			io:format("Eval_Acc:~p~n",[U_EvalAcc]),
 			S#state{eval_acc=U_EvalAcc,cycle_acc=U_CycleAcc,time_acc=U_TimeAcc,tot_evaluations=U_TotEvaluations}
 	end,
-	{noreply,U_S};
+	{noreply,U_S}.
 
-handle_cast({_From,goal_reached},S)->
-	U_S=S#state{goal_reached=true},
-	{noreply,U_S};
-
-handle_cast({_From,print_TRACE},S)->
-	Population_Id = S#state.population_id,
-	P = genotype:dirty_read({population,Population_Id}),
-	io:format("******** TRACE ********:~n~p~n",[P#population.trace]),
-	{noreply,S};
-
-handle_cast({init,InitState},_State)->
-	{noreply,InitState};
-handle_cast({stop,normal},State)->
-	{stop, normal,State};
-handle_cast({stop,shutdown},State)->
-	{stop, shutdown, State}.
 %%--------------------------------------------------------------------
 %% Function: handle_info(Info, State) -> {noreply, State} |
 %%                                       {noreply, State, Timeout} |
 %%                                       {stop, Reason, State}
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
+handle_info({eviction_grace_expired, AgentId, RunRef}, S) ->
+	% Phase 4: Grace period expired, force kill if still running
+	case current_run_matches(AgentId, RunRef, S) of
+		true ->
+			CurrentStatus = maps:get(AgentId, S#state.runtime_status, undefined),
+				case CurrentStatus of
+					evicting ->
+						% Agent didn't exit gracefully, force kill
+						AgentBytes = current_agent_memory_bytes(AgentId, S),
+						io:format("Grace period expired for Agent ~p, forcing kill~n", [AgentId]),
+						qlog:xLog(qStatus, "GRACE_TIMEOUT | population_id=~p | agent_id=~p | run_ref=~p | agent_bytes=~p | grace_ms=~p", [S#state.population_id, AgentId, RunRef, AgentBytes, config:auditor_grace_ms()]),
+						% Phase 8: Log forced kill after grace timeout
+						qlog:benchmarker(S#state.population_id, io_lib:format("FORCED_KILL_AFTER_GRACE | agent_id=~p | run_ref=~p | grace_ms=~p", [AgentId, RunRef, config:auditor_grace_ms()])),
+						UpdatedEvictions = case maps:get(AgentId, S#state.inflight_evictions, undefined) of
+							undefined ->
+								S#state.inflight_evictions;
+						EvictionData ->
+							maps:put(AgentId, EvictionData#{reason => forced_after_grace_timeout}, S#state.inflight_evictions)
+					end,
+					U_S1 = mark_agent_status(AgentId, evicting, forced_after_grace_timeout, S),
+					U_S2 = U_S1#state{inflight_evictions = UpdatedEvictions},
+					U_S = force_kill_owned_pids(AgentId, U_S2),
+					{noreply, U_S};
+				_ ->
+					% Agent already exited, ignore
+					io:format("Grace timer fired for Agent ~p but status is ~p, ignoring~n", [AgentId, CurrentStatus]),
+					{noreply, S}
+			end;
+		false ->
+			% Stale timer from old run
+			io:format("Ignoring stale grace timer for Agent ~p~n", [AgentId]),
+			{noreply, S}
+	end;
+handle_info({_ExoSelfPid, manifest_published, Agent_Id, RunRef}, S) ->
+	% Phase 2: Update registry with MonitorRef after manifest is published
+	case maps:get(Agent_Id, S#state.agent_id_to_runref, undefined) of
+		RunRef ->
+			% Valid manifest from current run
+			MonRef = maps:get(Agent_Id, S#state.agent_id_to_ref, undefined),
+			PopulationId = S#state.population_id,
+			case agent_runtime_registry:get_agent(PopulationId, Agent_Id) of
+				{ok, AgentData} ->
+					agent_runtime_registry:update_monitor_ref(PopulationId, Agent_Id, MonRef),
+					% Phase 8: Log restart completed manifest publish (if this is a restart)
+					CurrentStatus = maps:get(Agent_Id, S#state.runtime_status, undefined),
+					case CurrentStatus of
+						running ->
+							% Check if this is a restart by looking at eviction count
+							EvictionCount = maps:get(eviction_count, AgentData, 0),
+							case EvictionCount > 0 of
+								true ->
+									qlog:benchmarker(PopulationId, io_lib:format("RESTART_COMPLETED | agent_id=~p | run_ref=~p | eviction_count=~p", [Agent_Id, RunRef, EvictionCount]));
+								false ->
+									ok % Initial spawn, not a restart
+							end;
+						_ ->
+							ok
+					end;
+				{error, not_found} ->
+					ok
+			end;
+		_ ->
+			% Stale manifest from old run, ignore
+			ok
+	end,
+	{noreply, S};
+handle_info({From, benchmark_complete, Specie_Id, Fitness, Cycles, Time}, S) ->
+	handle_terminal_mode_completion(From, Specie_Id, Fitness, Cycles, Time, S);
+handle_info({From, live_trading_complete, Specie_Id, Fitness, Cycles, Time}, S) ->
+	handle_terminal_mode_completion(From, Specie_Id, Fitness, Cycles, Time, S);
+handle_info({'DOWN', _MonRef, process, Pid, Reason}, S) ->
+	% Phase 4: Handle monitored exoself process death
+	case maps:get(Pid, S#state.agent_pid_to_id, undefined) of
+		undefined ->
+			% Not a managed agent, ignore
+			{noreply, S};
+		Agent_Id ->
+			io:format("Monitored agent ~p (PID ~p) died with reason: ~p~n", [Agent_Id, Pid, Reason]),
+			% Check current status
+			CurrentStatus = maps:get(Agent_Id, S#state.runtime_status, undefined),
+			case CurrentStatus of
+				evicting ->
+					EvictionReason = case maps:get(Agent_Id, S#state.inflight_evictions, undefined) of
+						undefined ->
+							down_during_eviction;
+						EvictionData ->
+							maps:get(reason, EvictionData, down_during_eviction)
+					end,
+					io:format("Agent ~p exited during eviction (reason: ~p)~n", [Agent_Id, EvictionReason]),
+					qlog:benchmarker(S#state.population_id, io_lib:format("EVICTION_PROCESS_DOWN | agent_id=~p | pid=~p | reason=~p | status=finalized", [Agent_Id, Pid, EvictionReason])),
+					{noreply, finalize_eviction(Agent_Id, EvictionReason, S)};
+				completed ->
+					% Already marked as completed, this is expected
+					{noreply, S};
+				running ->
+					% Unexpected death, treat as crash
+					io:format("Agent ~p crashed unexpectedly, enqueueing restart~n", [Agent_Id]),
+					% Phase 8: Log crash detected
+					qlog:benchmarker(S#state.population_id, io_lib:format("CRASH_DETECTED | agent_id=~p | pid=~p | reason=~p", [Agent_Id, Pid, Reason])),
+					U_S1 = mark_agent_status(Agent_Id, crashed, Reason, S),
+					U_S2 = remove_running_agent(Agent_Id, U_S1),
+					U_S3 = enqueue_restart(Agent_Id, U_S2),
+					% Don't decrement agents_left for crashes - they will restart
+					{noreply, U_S3};
+				_ ->
+					io:format("Agent ~p died in status ~p~n", [Agent_Id, CurrentStatus]),
+					{noreply, S}
+			end
+	end;
 handle_info(_Info, State) ->
     {noreply, State}.
 
@@ -363,10 +630,19 @@ terminate(Reason, S) ->
 		[] ->
 			io:format("******** Population_Monitor shut down with Reason:~p, with State: []~n",[Reason]);
 		_ ->
+			% Phase 5: Stop auditor if running
+			case S#state.auditor_pid of
+				undefined -> ok;
+				AuditorPid when is_pid(AuditorPid) ->
+					agent_auditor:stop(AuditorPid),
+					qlog:benchmarker(S#state.population_id, io_lib:format("AUDITOR_STOPPED | auditor_pid=~p", [AuditorPid]))
+			end,
+			% Phase 2: Clear runtime registry for this population
+			Population_Id = S#state.population_id,
+			agent_runtime_registry:clear_population(Population_Id),
 			OpMode = S#state.op_mode,
 			OpTag = S#state.op_tag,
 			TotEvaluations=S#state.tot_evaluations,
-			Population_Id = S#state.population_id,
 			case TotEvaluations < 500 of
 				true ->%So that there is at least one stat in the stats list.
 					gather_STATS(Population_Id,0,OpMode);
@@ -391,6 +667,35 @@ terminate(Reason, S) ->
 				PId ->
 					PId ! {S#state.population_id,completed,U_T}
 			end
+	end.
+
+handle_terminal_mode_completion(From, Specie_Id, Fitness, Cycles, Time, S) ->
+	case lookup_agent_completion_context(From, S) of
+		{ok, Agent_Id, Managed} ->
+			{noreply, S1} = handle_evaluations(Specie_Id, 1, Cycles, Time, S),
+			S2 = case Managed of
+				true ->
+					mark_agent_status(Agent_Id, completed, normal_completion, S1);
+				false ->
+					S1
+			end,
+			handle_agent_completion(Agent_Id, Fitness, Managed, S2);
+		error ->
+			io:format("Ignoring completion from unknown agent pid ~p~n", [From]),
+			{noreply, S}
+	end.
+
+lookup_agent_completion_context(Pid, S) ->
+	case maps:get(Pid, S#state.agent_pid_to_id, undefined) of
+		undefined ->
+			case lists:keyfind(Pid, 2, S#state.activeAgent_IdPs) of
+				{AgentId, Pid} ->
+					{ok, AgentId, false};
+				false ->
+					error
+			end;
+		AgentId ->
+			{ok, AgentId, true}
 	end.
 %When the population_monitor process terminates, it states so, notifies with what op_tag and op_mode it terminated, all the stats gathered, and then shuts down.
 
@@ -441,11 +746,13 @@ summon_agents(OpMode,Agent_Ids)->
 	qlog:xLog(qStatus, "SUMMONING_AGENTS | op_mode=~p", [OpMode]),
 	summon_agents(OpMode,Agent_Ids,[]).
 summon_agents(OpMode,[Agent_Id|Agent_Ids],Acc)->
-	Agent_PId = exoself:start(Agent_Id,self()),
-	summon_agents(OpMode,Agent_Ids,[{Agent_Id,Agent_PId}|Acc]);
+	RunRef = make_ref(),
+	Agent_PId = exoself:start(Agent_Id,self(),agent_run_mode(OpMode),RunRef),
+	MonRef = erlang:monitor(process, Agent_PId),
+	summon_agents(OpMode,Agent_Ids,[{Agent_Id,Agent_PId,RunRef,MonRef}|Acc]);
 summon_agents(_OpMode,[],Acc)->
 	Acc.
-%The summon_agents/2 and summon_agents/3 spawns all the agents in the Agent_ids list, and returns to the caller a list of tuples as follows: [{Agent_Id,Agent_PId}...].
+%The summon_agents/2 and summon_agents/3 spawns all the agents in the Agent_ids list, and returns to the caller a list of tuples as follows: [{Agent_Id,Agent_PId,RunRef,MonRef}...].
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 test()->
@@ -821,3 +1128,242 @@ print_SpecieDiversity([Specie_Id|Specie_Ids])->
 	print_SpecieDiversity(Specie_Ids);
 print_SpecieDiversity([])->
 	done.
+
+%% ===================================================================
+%% Phase 4: Runtime Exit Semantics Helper Functions
+%% ===================================================================
+
+%% current_run_matches/3 - Check if RunRef matches current run for agent
+current_run_matches(AgentId, RunRef, S) ->
+	case maps:get(AgentId, S#state.agent_id_to_runref, undefined) of
+		RunRef -> true;
+		_ -> false
+	end.
+
+%% mark_agent_status/4 - Update agent runtime status
+mark_agent_status(AgentId, Status, Reason, S) ->
+	U_RuntimeStatus = maps:put(AgentId, Status, S#state.runtime_status),
+	TsMs = erlang:system_time(millisecond),
+	agent_runtime_registry:update_status(S#state.population_id, AgentId, Status, Reason, TsMs),
+	S#state{runtime_status = U_RuntimeStatus}.
+
+register_spawned_agents(SpawnedAgents, S) ->
+	ActiveAgent_IdPs = [{AgentId, Pid} || {AgentId, Pid, _RunRef, _MonRef} <- SpawnedAgents],
+	{AgentPidToId, AgentIdToPid, AgentIdToRef, AgentIdToRunRef, RuntimeStatus} =
+		lists:foldl(fun({AgentId, Pid, RunRef, MonRef}, {P2I, I2P, I2R, I2RR, RS}) ->
+			{
+				P2I#{Pid => AgentId},
+				I2P#{AgentId => Pid},
+				I2R#{AgentId => MonRef},
+				I2RR#{AgentId => RunRef},
+				RS#{AgentId => running}
+			}
+		end, {#{}, #{}, #{}, #{}, #{}}, SpawnedAgents),
+	S#state{
+		activeAgent_IdPs = ActiveAgent_IdPs,
+		agent_pid_to_id = AgentPidToId,
+		agent_id_to_pid = AgentIdToPid,
+		agent_id_to_ref = AgentIdToRef,
+		agent_id_to_runref = AgentIdToRunRef,
+		runtime_status = RuntimeStatus
+	}.
+
+spawn_managed_agent(AgentId, OpMode, S) ->
+	RunRef = make_ref(),
+	Agent_PId = exoself:start(AgentId, self(), agent_run_mode(OpMode), RunRef),
+	MonRef = erlang:monitor(process, Agent_PId),
+	U_S = register_running_agent(AgentId, Agent_PId, RunRef, MonRef, S),
+	{Agent_PId, RunRef, MonRef, U_S}.
+
+agent_run_mode(benchmark) ->
+	gt;
+agent_run_mode([gt | _]) ->
+	gt;
+agent_run_mode(gt) ->
+	gt;
+agent_run_mode(Mode) ->
+	Mode.
+
+register_running_agent(AgentId, Pid, RunRef, MonRef, S) ->
+	CleanedPidToId = case maps:get(AgentId, S#state.agent_id_to_pid, undefined) of
+		undefined -> S#state.agent_pid_to_id;
+		OldPid -> maps:remove(OldPid, S#state.agent_pid_to_id)
+	end,
+	CleanedActiveAgent_IdPs = lists:keydelete(AgentId, 1, S#state.activeAgent_IdPs),
+	S#state{
+		activeAgent_IdPs = [{AgentId, Pid} | CleanedActiveAgent_IdPs],
+		agent_pid_to_id = CleanedPidToId#{Pid => AgentId},
+		agent_id_to_pid = maps:put(AgentId, Pid, S#state.agent_id_to_pid),
+		agent_id_to_ref = maps:put(AgentId, MonRef, S#state.agent_id_to_ref),
+		agent_id_to_runref = maps:put(AgentId, RunRef, S#state.agent_id_to_runref),
+		runtime_status = maps:put(AgentId, running, S#state.runtime_status)
+	}.
+
+%% remove_running_agent/2 - Remove agent from active tracking maps
+remove_running_agent(AgentId, S) ->
+	U_AgentIdToPid = maps:remove(AgentId, S#state.agent_id_to_pid),
+	U_AgentIdToRef = maps:remove(AgentId, S#state.agent_id_to_ref),
+	U_AgentIdToRunRef = maps:remove(AgentId, S#state.agent_id_to_runref),
+	% Remove PID mapping if exists
+	U_AgentPidToId = case maps:get(AgentId, S#state.agent_id_to_pid, undefined) of
+		undefined -> S#state.agent_pid_to_id;
+		Pid -> maps:remove(Pid, S#state.agent_pid_to_id)
+	end,
+	S#state{
+		activeAgent_IdPs = lists:keydelete(AgentId, 1, S#state.activeAgent_IdPs),
+		agent_pid_to_id = U_AgentPidToId,
+		agent_id_to_pid = U_AgentIdToPid,
+		agent_id_to_ref = U_AgentIdToRef,
+		agent_id_to_runref = U_AgentIdToRunRef
+	}.
+
+cleanup_completed_agent(AgentId, true, S) ->
+	U_S = remove_running_agent(AgentId, S),
+	U_RuntimeStatus = maps:remove(AgentId, U_S#state.runtime_status),
+	agent_runtime_registry:delete_agent(S#state.population_id, AgentId),
+	U_S#state{runtime_status = U_RuntimeStatus};
+cleanup_completed_agent(AgentId, false, S) ->
+	S#state{activeAgent_IdPs = lists:keydelete(AgentId, 1, S#state.activeAgent_IdPs)}.
+
+finalize_eviction(AgentId, Reason, S) ->
+	RunRef = maps:get(AgentId, S#state.agent_id_to_runref, undefined),
+	AgentBytes = eviction_agent_bytes(AgentId, Reason, S),
+	qlog:xLog(qStatus, "EVICTION_FINALIZED | population_id=~p | agent_id=~p | run_ref=~p | agent_bytes=~p | reason=~p", [S#state.population_id, AgentId, RunRef, AgentBytes, Reason]),
+	qlog:benchmarker(S#state.population_id, io_lib:format("EVICTION_COMPLETED | agent_id=~p | run_ref=~p | reason=~p", [AgentId, RunRef, Reason])),
+	U_S1 = mark_agent_status(AgentId, evicted, Reason, S),
+	U_S2 = remove_running_agent(AgentId, U_S1),
+	U_S3 = enqueue_restart(AgentId, U_S2),
+	U_S3#state{inflight_evictions = maps:remove(AgentId, U_S3#state.inflight_evictions)}.
+
+evict_running_agent(AgentId, Reason, S) ->
+	RunRef = maps:get(AgentId, S#state.agent_id_to_runref),
+	AgentBytes = eviction_agent_bytes(AgentId, Reason, S),
+	qlog:xLog(qStatus, "EVICTION_IDENTIFIED | population_id=~p | agent_id=~p | run_ref=~p | agent_bytes=~p | reason=~p", [S#state.population_id, AgentId, RunRef, AgentBytes, Reason]),
+	qlog:benchmarker(S#state.population_id, io_lib:format("EVICTION_REQUESTED | agent_id=~p | reason=~p", [AgentId, Reason])),
+	U_S1 = mark_agent_status(AgentId, evicting, Reason, S),
+	AgentPid = maps:get(AgentId, S#state.agent_id_to_pid),
+	AgentPid ! {admin, graceful_stop, self(), Reason},
+	TsMs = erlang:system_time(millisecond),
+	EvictionData = #{
+		run_ref => RunRef,
+		requested_ts_ms => TsMs,
+		reason => Reason
+	},
+	GraceMs = config:auditor_grace_ms(),
+	erlang:send_after(GraceMs, self(), {eviction_grace_expired, AgentId, RunRef}),
+	U_S1#state{inflight_evictions = maps:put(AgentId, EvictionData, U_S1#state.inflight_evictions)}.
+
+%% enqueue_restart/2 - Add agent to restart queue
+enqueue_restart(AgentId, S) ->
+	U_RestartQueue = queue:in(AgentId, S#state.restart_queue),
+	io:format("Agent ~p enqueued for restart (queue length: ~p)~n", [AgentId, queue:len(U_RestartQueue)]),
+	qlog:benchmarker(S#state.population_id, io_lib:format("RESTART_ENQUEUED | agent_id=~p | queue_length=~p", [AgentId, queue:len(U_RestartQueue)])),
+	S#state{restart_queue = U_RestartQueue}.
+
+%% restart_agent/2 - Restart a single agent
+%% Phase 6: Enhanced with inflight eviction check
+restart_agent(AgentId, S) ->
+	% Phase 6: Do not restart if eviction is inflight for this agent
+	InFlight = maps:is_key(AgentId, S#state.inflight_evictions),
+	CurrentStatus = maps:get(AgentId, S#state.runtime_status, undefined),
+	
+	case {InFlight, CurrentStatus} of
+		{true, _} ->
+			% Eviction inflight, skip restart and re-enqueue
+			io:format("Skipping restart for Agent ~p: eviction inflight~n", [AgentId]),
+			qlog:benchmarker(S#state.population_id, io_lib:format("RESTART_SKIPPED | agent_id=~p | reason=eviction_inflight", [AgentId])),
+			U_RestartQueue = queue:in(AgentId, S#state.restart_queue),
+			S#state{restart_queue = U_RestartQueue};
+		{false, evicting} ->
+			% Still in evicting state but no inflight record, skip and re-enqueue
+			io:format("Skipping restart for Agent ~p: still evicting~n", [AgentId]),
+			qlog:benchmarker(S#state.population_id, io_lib:format("RESTART_SKIPPED | agent_id=~p | reason=still_evicting", [AgentId])),
+			U_RestartQueue = queue:in(AgentId, S#state.restart_queue),
+			S#state{restart_queue = U_RestartQueue};
+		{false, running} ->
+			% Already running (shouldn't happen), skip
+			io:format("Skipping restart for Agent ~p: already running~n", [AgentId]),
+			qlog:benchmarker(S#state.population_id, io_lib:format("RESTART_SKIPPED | agent_id=~p | reason=already_running", [AgentId])),
+			S;
+		_ ->
+			% Valid restart
+			io:format("Restarting Agent ~p~n", [AgentId]),
+			% Phase 8: Log restart started
+			qlog:benchmarker(S#state.population_id, io_lib:format("RESTART_STARTED | agent_id=~p | previous_status=~p", [AgentId, CurrentStatus])),
+			U_S0 = mark_agent_status(AgentId, restarting, CurrentStatus, S),
+			% Phase 6: Increment eviction count in registry
+			TsMs = erlang:system_time(millisecond),
+			agent_runtime_registry:increment_eviction_count(S#state.population_id, AgentId, TsMs),
+			{Agent_PId, RunRef, _MonRef, U_S} = spawn_managed_agent(AgentId, S#state.op_mode, U_S0),
+			% Phase 8: Log restart will complete when manifest is published
+			qlog:benchmarker(S#state.population_id, io_lib:format("RESTART_SPAWNED | agent_id=~p | new_run_ref=~p | new_pid=~p", [AgentId, RunRef, Agent_PId])),
+			U_S
+	end.
+
+%% restart_batch/2 - Restart up to BatchSize agents from queue
+%% Phase 6: Enhanced with better tracking and logging
+restart_batch(BatchSize, S) ->
+	QueueLength = queue:len(S#state.restart_queue),
+	ActualBatchSize = min(BatchSize, QueueLength),
+	case ActualBatchSize of
+		0 ->
+			S;
+		_ ->
+			io:format("Starting restart batch: ~p agents (queue: ~p)~n", [ActualBatchSize, QueueLength]),
+			qlog:benchmarker(S#state.population_id, 
+				io_lib:format("RESTART_BATCH_START | batch_size=~p | queue_length=~p", [ActualBatchSize, QueueLength])),
+			U_S = restart_batch_loop(ActualBatchSize, S),
+			FinalQueueLength = queue:len(U_S#state.restart_queue),
+			io:format("Restart batch complete: ~p agents restarted, ~p remaining in queue~n", 
+				[ActualBatchSize, FinalQueueLength]),
+			qlog:benchmarker(S#state.population_id, 
+				io_lib:format("RESTART_BATCH_COMPLETE | restarted=~p | remaining_queue=~p", 
+					[ActualBatchSize, FinalQueueLength])),
+			U_S
+	end.
+
+restart_batch_loop(0, S) ->
+	S;
+restart_batch_loop(BatchSize, S) when BatchSize > 0 ->
+	case queue:out(S#state.restart_queue) of
+		{{value, AgentId}, U_RestartQueue} ->
+			U_S1 = S#state{restart_queue = U_RestartQueue},
+			U_S2 = restart_agent(AgentId, U_S1),
+			restart_batch_loop(BatchSize - 1, U_S2);
+		{empty, _} ->
+			S
+	end.
+
+%% force_kill_owned_pids/2 - Force kill all PIDs owned by agent
+force_kill_owned_pids(AgentId, S) ->
+	case agent_runtime_registry:get_agent(S#state.population_id, AgentId) of
+		{ok, AgentData} ->
+			OwnedPids = maps:get(owned_pids, AgentData, []),
+			AgentBytes = current_agent_memory_bytes(AgentId, S),
+			io:format("Force killing ~p PIDs for Agent ~p~n", [length(OwnedPids), AgentId]),
+			[catch exit(Pid, kill) || Pid <- OwnedPids],
+			qlog:xLog(qStatus, "FORCE_KILL_DISPATCHED | population_id=~p | agent_id=~p | agent_bytes=~p | pid_count=~p", [S#state.population_id, AgentId, AgentBytes, length(OwnedPids)]),
+			S;
+		{error, not_found} ->
+			io:format("Cannot force kill Agent ~p: not found in registry~n", [AgentId]),
+			qlog:xLog(qStatus, "FORCE_KILL_SKIPPED | population_id=~p | agent_id=~p | reason=registry_not_found", [S#state.population_id, AgentId]),
+			S
+	end.
+
+eviction_agent_bytes(_AgentId, {memory_pressure, _TotalMemory, AgentBytes}, _S) when is_integer(AgentBytes) ->
+	AgentBytes;
+eviction_agent_bytes(AgentId, _Reason, S) ->
+	current_agent_memory_bytes(AgentId, S).
+
+current_agent_memory_bytes(AgentId, S) ->
+	case agent_runtime_registry:sum_agent_memory(S#state.population_id, AgentId) of
+		{ok, Bytes} when Bytes > 0 ->
+			Bytes;
+		_ ->
+			case agent_runtime_registry:get_agent(S#state.population_id, AgentId) of
+				{ok, AgentData} ->
+					maps:get(last_memory_bytes, AgentData, undefined);
+				{error, not_found} ->
+					undefined
+			end
+	end.

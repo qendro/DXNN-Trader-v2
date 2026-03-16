@@ -175,6 +175,18 @@ fitness_dd_lambda_late() -> get_val(fitness_dd_lambda_late, 4.0).  % Late genera
 %% are already defined in the "Curriculum Risk Penalty Fitness Configuration" section above
 
 %% ===================================================================
+%% Auditor Configuration (Phase 1: Memory Management)
+%% ===================================================================
+auditor_enabled() -> get_val(auditor_enabled, true).                   % Options: true, false (default: false for MVP)
+auditor_interval_ms() -> get_val(auditor_interval_ms, 4000).            % Options: any positive integer in milliseconds (default: 3000 = 3 seconds)
+auditor_high_water_bytes() -> get_val(auditor_high_water_bytes, 20000000000). % Options: any positive integer in bytes (default: 10GB)
+auditor_low_water_bytes() -> get_val(auditor_low_water_bytes, 9000000000).    % Options: any positive integer in bytes (default: 9GB)
+auditor_victim_policy() -> get_val(auditor_victim_policy, highest_agent_memory). % Options: highest_agent_memory
+auditor_grace_ms() -> get_val(auditor_grace_ms, 3000).                  % Options: any positive integer in milliseconds (default: 2000 = 2 seconds)
+auditor_restart_batch_size() -> get_val(auditor_restart_batch_size, 1). % Options: any positive integer (default: 1)
+auditor_progress_heartbeat_cycles() -> get_val(auditor_progress_heartbeat_cycles, 5000). % Options: disabled, or positive integer
+
+%% ===================================================================
 %% Checkpoint Configuration
 %% ===================================================================
 checkpoint_enabled() -> get_val(checkpoint_enabled, auto).              % Options: auto, true, false (auto = detect AWS environment)

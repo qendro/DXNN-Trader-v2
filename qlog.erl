@@ -692,8 +692,8 @@ exp_runner(Event, Data) ->
                     Gens = [A#agent.generation || A <- Ags],
                     {AIds, Ags, Fits, Gens}
             end,
-            BestFitness = case Fitnesses of [] -> 0.0; _ -> lists:max(Fitnesses) end,
-            AvgFitness = case Fitnesses of [] -> 0.0; _ -> lists:sum(Fitnesses) / length(Fitnesses) end,
+            BestFitness = ensure_float(case Fitnesses of [] -> 0.0; _ -> lists:max(Fitnesses) end),
+            AvgFitness = ensure_float(case Fitnesses of [] -> 0.0; _ -> lists:sum(Fitnesses) / length(Fitnesses) end),
             MaxGen = case Generations of [] -> 0; _ -> lists:max(Generations) end,
             AgentCount = length(AgentIds),
             
@@ -1458,3 +1458,8 @@ delete_agent_folder(Agent_Identifier) ->
                     Error
             end
     end.
+
+ensure_float(Value) when is_integer(Value) ->
+    float(Value);
+ensure_float(Value) ->
+    Value.

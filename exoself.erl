@@ -27,7 +27,10 @@
 	substrate_pid,
 	cpp_pids=[],
 	cep_pids=[],
-	opmode
+	opmode,
+	run_ref=undefined,      % RunRef for managed lifecycle tracking
+	population_id=undefined, % Population ID for managed agents
+	managed=false            % Flag indicating if this is a managed agent
 }).
 
 start(Agent_Id)->
@@ -45,7 +48,14 @@ start(Agent_Id,PM_PId,OpMode)->
 	spawn(exoself,prep,[Agent_Id,PM_PId,OpMode]).
 %The start/3 function spawns a new Agent_Id exoself process, belonging to the population_monitor process with the pid PM_PId, and using the OpMode with which it was spawned.
 
+start(Agent_Id,PM_PId,OpMode,RunRef)->
+	spawn(exoself,prep,[Agent_Id,PM_PId,OpMode,RunRef]).
+%The start/4 function spawns a managed exoself process with a RunRef for PM-managed lifecycle tracking.
+
 prep(Agent_Id,PM_PId,OpMode)->
+	prep(Agent_Id,PM_PId,OpMode,undefined).
+
+prep(Agent_Id,PM_PId,OpMode,RunRef)->
 	IdsNPIds = ets:new(idsNpids,[set,private]),
 	A = genotype:dirty_read({agent,Agent_Id}),
 	case A of
@@ -56,6 +66,8 @@ prep(Agent_Id,PM_PId,OpMode)->
 		_ ->
 			ok
 	end,
+	Managed = (RunRef =/= undefined),
+	Population_Id = A#agent.population_id,
 	HeredityType = A#agent.heredity_type,
 	Cx = genotype:dirty_read({cortex,A#agent.cx_id}),
 	SIds = Cx#cortex.sensor_ids,
@@ -118,25 +130,35 @@ prep(Agent_Id,PM_PId,OpMode)->
 			annealing_parameter=A#agent.annealing_parameter,
 			tuning_duration_f=A#agent.tuning_duration_f,
 			perturbation_range=A#agent.perturbation_range,
-			opmode=OpMode
+			opmode=OpMode,
+			run_ref=RunRef,
+			population_id=Population_Id,
+			managed=Managed
 		},
 	%qlog:register_agent(self(), Agent_Id),
 	%qlog:xLog(pid_to_list(self()), "ExoSelf: ~p generated phenotype for Agent_Id: ~p, Gen: ~p, Specie_Id: ~p. Spawning main loop. Genotype: ~p", [self(), Agent_Id, A#agent.generation, A#agent.specie_id, A]),
 	% Log PID map for this agent spawn
-	All_Pids = [self(), S#state.cx_pid | S#state.spids] ++ S#state.npids ++ 
-	           S#state.apids ++ S#state.scape_pids ++ S#state.cpp_pids ++ 
-	           S#state.cep_pids ++ 
-	           case S#state.substrate_pid of
-	               undefined -> [];
-	               SubPid -> [SubPid]
-	           end,
-	Run_Id = qlog:get_run_id_from_population_id(A#agent.population_id),
-	qlog:pid_map_log(Run_Id, A#agent.generation, Agent_Id, All_Pids),
-	loop(S,OpMode).
+		All_Pids = owned_pids(S),
+		Run_Id = qlog:get_run_id_from_population_id(A#agent.population_id),
+		qlog:pid_map_log(Run_Id, A#agent.generation, Agent_Id, All_Pids),
+		publish_manifest(S),
+		loop(S,OpMode).
 %The prep/2 function prepares and sets up the exoself's state before dropping into the main loop. The function first reads the agent and cortex records belonging to the Agent_Id NN based system. The function then reads the sensor, actuator, and neuron ids, then spawns the private scapes using the spawn_Scapes/3 function, spawns the cortex, sensor, actuator, and neuron processes, and then finally links up all these processes together using the link_.../2 processes. Once the phenotype has been generated from the genotype, the exoself drops into its main loop.
 
 loop(S,gt)->
 	receive
+		% Phase 3: Admin message handlers for managed agents
+		{admin, get_manifest, ReplyTo} when S#state.managed ->
+			OwnedPids = owned_pids(S),
+			ReplyTo ! {exoself_manifest, S#state.run_ref, S#state.agent_id, self(), OwnedPids, S#state.opmode},
+			loop(S,gt);
+		{admin, get_status, ReplyTo} when S#state.managed ->
+			StatusMap = admin_status(S),
+			ReplyTo ! {exoself_status, S#state.run_ref, S#state.agent_id, StatusMap},
+			loop(S,gt);
+		{admin, graceful_stop, ReplyTo, Reason} when S#state.managed ->
+			graceful_shutdown(S, Reason),
+			ReplyTo ! {exoself_graceful_stopped, S#state.run_ref, S#state.agent_id, Reason};
 		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
 			qlog:benchmarker(S#state.agent_id,io_lib:format("TRAIN_EVAL | attempt=~p | fitness=~p | cycles=~p | time=~p",[S#state.attempt,Fitness,Cycles,Time])),
 			IdsNPIds = S#state.idsNpids,
@@ -168,7 +190,7 @@ loop(S,gt)->
 			%QQ Collect and log total reductions for this evaluation
 			%Total_Reductions = collect_total_reductions(S),
 			%qlog:agent_reductions_log(S#state.agent_id, U_EvalAcc, Total_Reductions),
-			gen_server:cast(S#state.pm_pid,{self(),evaluations,S#state.specie_id,1,Cycles,Time}),
+			report_evaluations(S, Cycles, Time),
 			case (U_Attempt >= S#state.max_attempts) or (GoalReachedFlag == true) of
 				true ->	%End training
 					%case U_Attempt >= S#state.max_attempts of 
@@ -183,11 +205,11 @@ loop(S,gt)->
 					terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
 					case GoalReachedFlag of
 						true ->
-							gen_server:cast(S#state.pm_pid,{S#state.agent_id,goal_reached});
+							report_goal_reached(S);
 						_ ->
 							ok
 					end,
-					gen_server:cast(S#state.pm_pid,{S#state.agent_id,terminated,U_HighestFitness});
+					report_completion(S, U_HighestFitness);
 				false -> %Continue training
 					TuningSelectionFunction=S#state.tuning_selection_f,
 					PerturbationRange = S#state.perturbation_range,
@@ -205,39 +227,21 @@ loop(S,gt)->
 					},
 					exoself:loop(U_S,gt)
 			end
-		after 600000 ->
+		after config:evaluation_timeout_ms() ->
 			qlog:xLog(qStatus, "Agent ~p timeout: no evaluation completed, assigning 0 fitness", [S#state.agent_id]),
 			% Clean up and report 0 fitness - same as normal termination
 			A=genotype:dirty_read({agent,S#state.agent_id}),
 			qlog:genotype_snapshot(S#state.agent_id, "Timeout: No evaluation completed, assigning 0 fitness"),
 			genotype:write(A#agent{fitness=0.0}),
 			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			gen_server:cast(S#state.pm_pid,{S#state.agent_id,terminated,0.0})
-	end;
-loop(S,benchmark)->
-	receive
-		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
-			A=genotype:dirty_read({agent,S#state.agent_id}),
-			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			io:format("Benchmark complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
-			S#state.pm_pid ! {self(),benchmark_complete,S#state.specie_id,Fitness,Cycles,Time}
-	end;
-loop(S,test)->
-	receive
-		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
-			A=genotype:dirty_read({agent,S#state.agent_id}),
-			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			io:format("Test complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
-			S#state.pm_pid ! {self(),benchmark_complete,S#state.specie_id,Fitness,Cycles,Time}
-	end;
-loop(S,live_trading)->
-	receive
-		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
-			A=genotype:dirty_read({agent,S#state.agent_id}), 
-			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
-			io:format("Live trading complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[self(),Fitness,Cycles,Time,GoalReachedFlag]),
-			S#state.pm_pid ! {self(),live_trading_complete,S#state.specie_id,Fitness,Cycles,Time}
-		end.
+			report_completion(S, 0.0)
+		end;
+	loop(S,benchmark)->
+		loop_terminal_mode(S, benchmark_complete, "Benchmark");
+	loop(S,test)->
+		loop_terminal_mode(S, benchmark_complete, "Test");
+	loop(S,live_trading)->
+		loop_terminal_mode(S, live_trading_complete, "Live trading").
 %The exoself process' main loop awaits from its cortex proccess the evoluation_completed message. Once the message is received, based on the fitness achieved, exoself decides whether to continue tunning the weights or terminate the system. Exoself tries to improve the fitness by perturbing/tuning the weights of its neurons, after each tuning session, the Neural Network based system performs another evaluation by interacting with the scape until completion (the NN solves a problem, or dies within the scape or...). The order of events is important: When evaluation_completed message is received, the function first checks whether the newly achieved fitness is higher than the highest fitness achieved so far. If it is not, the function sends the neurons a message to restore their weights to previous state, during which it last acehived the highest fitness instead of their current state which yielded the current lower fitness score. If on the other hand the new fitness is higher than the previously highest achieved fitness, then the function tells the neurons to backup their current weights, as these weights represent the NN's best, most fit form yet. Exoself then tells all the neurons to prepare for a reset by sending each neuron the {self(),reset_prep} message. Since the NN can have recursive connections, and the manner in which initial recursive messages are sent, it is important for each neuron to flush their buffers to be reset into an initial fresh state, which is achieved after the neurons receive the reset_prep message. The function then sends the reset message to the neurons, which returns them into their main loop. Finally, the function checks whether exoself has already tried to improve the NN's fitness a maximum S#state.max_attempts number of times. If that is the case, the exoself process backs up the updated NN (the updated, tuned weights) to database using the backup_genotype/2 function, prints to screen that it is terminating, and sends to the population_monitor the acumulated statistics (highest fitness, evaluation count, cycle count...). On the other hand, if the exoself is not yet done tuning the neural weights, it has not yet reached its ending condition, it uses a tuning_selection_function to compose a list of tuples: [{NId,Spread}...] of neuron ids and the perturbation spread values, where the spread is the range from which the perturbation is randomly chosen. The spread itself is based on the age of the slected neuron, using the annealing_factor value, which when set to 1 implies that there is no annealing, and when set to a value less than 1, decreases the Spread. Once this list of elements is composed, the exoself sends each of the neurons a message to perturb their synaptic weights using the Spread value. The exoself then reactivates the cortex, and drops back into its main loop.
 
 spawn_CerebralUnits(IdsNPIds,CerebralUnitType,[Id|Ids])-> 
@@ -518,3 +522,119 @@ gather_acks(PId_Index)->
 			io:format("******** Not all acks received:~p~n",[PId_Index])
 	end.
 %gather_acks/1 ensures that the X number of {From,ready} messages are sent to it, before it returns with done. X is set by the caller of the function.
+
+%% ===================================================================
+%% Phase 3: Managed ExoSelf Control Path Helpers
+%% ===================================================================
+
+%% owned_pids/1 - Returns list of all PIDs owned by this agent
+owned_pids(S) ->
+	All_Pids = [self(), S#state.cx_pid | S#state.spids] ++ 
+	           S#state.npids ++ S#state.apids ++ S#state.scape_pids ++ 
+	           S#state.cpp_pids ++ S#state.cep_pids ++ 
+	           case S#state.substrate_pid of
+	               undefined -> [];
+	               SubPid -> [SubPid]
+	           end,
+	lists:usort(All_Pids).
+
+publish_manifest(S) ->
+	case S#state.managed of
+		true ->
+			OwnedPids = owned_pids(S),
+			SpawnTsMs = erlang:system_time(millisecond),
+			agent_runtime_registry:upsert_manifest(
+				S#state.population_id,
+				S#state.agent_id,
+				S#state.run_ref,
+				self(),
+				OwnedPids,
+				S#state.opmode,
+				running,
+				SpawnTsMs,
+				undefined,
+				undefined
+			),
+			qlog:benchmarker(S#state.population_id, io_lib:format("AGENT_MANIFEST_PUBLISHED | agent_id=~p | run_ref=~p | exoself_pid=~p | owned_pids_count=~p", [S#state.agent_id, S#state.run_ref, self(), length(OwnedPids)])),
+			S#state.pm_pid ! {self(), manifest_published, S#state.agent_id, S#state.run_ref};
+		false ->
+			ok
+	end.
+
+%% managed_runtime_event/3 - Sends runtime event to PM if managed
+managed_runtime_event(S, EventType, EventMap) ->
+	case S#state.managed of
+		true ->
+			gen_server:cast(S#state.pm_pid, {agent_runtime_event, S#state.run_ref, S#state.agent_id, EventType, EventMap});
+		false ->
+			ok
+	end.
+
+report_evaluations(S, Cycles, Time) ->
+	case S#state.managed of
+		true ->
+			managed_runtime_event(S, evaluations, #{specie_id => S#state.specie_id, evals => 1, cycles => Cycles, time => Time});
+		false ->
+			gen_server:cast(S#state.pm_pid, {self(),evaluations,S#state.specie_id,1,Cycles,Time})
+	end.
+
+report_goal_reached(S) ->
+	case S#state.managed of
+		true ->
+			managed_runtime_event(S, goal_reached, #{});
+		false ->
+			gen_server:cast(S#state.pm_pid, {S#state.agent_id,goal_reached})
+	end.
+
+report_completion(S, Fitness) ->
+	case S#state.managed of
+		true ->
+			managed_runtime_event(S, completed, #{fitness => Fitness});
+		false ->
+			gen_server:cast(S#state.pm_pid, {S#state.agent_id,terminated,Fitness})
+	end.
+
+%% admin_status/1 - Returns current agent status map
+admin_status(S) ->
+	#{
+		agent_id => S#state.agent_id,
+		generation => S#state.generation,
+		specie_id => S#state.specie_id,
+		highest_fitness => S#state.highest_fitness,
+		eval_acc => S#state.eval_acc,
+		cycle_acc => S#state.cycle_acc,
+		time_acc => S#state.time_acc,
+		attempt => S#state.attempt,
+		max_attempts => S#state.max_attempts,
+		opmode => S#state.opmode,
+		managed => S#state.managed,
+		run_ref => S#state.run_ref
+	}.
+
+%% graceful_shutdown/2 - Gracefully terminates phenotype and emits evicted event
+graceful_shutdown(S, Reason) ->
+	% Terminate all phenotype processes
+	terminate_phenotype(S#state.cx_pid, S#state.spids, S#state.npids, S#state.apids, 
+	                    S#state.scape_pids, S#state.cpp_pids, S#state.cep_pids, S#state.substrate_pid),
+
+	managed_runtime_event(S, evicted, #{reason => Reason}),
+
+	% Exit normally (do not write fitness to genotype on eviction)
+	ok.
+
+loop_terminal_mode(S, CompletionTag, Label) ->
+	receive
+		{admin, get_manifest, ReplyTo} when S#state.managed ->
+			ReplyTo ! {exoself_manifest, S#state.run_ref, S#state.agent_id, self(), owned_pids(S), S#state.opmode},
+			loop_terminal_mode(S, CompletionTag, Label);
+		{admin, get_status, ReplyTo} when S#state.managed ->
+			ReplyTo ! {exoself_status, S#state.run_ref, S#state.agent_id, admin_status(S)},
+			loop_terminal_mode(S, CompletionTag, Label);
+		{admin, graceful_stop, ReplyTo, Reason} when S#state.managed ->
+			graceful_shutdown(S, Reason),
+			ReplyTo ! {exoself_graceful_stopped, S#state.run_ref, S#state.agent_id, Reason};
+		{_Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
+			terminate_phenotype(S#state.cx_pid,S#state.spids,S#state.npids,S#state.apids,S#state.scape_pids,S#state.cpp_pids,S#state.cep_pids,S#state.substrate_pid),
+			io:format("~s complete, agent:~p terminating. Fitness:~p~n TotCycles:~p~n TimeAcc:~p Goal:~p~n",[Label,self(),Fitness,Cycles,Time,GoalReachedFlag]),
+			S#state.pm_pid ! {self(),CompletionTag,S#state.specie_id,Fitness,Cycles,Time}
+	end.

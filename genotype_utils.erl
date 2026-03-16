@@ -210,70 +210,26 @@ get_active_agents() ->
 
 %% Terminate a specific agent by Agent_Id
 %% Usage: genotype_utils:terminate_agent({5.660525142447517e-10,agent}).
-%% This will kill the agent process and notify the population monitor so the program can continue.
+%% Phase 4: Updated to use PM-mediated eviction path instead of direct kill
 terminate_agent(Agent_Id) ->
     case whereis(monitor) of
         undefined -> 
             io:format("Monitor not running~n"),
             {error, monitor_not_running};
         MonitorPid -> 
-            case catch gen_server:call(MonitorPid, get_active_agents) of
-                {active_agents, ActiveAgent_IdPs, _AgentsLeft, _TotAgents} ->
-                    case lists:keyfind(Agent_Id, 1, ActiveAgent_IdPs) of
-                        false ->
-                            io:format("Agent ~p is not in the active agents list~n", [Agent_Id]),
-                            {error, agent_not_found};
-                        {Agent_Id, Agent_PId} ->
-                            case is_process_alive(Agent_PId) of
-                                true ->
-                                    % Get all linked and monitored processes to kill them all
-                                    AllPids = case catch erlang:process_info(Agent_PId, [links, monitors]) of
-                                        ProcessInfo when is_list(ProcessInfo) ->
-                                            Links = proplists:get_value(links, ProcessInfo, []),
-                                            Monitors = proplists:get_value(monitors, ProcessInfo, []),
-                                            MonitoredPids = [Pid || {process, Pid} <- Monitors],
-                                            % Filter out self and monitor (population_monitor)
-                                            [P || P <- Links ++ MonitoredPids, 
-                                                  P =/= Agent_PId, 
-                                                  P =/= self(),
-                                                  case catch erlang:process_info(P, registered_name) of
-                                                      [{registered_name, monitor}] -> false;
-                                                      _ -> true
-                                                  end];
-                                        _ -> []
-                                    end,
-                                    % Kill all child processes first
-                                    KilledCount = lists:foldl(fun(Pid, Acc) ->
-                                        case is_process_alive(Pid) of
-                                            true ->
-                                                exit(Pid, kill),
-                                                Acc + 1;
-                                            false -> Acc
-                                        end
-                                    end, 0, AllPids),
-                                    % Kill the exoself process
-                                    exit(Agent_PId, kill),
-                                    % Update agent fitness to 0.0 in database so it doesn't persist
-                                    case mnesia:dirty_read({agent, Agent_Id}) of
-                                        [] ->
-                                            io:format("Warning: Agent ~p not found in database~n", [Agent_Id]);
-                                        [Agent] ->
-                                            UpdatedAgent = Agent#agent{fitness = 0.0},
-                                            genotype:write(UpdatedAgent),
-                                            io:format("Set agent ~p fitness to 0.0 in database~n", [Agent_Id])
-                                    end,
-                                    % Notify population monitor that agent terminated with 0.0 fitness
-                                    gen_server:cast(MonitorPid, {Agent_Id, terminated, 0.0}),
-                                    io:format("Terminated agent ~p (PID: ~p) and ~p child processes, notified monitor~n", 
-                                             [Agent_Id, Agent_PId, KilledCount]),
-                                    {ok, terminated};
-                                false ->
-                                    io:format("Agent ~p (PID: ~p) is already dead~n", [Agent_Id, Agent_PId]),
-                                    {ok, already_dead}
-                            end
-                    end;
+            % Phase 4: Use PM-mediated eviction request
+            case catch gen_server:call(MonitorPid, {request_agent_eviction, Agent_Id, manual_termination}) of
+                {ok, eviction_requested} ->
+                    io:format("Eviction requested for agent ~p~n", [Agent_Id]),
+                    {ok, eviction_requested};
+                {error, agent_not_found} ->
+                    io:format("Agent ~p is not in the active agents list~n", [Agent_Id]),
+                    {error, agent_not_found};
+                {error, {invalid_status, Status}} ->
+                    io:format("Agent ~p cannot be evicted (status: ~p)~n", [Agent_Id, Status]),
+                    {error, {invalid_status, Status}};
                 {'EXIT', Reason} ->
-                    io:format("Error querying monitor: ~p~n", [Reason]),
+                    io:format("Error requesting eviction: ~p~n", [Reason]),
                     {error, Reason};
                 Other ->
                     io:format("Unexpected response: ~p~n", [Other]),
