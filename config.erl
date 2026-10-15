@@ -70,8 +70,8 @@ tot_topological_mutations_functions() -> get_val(tot_topological_mutations_funct
 %% ===================================================================
 substrate_plasticities() -> get_val(substrate_plasticities, [none, modular_none, hebbian, ojas]).            %Options: none, iterative, abcn, modular_none, hebbian, ojas (iterative - high CPU / Memory usage)
 substrate_linkforms() -> get_val(substrate_linkforms, [l2l_feedforward, jordan_recurrent, neuronself_recurrent]).    % Options: l2l_feedforward, fully_interconnected, jordan_recurrent, neuronself_recurrent (l2l_feedforward - best general-purpose choice, fast and stable)
-substrate_density() -> get_val(substrate_density, 50).                  % Options: 1-1000 (neurode resolution per dimension, typical: 10, 20, 50, 100)
-substrate_depth() -> get_val(substrate_depth, 10).                    % Options: 1-100 (number of hidden layers in substrate, typical: 1, 5, 10, 20)
+substrate_density() -> get_val(substrate_density, 5).                  % Options: 1-1000 (neurode resolution per dimension, typical: 10, 20, 50, 100)
+substrate_depth() -> get_val(substrate_depth, 2).                    % Options: 1-100 (number of hidden layers in substrate, typical: 1, 5, 10, 20)
 
 %% ===================================================================
 %% NEAT Neuron Configuration (Applies to neurons if fully_interconnected is used in both Neural and Substrate encoding)
