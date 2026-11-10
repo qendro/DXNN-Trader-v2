@@ -74,12 +74,12 @@ loop(ExoSelfPid, State = #python_state{}) ->
             From ! {self(), Result},
             loop(ExoSelfPid, NewState);
         {From, sense, internals, _Params} ->
+            %% Same encoding as fx.erl internals: [Position, OpenPnL, PrevOpenPnL], signed by position,
+            %% in units of 0.1% of price. Live only tracks the latest bar's change, so it is used for both.
             LiveState = State#python_state.live_state,
-            From
-            ! {self(),
-               [LiveState#live_state.current_position,
-                LiveState#live_state.entry_price,
-                LiveState#live_state.previous_pc]},
+            Pos = LiveState#live_state.current_position,
+            PC = case LiveState#live_state.previous_pc of N when is_number(N) -> N; _ -> 0 end,
+            From ! {self(), [Pos, Pos*PC*10, Pos*PC*10]},
             loop(ExoSelfPid, State);
         %% Neural network trade requests
         {From, trade, _TableName, TradeSignal} ->

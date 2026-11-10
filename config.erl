@@ -63,7 +63,7 @@ tot_runs() -> get_val(tot_runs, 1).                               % Options: 1-1
 population_evo_alg_f() -> get_val(population_evo_alg_f, generational).        % Options: generational, steady_state
 population_selection_f() -> get_val(population_selection_f, competition).       % Options: competition, top3
 population_fitness_postprocessor_f() -> get_val(population_fitness_postprocessor_f, none). % Options: none, size_proportional
-tot_topological_mutations_functions() -> get_val(tot_topological_mutations_functions, [{ncount_exponential,2}, {ncount_linear,7}]). % Options: {ncount_exponential,0.5}, {ncount_linear,1}
+tot_topological_mutations_functions() -> get_val(tot_topological_mutations_functions, [{ncount_exponential,0.5}]). % Options: {ncount_exponential,0.5}, {ncount_linear,1}. Mutations per offspring = rand(1..round(N^0.5)). Large counts (old default ncount_linear 7 = 7 per neuron) scramble offspring so larger nets cannot inherit what worked.
 
 %% ===================================================================
 %% Substrate-Specific Configuration
@@ -113,7 +113,7 @@ mutation_operators() -> get_val(mutation_operators, [
 
     %% Sensor & Actuator Expansion
     {add_sensor,10},
-    {add_actuator,1},
+    %% add_actuator omitted: forex morphologies have a single actuator, so it always fails
     {add_sensorlink,30},
     {add_actuatorlink,20},
 
@@ -125,7 +125,7 @@ mutation_operators() -> get_val(mutation_operators, [
 %% ===================================================================
 %% Fitness Function Selection
 %% ===================================================================
-fitness_function() -> get_val(fitness_function, curriculum_risk_penalty).                % Options: time_weighted, total_profit, sharpe_ratio, profit_factor, total_return, sortino_ratio, calmar_ratio, curriculum_risk_penalty, phase0_close_trades, phase1_profit_risk, curriculum_trade_quality_profit, phase2_profit_optimization
+fitness_function() -> get_val(fitness_function, total_profit).                % total_profit = final equity (balance + open P&L, spread paid on entry). Options: time_weighted, total_profit, sharpe_ratio, profit_factor, total_return, sortino_ratio, calmar_ratio, curriculum_risk_penalty, phase0_close_trades, phase1_profit_risk, curriculum_trade_quality_profit, phase2_profit_optimization
 
 %% ===================================================================
 %% Time-Weighted Fitness Configuration
