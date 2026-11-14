@@ -573,7 +573,8 @@ arm_run_configs("pilot") ->
 %% episodes; free trading 20 generations, the cost ramp 40, then four runs of NightGens at a quarter pip, each leaving
 %% its population in Mnesia. Every agent is validated at the last generation of each run, on 120 episodes of 2017 (a
 %% full pass of 192 agents on all 369 would take up to half an hour). Each quarter-pip run also has a wall-time cap; a
-%% run ended by the cap skips its validation pass.
+%% run ended by the cap skips its validation pass. The cap is 4 h so that it only catches a hang: on a 12-vCPU GCP
+%% n2 a generation takes about twice as long as on the Mac, and 100 minutes would cut runs 3 to 6 short.
 arm_run_configs("night") ->
     NightGens = 45,
     [R1, R2, R3 | _] = arm_run_configs("rec_vol"),
@@ -581,7 +582,7 @@ arm_run_configs("night") ->
     Common = [{families, 4}, {validate_population_every, 0}, {validate_last_generation, true}, {episodes_val, 120}],
     [{1, Set(element(2, R1), Common ++ [{generation_limit, 20}])},
      {2, Set(element(2, R2), Common ++ [{generation_limit, 40}, {cost_schedule, [{0,0.0},{40,0.000025}]}])}]
-    ++ [{I, Set(element(2, R3), Common ++ [{generation_limit, NightGens}, {run_time_limit_s, 6000}])} || I <- [3, 4, 5, 6]];
+    ++ [{I, Set(element(2, R3), Common ++ [{generation_limit, NightGens}, {run_time_limit_s, 14400}])} || I <- [3, 4, 5, 6]];
 arm_run_configs(Name) ->
     {Arch, Encoding, Fold} = parse_arm(Name),
     Target = 0.000025,

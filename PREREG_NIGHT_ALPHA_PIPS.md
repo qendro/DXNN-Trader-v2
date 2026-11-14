@@ -8,7 +8,8 @@ before the first 2017 replay is looked at, and record any change in git.
 - `DXNN_TEST_ARM=night DXNN_EPISODE_SEED=1 DXNN_EVOLUTION_SEED=1` (REVIEW.md 8.24, with `alpha_pips_t` per 8.26).
   Four families of 48, 20 + 40 + 4 x 45 generations, six chained runs.
 - Machine: one GCP VM, 12 vCPUs (`n2-custom-12-24576`, x86-64, standard provisioning), OTP 28.4.1 with the JIT,
-  `+scl false`. Fleet file `AWS-Deployment/config/gcp-local-fleet-night.yml`.
+  `+scl false`. Fleet file `AWS-Deployment/config/gcp-local-fleet-night.yml`. A generation takes about twice as long as
+  on the Mac, so the wall-time cap of runs 3 to 6 is 4 h (was 100 min) and every run gets its full generation count.
 - Price table: `fx_tables/EURUSD1.txt`, SHA-256 `e3047acf460670c4e8430a0eeb1af3d53755950da661fb65de99fd1264e7414d`.
   `EURUSD_M1_MIDPOINT_UTC.txt` is not uploaded.
 - The previous night (8.25, under `alpha_t`) is kept in `nights/2026-11-13_night_alpha_t/`.
