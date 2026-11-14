@@ -4,7 +4,8 @@
 %% API
 -export([start_link/1,start_link/0,start/1,start/0,stop/0,init/2]).
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3,create_MutantAgentCopy/1,test/0, create_specie/3, continue/0, continue/1, init_population/2, prep_PopState/2, extract_AgentIds/2,delete_population/1]).
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3,create_MutantAgentCopy/1,test/0, create_specie/3, continue/0, continue/1, init_population/2, prep_PopState/2, extract_AgentIds/2,delete_population/1,
+	restore_checkpoint_progress/3, restore_selection_memory/1]).
 -behaviour(gen_server).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Population Monitor Options & Parameters %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -39,7 +40,8 @@ get_init_constraints() ->
 	evaluations_limit = config:evaluations_limit(),
 	fitness_goal = inf,
 	benchmarker_pid,
-	goal_reached=false
+	goal_reached=false,
+	checkpoint_waiter=undefined %the cloud worker's dxnn_runtime:checkpoint/1 call, answered at the next generation boundary
 }).
 %%==================================================================== API
 %%--------------------------------------------------------------------
@@ -80,13 +82,20 @@ init(S) ->
 	qlog:benchmarker(Population_Id,io_lib:format("POP_MONITOR_INIT | op_mode=~p | population_id=~p",[OpMode,Population_Id])),
 	io:format("******** Population monitor started with parameters:~p~n",[S]),
 	Agent_Ids = extract_AgentIds(Population_Id,all),
-	ActiveAgent_IdPs = summon_agents(OpMode,Agent_Ids),
 	P = genotype:dirty_read({population,Population_Id}),
-	[put({evaluations,Specie_Id},0) || Specie_Id<-P#population.specie_ids],
 	T = P#population.trace,
-	TotEvaluations=T#trace.tot_evaluations,
+	%A cloud restore (DXNN_RESTORE_DIR) resumes this population at the generation, evaluation count and run time of its checkpoint.
+	{PopGen,TotEvaluations,ElapsedMs} = restore_checkpoint_progress(Population_Id,S#state.pop_gen,T#trace.tot_evaluations),
+	%Episode mode: the episodes of the first generation must be published before the first agent is spawned.
+	begin_episode_generation(Population_Id,PopGen),
+	%For config:run_time_limit_s(): the wall time this run started at.
+	put(run_started_ms,erlang:monotonic_time(millisecond)-ElapsedMs),
+	restore_selection_memory(Population_Id),
+	ActiveAgent_IdPs = summon_agents(OpMode,Agent_Ids),
+	[put({evaluations,Specie_Id},0) || Specie_Id<-P#population.specie_ids],
 	io:format("Initial Tot Evaluations:~p~n",[TotEvaluations]),
 	State = S#state{
+		pop_gen = PopGen,
 		population_id = Population_Id,
 		activeAgent_IdPs = ActiveAgent_IdPs,
 		tot_agents = length(Agent_Ids),
@@ -99,10 +108,10 @@ init(S) ->
 		step_size = T#trace.step_size,
 		tot_evaluations = TotEvaluations
 	},
-	% Log generation_start for generation 0
-	qlog:exp_runner(generation_start, {Population_Id, 0, length(Agent_Ids)}),
-	qlog:agent_trades_generation(generation_start, {Population_Id, 0, length(Agent_Ids)}),
-	qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, 0, length(Agent_Ids)])),
+	% Log generation_start for the first generation (0, or the restored one)
+	qlog:exp_runner(generation_start, {Population_Id, PopGen, length(Agent_Ids)}),
+	qlog:agent_trades_generation(generation_start, {Population_Id, PopGen, length(Agent_Ids)}),
+	qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, PopGen, length(Agent_Ids)])),
 	{ok, State}.
 %In init/1 the population_monitor proces registers itself with the node under the name monitor, and sets all the needed parameters within its #state record. The function first extracts all the Agent_Ids that belong to the population using the extract_AgentIds/2 function. Each agent is then spawned/activated, converted from genotype to phenotype in the summon_agents/2 function. The summon_agents/2 function summons the agents and returns to the caller a list of tuples with the following format: [{Agent_Id,Agent_PId}...]. Once the state record's parameters have been set, the function drops into the main gen_server loop.
 
@@ -115,6 +124,12 @@ init(S) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
+%dxnn_checkpoint_pause comes from dxnn_runtime:checkpoint/1 (cloud worker). The reply waits for the end of the current
+%generation, when no agent runs and the next generation has been selected, so a Mnesia backup taken then is a clean restart point.
+handle_call(dxnn_checkpoint_pause,From,S) when S#state.evolutionary_algorithm == generational, S#state.op_tag == continue ->
+	{noreply,S#state{op_tag=pause,checkpoint_waiter=From}};
+handle_call(dxnn_checkpoint_pause,_From,S) ->
+	{reply,{error,checkpoint_not_available},S};
 handle_call({stop,normal},_From, S)->
 	ActiveAgent_IdPs = S#state.activeAgent_IdPs,
 	[Agent_PId ! {self(),terminate} || {_DAgent_Id,Agent_PId}<-ActiveAgent_IdPs],
@@ -148,9 +163,14 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			qlog:agent_trades_generation(generation_end, {Population_Id, CurrentGen, S#state.tot_agents}),
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, CurrentGen, S#state.tot_agents])),
 			
-			% Now mutate to create next generation
+			% Episode mode: log what this generation measured (fitness, activity census, train-vs-validation agreement)
+			end_episode_generation(Population_Id,CurrentGen),
+			% Now mutate to create next generation. With config:evolution_seed() set its random choices are reproducible.
+			config:seed_rand(CurrentGen+1),
 			mutate_population(Population_Id,S#state.specie_size_limit,S#state.fitness_postprocessor,S#state.selection_algorithm,S#state.survival_percentage),
 			U_PopGen = S#state.pop_gen+1,
+			% Episode mode: draw the next generation's episodes before its agents are spawned
+			begin_episode_generation(Population_Id,U_PopGen),
 			
 			% Log generation_start for the NEW generation
 			qlog:benchmarker(Population_Id,io_lib:format("GENERATION_START | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, S#state.tot_agents])),
@@ -158,24 +178,9 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			qlog:exp_runner(generation_start, {Population_Id, U_PopGen, S#state.tot_agents}),
 			case OpTag of
 				continue ->
-					Specie_Ids = (genotype:dirty_read({population,Population_Id}))#population.specie_ids,
-					SpecFitList=[(genotype:dirty_read({specie,Specie_Id}))#specie.fitness || Specie_Id <- Specie_Ids],
-					BestFitness=lists:nth(1,lists:reverse(lists:sort([MaxFitness || {_,_,MaxFitness,_} <- SpecFitList]))),
-					Generation_Limit=S#state.generation_limit,
-					Evaluation_Limit=S#state.evaluations_limit,
-					Fitness_Goal=S#state.fitness_goal,
-					qlog:benchmarker(Population_Id,io_lib:format("Total Evaluations: ~p, Total Generations: ~p", [S#state.tot_evaluations, U_PopGen])),
-					case (U_PopGen >= Generation_Limit) or (S#state.tot_evaluations >= Evaluation_Limit) or (BestFitness >= Fitness_Goal) or S#state.goal_reached of
+					case run_ending(S,Population_Id,U_PopGen) of
 						true ->%ENDING_CONDITION_REACHED
-							% Log generation_end for the final generation before stopping
-							FinalAgent_Ids = extract_AgentIds(Population_Id,all),
-							FinalTotAgents = length(FinalAgent_Ids),
-							qlog:exp_runner(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
-							qlog:agent_trades_generation(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
-							qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, FinalTotAgents])),
-							TotAgents=FinalTotAgents,
-							U_S=S#state{agent_ids=FinalAgent_Ids, tot_agents=TotAgents, agents_left=TotAgents, pop_gen=U_PopGen},
-							{stop,normal,U_S};
+							end_run(S,Population_Id,U_PopGen);
 						false ->%IN_PROGRESS
 							Agent_Ids = extract_AgentIds(Population_Id,all),
 							% Log genotypes for generation 0 (initial generation)
@@ -198,6 +203,18 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 					io:format("Shutting down Population Monitor~n"),
 					U_S = S#state{agents_left = 0,pop_gen=U_PopGen},
 					{stop,normal,U_S};
+				pause when S#state.checkpoint_waiter =/= undefined ->
+					%A checkpoint pause must not keep a finished run alive: end it as the continue branch would.
+					case run_ending(S,Population_Id,U_PopGen) of
+						true ->
+							gen_server:reply(S#state.checkpoint_waiter,{error,run_ending}),
+							end_run(S#state{op_tag=continue,checkpoint_waiter=undefined},Population_Id,U_PopGen);
+						false ->
+							io:format("Population Monitor paused for a checkpoint.~n"),
+							gen_server:reply(S#state.checkpoint_waiter,{ok,Population_Id,U_PopGen,S#state.tot_evaluations,run_elapsed_ms()}),
+							U_S = S#state{activeAgent_IdPs=[],agents_left=0,pop_gen=U_PopGen,checkpoint_waiter=undefined},
+							{noreply,U_S}
+					end;
 				pause ->
 					io:format("Population Monitor has paused.~n"),
 					U_S = S#state{agents_left=0,pop_gen=U_PopGen},
@@ -282,6 +299,15 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			{noreply,U_S}
 	end;
 
+%Sent by dxnn_runtime:checkpoint/1 once its backup is written, or when it gave up waiting: resume the paused population.
+handle_cast(dxnn_checkpoint_cancel,S) when S#state.checkpoint_waiter =/= undefined ->
+	gen_server:reply(S#state.checkpoint_waiter,{error,cancelled}),
+	{noreply,S#state{op_tag=continue,checkpoint_waiter=undefined}};
+handle_cast(dxnn_checkpoint_cancel,S) ->
+	case S#state.op_tag of
+		pause -> handle_cast({op_tag,continue},S);
+		_ -> {noreply,S}
+	end;
 handle_cast({op_tag,pause},S) when S#state.op_tag == continue ->
 	U_S = S#state{op_tag = pause},
 	{noreply,U_S};
@@ -404,6 +430,118 @@ code_change(_OldVsn, State, _Extra) ->
 %%--------------------------------------------------------------------
 %% Internal functions
 %%--------------------------------------------------------------------
+begin_episode_generation(Population_Id,Generation)->
+	case config:evaluation_mode() of
+		episodes ->
+			%eval_stats: latest per-episode statistics of each exoself, written by its scape (fx:publish_evaluation/4).
+			%eval_ledger: one row per agent of the current generation, written by exoself:finish_episode_agent/3.
+			%Both belong to this process, so they disappear with the run.
+			[ets:new(Table,[set,public,named_table]) || Table <- [eval_stats,eval_ledger], ets:whereis(Table) == undefined],
+			ets:delete_all_objects(eval_ledger),
+			%For the generation summary's gen_seconds column.
+			%The shared price arrays are built here, once, before any agent can ask for them (a no-op afterwards).
+			fx_series:ensure(config:primary_currency_pair()),
+			config:set(episodes_generation_started_ms,erlang:monotonic_time(millisecond)),
+			%With a cost schedule the training cost of this generation is set here, before any agent is spawned, so every
+			%agent of the generation (survivors included: all are scored again) pays the same.
+			case config:cost_schedule() of
+				[] -> ok;
+				_ -> config:set(account_spread,config:scheduled_spread(Generation))
+			end,
+			episodes:begin_generation(Population_Id,Generation);
+		_ ->
+			ok
+	end.
+%begin_episode_generation/2 prepares one generation of episode-based evaluation: it makes sure the two bookkeeping tables exist, empties the ledger, and draws the generation's tune and score episodes. It does nothing in legacy mode.
+
+end_episode_generation(Population_Id,Generation)->
+	case config:evaluation_mode() of
+		episodes ->
+			%The memory reads the ledger, which the summary empties, and must have written the agents' fitness before selection.
+			selection_memory:update(),
+			eval_protocol:generation_summary(Population_Id,Generation);
+		_ ->
+			ok
+	end.
+%end_episode_generation/2 runs once every agent has reported: it lets selection_memory replace each agent's fitness with its remembered relative score (when config:selection_memory() is on) and writes the generation summary from the ledger.
+
+run_time_up(Population_Id,Generation)->
+	case {config:run_time_limit_s(),get(run_started_ms)} of
+		{Limit,Started} when is_number(Limit), Limit > 0, is_integer(Started) ->
+			Elapsed = (erlang:monotonic_time(millisecond)-Started)/1000,
+			case Elapsed >= Limit of
+				true ->
+					qlog:benchmarker(Population_Id,io_lib:format("RUN_TIME_LIMIT | generation=~p | elapsed_s=~p | limit_s=~p",[Generation,round(Elapsed),Limit])),
+					io:format("RUN_TIME_LIMIT | generation=~p | elapsed_s=~p | limit_s=~p~n",[Generation,round(Elapsed),Limit]),
+					true;
+				false ->
+					false
+			end;
+		_ ->
+			false
+	end.
+%run_time_up/2 is true once the run has used config:run_time_limit_s() seconds of wall time. It is asked at a generation boundary, after selection, so the run ends exactly as it does at generation_limit: with a complete, selected population.
+
+run_ending(S,Population_Id,U_PopGen)->
+	Specie_Ids = (genotype:dirty_read({population,Population_Id}))#population.specie_ids,
+	SpecFitList=[(genotype:dirty_read({specie,Specie_Id}))#specie.fitness || Specie_Id <- Specie_Ids],
+	BestFitness=lists:nth(1,lists:reverse(lists:sort([MaxFitness || {_,_,MaxFitness,_} <- SpecFitList]))),
+	qlog:benchmarker(Population_Id,io_lib:format("Total Evaluations: ~p, Total Generations: ~p", [S#state.tot_evaluations, U_PopGen])),
+	(U_PopGen >= S#state.generation_limit) or (S#state.tot_evaluations >= S#state.evaluations_limit) or (BestFitness >= S#state.fitness_goal) or S#state.goal_reached or run_time_up(Population_Id,U_PopGen).
+%run_ending/3 is the ending condition asked at every generation boundary: generation limit, evaluation limit, fitness goal, or run time.
+
+end_run(S,Population_Id,U_PopGen)->
+	% Log generation_end for the final generation before stopping
+	FinalAgent_Ids = extract_AgentIds(Population_Id,all),
+	FinalTotAgents = length(FinalAgent_Ids),
+	qlog:exp_runner(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
+	qlog:agent_trades_generation(generation_end, {Population_Id, U_PopGen, FinalTotAgents}),
+	qlog:benchmarker(Population_Id,io_lib:format("GENERATION_END | population_id=~p | generation=~p | total_agents=~p",[Population_Id, U_PopGen, FinalTotAgents])),
+	U_S=S#state{agent_ids=FinalAgent_Ids, tot_agents=FinalTotAgents, agents_left=FinalTotAgents, pop_gen=U_PopGen},
+	{stop,normal,U_S}.
+%end_run/3 stops the population_monitor once run_ending/3 is true; terminate/2 then reports the run to exp_runner.
+
+run_elapsed_ms()->
+	case get(run_started_ms) of
+		Started when is_integer(Started) -> erlang:monotonic_time(millisecond)-Started;
+		_ -> 0
+	end.
+
+%Resume counters only for the exact population a checkpoint was taken of (DXNN_RESTORE_DIR stays set for the later runs of the
+%experiment, whose populations must start from scratch). progress.term is {Population_Id,Generation,Evaluations,ElapsedMs};
+%checkpoints of the OCI build have no ElapsedMs, and a run restored from one restarts its run_time_limit_s clock.
+restore_checkpoint_progress(Population_Id,Generation,Evaluations)->
+	case os:getenv("DXNN_RESTORE_DIR") of
+		false -> {Generation,Evaluations,0};
+		Dir ->
+			case file:consult(filename:join(Dir,"progress.term")) of
+				{ok,[{Population_Id,G,E,Ms}]} when is_integer(G),G>=0,is_integer(E),E>=0,is_integer(Ms),Ms>=0 -> {G,E,Ms};
+				{ok,[{Population_Id,G,E}]} when is_integer(G),G>=0,is_integer(E),E>=0 -> {G,E,0};
+				_ -> {Generation,Evaluations,0}
+			end
+	end.
+
+%selection_memory keeps its decaying scores in an ETS table that this process owns, so a Mnesia backup does not hold it:
+%dxnn_runtime:checkpoint/1 saves it as runtime_state.term, {Population_Id,[{ets,Table,Rows}]}, and this puts it back.
+restore_selection_memory(Population_Id)->
+	case os:getenv("DXNN_RESTORE_DIR") of
+		false -> ok;
+		Dir ->
+			case file:consult(filename:join(Dir,"runtime_state.term")) of
+				{ok,[{Population_Id,Tables}]} when is_list(Tables) ->
+					[begin
+						case ets:whereis(Table) of
+							undefined -> ets:new(Table,[set,public,named_table]);
+							_ -> ets:delete_all_objects(Table)
+						end,
+						ets:insert(Table,Rows)
+					 end || {ets,Table,Rows} <- Tables, Table == selection_memory, is_list(Rows)],
+					ok;
+				_ ->
+					ok
+			end
+	end.
+
 extract_AgentIds(Population_Id,AgentType)->
 	P = genotype:dirty_read({population,Population_Id}),
 	Specie_Ids = P#population.specie_ids,
@@ -738,7 +876,17 @@ gather_STATS(Population_Id,EvaluationsAcc,OpMode)->
 		mnesia:dirty_write(S#specie{stats=U_STATS}),
 		STAT.
 
+	%With config:generation_test() == false the test is skipped and 0 is stored. The generation summary reports validation
+	%for every agent already; this test stopped the whole population for one agent at a time (REVIEW.md 8.20).
 	run_GenTest(S,benchmark)->
+		case config:generation_test() of
+			false -> 0;
+			_ -> gen_test(S)
+		end;
+	run_GenTest(_S,_)->
+		0.
+
+	gen_test(S)->
 		TopAgent_Id = case S#specie.champion_ids of
 			[Id] ->
 				Id;
@@ -759,16 +907,35 @@ gather_STATS(Population_Id,EvaluationsAcc,OpMode)->
 						% Log that we are entering a benchmark evaluation for the current top agent
 						qlog:benchmarker(S#specie.id,io_lib:format("BENCHMARK_START | top_agent=~p", [TopAgent_Id])),
 						Agent_PId=exoself:start(TopAgent_Id,self(),benchmark),
-						receive
+						%This receive blocks the whole population monitor, so it must always end: the exoself reports a
+						%stalled network itself (exoself:give_up/3), and the monitor covers an exoself that dies.
+						MRef = erlang:monitor(process,Agent_PId),
+						GenTestFitness = receive
 							{Agent_PId,benchmark_complete,Specie_Id,Fitness,Cycles,Time}->
-								qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_COMPLETE | fitness=~p | cycles=~p | time=~p", [Fitness, Cycles, Time])), genotype:print(TopAgent_Id), Fitness
-							%Msg ->
-							%	io:format("Msg:~p~n",[Msg])
-						end
+								%Episode mode: the benchmark ran on the validation episodes; log their summary and free the row.
+								case ets:whereis(eval_stats) of
+									undefined ->
+										ok;
+									_ ->
+										case ets:take(eval_stats,{Agent_PId,validation}) of
+											[{_Key,_Fitness,EpStats}] ->
+												qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_VALIDATION | top_agent=~p | ~p", [TopAgent_Id,fitness_functions:episode_summary(EpStats)]));
+											[] ->
+												ok
+										end
+								end,
+								qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_COMPLETE | fitness=~p | cycles=~p | time=~p", [Fitness, Cycles, Time])), genotype:print(TopAgent_Id), Fitness;
+							{Agent_PId,benchmark_stalled,Specie_Id}->
+								qlog:benchmarker(Specie_Id,io_lib:format("BENCHMARK_STALLED | top_agent=~p", [TopAgent_Id])),
+								0;
+							{'DOWN',MRef,process,Agent_PId,Reason}->
+								qlog:benchmarker(S#specie.id,io_lib:format("BENCHMARK_FAILED | top_agent=~p | reason=~p", [TopAgent_Id,Reason])),
+								0
+						end,
+						erlang:demonitor(MRef,[flush]),
+						GenTestFitness
 				end
-		end;
-	run_GenTest(_S,_)->
-		0.
+		end.
 
 calculate_SpecieAvgNodes({specie,S})->
 	Agent_Ids = S#specie.agent_ids,

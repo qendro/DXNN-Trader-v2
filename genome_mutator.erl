@@ -188,9 +188,12 @@ mutate_weights(Agent_Id)->
 
 	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
-	Input_IdPs = N#neuron.input_idps,
-	U_Input_IdPs = perturb_IdPs(Input_IdPs),
-	U_N = N#neuron{input_idps = U_Input_IdPs},
+	%Both weight lists are perturbed. With episode_tuning off this operator is the only way a weight changes, so the
+	%weights of modulatory links (neuromodulation neurons) would otherwise stay at their initial values for ever.
+	U_N = N#neuron{
+		input_idps = perturb_IdPs(N#neuron.input_idps),
+		input_idps_modulation = perturb_IdPs(N#neuron.input_idps_modulation)
+	},
 	EvoHist = A#agent.evo_hist,
 	U_EvoHist = [{mutate_weights,N_Id}|EvoHist],
 	U_A = A#agent{evo_hist = U_EvoHist},
@@ -198,6 +201,8 @@ mutate_weights(Agent_Id)->
 	genotype:write(U_A).
 %The mutate_weights/1 function accepts the Agent_Id parameter, extracts the NN's cortex, and then chooses a random neuron belonging to the NN with a uniform distribution probability. Then the neuron's input_idps list is extracted, and the function perturb_IdPs/1 is used to perturb/mutate the weights. Once the Input_IdPs have been perturbed, the agent's evolutionary history, EvoHist is updated to include the successfully applied mutate_weights mutation operator. Then the updated Agent and the updated neuron are written to the database.
 	
+	perturb_IdPs([])->
+		[];
 	perturb_IdPs(Input_IdPs)->
 		Tot_WeightsP=lists:sum([length(WeightsP) || {_Input_Id,WeightsP}<-Input_IdPs]),
 		MP = 1/math:sqrt(Tot_WeightsP),
@@ -462,11 +467,17 @@ link_FromNeuronToNeuron(Agent_Id,From_NeuronId,To_NeuronId)->
 					true -> qlog:xLog(qStatus, "link_ToNeuron OVL mismatch FromId=~p ToId=~p FromOVL=~p WLen=~p", [FromId, ToN#neuron.id, FromOVL, length(WeightsP)]);
 					false -> ok
 				end,
-				case {PFName == neuromodulation, rand:uniform(2)} of
+				%A link can only become modulatory once the neuron has a standard input to modulate. Without this a
+				%neuron whose first link landed here would have no signal input at all and output a constant.
+				HasStandardInput = lists:any(fun({Id,_})-> Id =/= bias end,ToSI_IdPs),
+				case {(PFName == neuromodulation) andalso HasStandardInput, rand:uniform(2)} of
 					{true,2} ->
+						%The new link is a modulatory input. This used to be written to input_idps, which replaced
+						%every standard input of the neuron with this one link: the elements that had been feeding it
+						%still listed it as an output and kept sending, and nothing read those messages.
 						U_ToMI_IdPs = [{FromId, WeightsP}|ToMI_IdPs],
 						ToN#neuron{
-							input_idps = U_ToMI_IdPs,
+							input_idps_modulation = U_ToMI_IdPs,
 							generation = Generation
 						};
 					_ ->
@@ -581,9 +592,10 @@ cutlink_FromNeuronToNeuron(Agent_Id,From_NeuronId,To_NeuronId)->
 					input_idps = U_ToSI_IdPs,
 					generation = Generation};
 			Guard2 ->
+				%Same mistake as in link_ToNeuron/4: the shortened modulatory list used to be written to input_idps.
 				U_ToMI_IdPs = lists:keydelete(FromId,1,ToMI_IdPs),
 				ToN#neuron{
-					input_idps = U_ToMI_IdPs,
+					input_idps_modulation = U_ToMI_IdPs,
 					generation = Generation};
 			true ->
 				exit("ERROR[can not remove I_Id]: ~p not a member of ~p~n",[FromId,ToN#neuron.id])
@@ -690,7 +702,8 @@ add_inlink(Agent_Id)->
 	end,
 	N_Id = lists:nth(rand:uniform(length(N_Ids)),N_Ids),
 	N = genotype:read({neuron,N_Id}),
-	{I_Ids,_WeightPLists} = lists:unzip(N#neuron.input_idps),
+	%An element that already feeds this neuron as a modulatory input cannot be linked to it a second time.
+	I_Ids = [I_Id || {I_Id,_WeightsP} <- N#neuron.input_idps ++ N#neuron.input_idps_modulation],
 	Inlink_NIdPool = filter_InlinkIdPool(A#agent.constraint,N_Id,N_Ids),
 	case lists:append(S_Ids,Inlink_NIdPool) -- I_Ids of
 		[] ->
@@ -1022,3 +1035,174 @@ add_cep(Agent_Id)->
 					genotype:write(Agent#agent{evo_hist=U_EvoHist}) 
 			end
 	end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Removal operators %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%Until these were added the only removal was remove_bias: a network could grow but never drop a link, a sensor or a neuron
+%that did nothing for it.
+%	remove_inlink      cuts one input link of a random neuron (from a neuron or from a sensor)
+%	remove_outlink     cuts one neuron-to-neuron output link of a random neuron
+%	remove_sensorlink  cuts one link of a random sensor
+%	remove_sensor      removes a random sensor with all its links
+%	remove_neuron      removes a random neuron with all its links
+%Removal is also how a network gets broken, so every operator refuses (exits) unless, after the removal,
+%	- every neuron still has a standard input other than its bias, and at least one output;
+%	- every sensor is still connected, the actuator still has an input, and one sensor and one neuron remain;
+%	- every neuron can still be reached from a sensor. A group of neurons that only feed each other does not wait for the
+%	  sensors: it fires as fast as the scheduler allows (the "runaway" the exoself watchdog ends);
+%	- the checks of mutate_check still pass (a path from a sensor to the actuator, sensor links recorded on both ends).
+%An exit rolls back only that operator (apply_NeuralMutator/1 runs each one in its own nested transaction) and another
+%operator is tried. Neural encoding only: on a substrate agent these operators exit.
+
+remove_inlink(Agent_Id)->
+	Cx = neural_cortex(Agent_Id,remove_inlink),
+	N_Id = random_element(Cx#cortex.neuron_ids),
+	case all_input_ids(genotype:read({neuron,N_Id})) of
+		[] ->
+			exit("********ERROR:remove_inlink:: the neuron has no input link");
+		Input_Ids ->
+			From_Id = random_element(Input_Ids),
+			remove_link(Agent_Id,From_Id,N_Id),
+			record_removal(Agent_Id,{remove_inlink,From_Id,N_Id})
+	end.
+
+remove_outlink(Agent_Id)->
+	Cx = neural_cortex(Agent_Id,remove_outlink),
+	N_Id = random_element(Cx#cortex.neuron_ids),
+	N = genotype:read({neuron,N_Id}),
+	case [O_Id || {_,neuron} = O_Id <- N#neuron.output_ids] of
+		[] ->
+			exit("********ERROR:remove_outlink:: the neuron has no output link to another neuron");
+		To_Ids ->
+			To_Id = random_element(To_Ids),
+			remove_link(Agent_Id,N_Id,To_Id),
+			record_removal(Agent_Id,{remove_outlink,N_Id,To_Id})
+	end.
+
+remove_sensorlink(Agent_Id)->
+	Cx = neural_cortex(Agent_Id,remove_sensorlink),
+	S_Id = random_element(Cx#cortex.sensor_ids),
+	S = genotype:read({sensor,S_Id}),
+	case S#sensor.fanout_ids of
+		[] ->
+			exit("********ERROR:remove_sensorlink:: the sensor has no link");
+		Fanout_Ids ->
+			To_Id = random_element(Fanout_Ids),
+			remove_link(Agent_Id,S_Id,To_Id),
+			record_removal(Agent_Id,{remove_sensorlink,S_Id,To_Id})
+	end.
+
+remove_sensor(Agent_Id)->
+	Cx = neural_cortex(Agent_Id,remove_sensor),
+	S_Ids = Cx#cortex.sensor_ids,
+	length(S_Ids) >= 2 orelse exit("********ERROR:remove_sensor:: the last sensor stays"),
+	S_Id = random_element(S_Ids),
+	S = genotype:read({sensor,S_Id}),
+	%A network must keep a sensor that carries prices, as its first sensor does (morphology.erl): the account-state and
+	%clock sensors alone tell it nothing about the market.
+	lists:any(fun(Id)-> not lists:member((genotype:read({sensor,Id}))#sensor.name,[fx_Internals,fx_Clock,fx_Position]) end,S_Ids--[S_Id])
+		orelse exit("********ERROR:remove_sensor:: the last sensor that carries prices stays"),
+	[keeps_standard_input(genotype:read({neuron,To_Id}),S_Id) orelse exit("********ERROR:remove_sensor:: a neuron would lose its only standard input")
+		|| To_Id <- S#sensor.fanout_ids],
+	[cutlink_FromElementToElement(Agent_Id,S_Id,To_Id) || To_Id <- S#sensor.fanout_ids],
+	mnesia:delete({sensor,S_Id}),
+	genotype:write(Cx#cortex{sensor_ids = S_Ids--[S_Id]}),
+	require_runnable(Agent_Id),
+	record_removal(Agent_Id,{remove_sensor,S_Id}).
+
+remove_neuron(Agent_Id)->
+	Cx = neural_cortex(Agent_Id,remove_neuron),
+	N_Ids = Cx#cortex.neuron_ids,
+	length(N_Ids) >= 2 orelse exit("********ERROR:remove_neuron:: the last neuron stays"),
+	N_Id = random_element(N_Ids),
+	N = genotype:read({neuron,N_Id}),
+	From_Ids = [Id || Id <- all_input_ids(N), Id =/= N_Id],
+	To_Ids = [Id || Id <- N#neuron.output_ids, Id =/= N_Id],
+	%What the neighbours need once this neuron is gone.
+	[case To_Id of
+		{_,neuron} ->
+			keeps_standard_input(genotype:read({neuron,To_Id}),N_Id) orelse exit("********ERROR:remove_neuron:: a neuron would lose its only standard input");
+		{_,actuator} ->
+			length((genotype:read({actuator,To_Id}))#actuator.fanin_ids) >= 2 orelse exit("********ERROR:remove_neuron:: the actuator would lose its only input")
+	end || To_Id <- To_Ids],
+	[case From_Id of
+		{_,neuron} ->
+			(genotype:read({neuron,From_Id}))#neuron.output_ids -- [N_Id] =/= [] orelse exit("********ERROR:remove_neuron:: a neuron would be left without an output");
+		{_,sensor} ->
+			length((genotype:read({sensor,From_Id}))#sensor.fanout_ids) >= 2 orelse exit("********ERROR:remove_neuron:: a sensor would be left unconnected")
+	end || From_Id <- From_Ids],
+	%Cut every link on both of its ends (the link to itself first), then drop the record.
+	case lists:member(N_Id,N#neuron.output_ids) of
+		true -> cutlink_FromElementToElement(Agent_Id,N_Id,N_Id);
+		false -> ok
+	end,
+	[cutlink_FromElementToElement(Agent_Id,From_Id,N_Id) || From_Id <- From_Ids],
+	[cutlink_FromElementToElement(Agent_Id,N_Id,To_Id) || To_Id <- To_Ids],
+	mnesia:delete({neuron,N_Id}),
+	genotype:write(Cx#cortex{neuron_ids = N_Ids--[N_Id]}),
+	A = genotype:read({agent,Agent_Id}),
+	U_Pattern = [{LayerIndex,LayerN_Ids--[N_Id]} || {LayerIndex,LayerN_Ids} <- A#agent.pattern, LayerN_Ids--[N_Id] =/= []],
+	genotype:write(A#agent{pattern=U_Pattern}),
+	require_runnable(Agent_Id),
+	record_removal(Agent_Id,{remove_neuron,N_Id}).
+
+	%remove_link/3 cuts the link From_Id -> To_Id (sensor or neuron to neuron) if both ends can spare it.
+	remove_link(Agent_Id,From_Id,To_Id)->
+		keeps_standard_input(genotype:read({neuron,To_Id}),From_Id) orelse exit("********ERROR:remove_link:: the neuron would lose its only standard input"),
+		case From_Id of
+			{_,neuron} ->
+				length((genotype:read({neuron,From_Id}))#neuron.output_ids) >= 2 orelse exit("********ERROR:remove_link:: the neuron would be left without an output");
+			{_,sensor} ->
+				length((genotype:read({sensor,From_Id}))#sensor.fanout_ids) >= 2 orelse exit("********ERROR:remove_link:: the sensor would be left unconnected (remove_sensor removes a whole sensor)")
+		end,
+		cutlink_FromElementToElement(Agent_Id,From_Id,To_Id),
+		require_runnable(Agent_Id).
+
+	neural_cortex(Agent_Id,Operator)->
+		A = genotype:read({agent,Agent_Id}),
+		A#agent.encoding_type == neural orelse exit({Operator,only_for_neural_encoding}),
+		genotype:read({cortex,A#agent.cx_id}).
+
+	random_element(List)->
+		lists:nth(rand:uniform(length(List)),List).
+
+	%ids of everything that sends to the neuron: standard and modulatory inputs, without the bias
+	all_input_ids(N)->
+		[Id || {Id,_WeightsP} <- N#neuron.input_idps ++ N#neuron.input_idps_modulation, Id =/= bias].
+
+	%true if the neuron still has a standard (signal) input other than its bias once Removed_Id no longer feeds it
+	keeps_standard_input(N,Removed_Id)->
+		[Id || {Id,_WeightsP} <- N#neuron.input_idps, Id =/= bias, Id =/= Removed_Id] =/= [].
+
+	require_runnable(Agent_Id)->
+		A = genotype:read({agent,Agent_Id}),
+		Cx = genotype:read({cortex,A#agent.cx_id}),
+		case undriven_neurons(Cx) of
+			[] -> ok;
+			Undriven -> exit({removal_leaves_neurons_no_sensor_reaches,Undriven})
+		end,
+		case mutate_check:has_valid_connectivity(Agent_Id) of
+			true -> ok;
+			{false,Reason} -> exit({removal_breaks_connectivity,Reason})
+		end.
+
+	%undriven_neurons/1 lists the neurons no sensor can reach by following links forward. A neuron fires once all of its
+	%inputs have arrived, so a neuron reached from a sensor fires at most once per bar; one that is not belongs to a group
+	%that paces itself.
+	undriven_neurons(Cx)->
+		Start = lists:usort(lists:append([[Id || {_,neuron} = Id <- (genotype:read({sensor,S_Id}))#sensor.fanout_ids] || S_Id <- Cx#cortex.sensor_ids])),
+		Cx#cortex.neuron_ids -- reach(Start,[]).
+
+	reach([],Seen)->
+		Seen;
+	reach([N_Id|Queue],Seen)->
+		case lists:member(N_Id,Seen) of
+			true ->
+				reach(Queue,Seen);
+			false ->
+				N = genotype:read({neuron,N_Id}),
+				reach([Id || {_,neuron} = Id <- N#neuron.output_ids] ++ Queue,[N_Id|Seen])
+		end.
+
+	record_removal(Agent_Id,Entry)->
+		A = genotype:read({agent,Agent_Id}),
+		genotype:write(A#agent{evo_hist=[Entry|A#agent.evo_hist]}).

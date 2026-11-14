@@ -26,10 +26,15 @@ gen(ExoSelf_PId,Node)->
 	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
 
 prep(ExoSelf_PId) ->
+	%This try is the only one in the neuron: it stays on the stack for the whole life of the process and reports any crash
+	%of loop/6. loop/6 itself must not contain a try around its recursive calls: a call inside a try is not a tail call, so
+	%every message would leave a stack frame behind, and each frame keeps that cycle's state and weights alive. With that
+	%pattern a plastic neuron on a 600-input sensor grew by tens of KB per bar (67 MB within a second of starting).
 	try
 		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in Prep waiting init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
-		receive 
+		receive
 			{ExoSelf_PId,{Id,Cx_PId,AF,PF,AggrF,HeredityType,SI_PIdPs,MI_PIdPs,Output_PIds,RO_PIds}} ->
+				put(neuron_id,Id),
 				%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p recieved init message from ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 				fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]}),
 				SI_PIds = lists:append([IPId || {IPId,_W} <- SI_PIdPs, IPId =/= bias],[ok]),
@@ -56,13 +61,12 @@ prep(ExoSelf_PId) ->
 		end
 	catch
 		Error:Reason ->
-			qlog:xLog(qStatus, "Neuron ~p crashed in prep: ~p:~p", [self(), Error, Reason]),
+			qlog:xLog(qStatus, "Neuron ~p (id: ~p) crashed: ~p:~p", [self(), get(neuron_id), Error, Reason]),
 			erlang:error(Error, Reason)
 	end.
 %When gen/2 is executed, it spawns the neuron element and immediately begins to wait for its initial state message from the exoself. Once the state message arrives, the neuron sends out the default forward signals to any elements in its ro_ids list, if any. Afterwards, prep drops into the neuron's main loop.
 
 loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
-	try
 		%qlog:xLog(pid_to_list(ExoSelf_PId), "Neuron: ~p in secondary loop SI_PIds and MI_PIds empty. ExoSelf_Id: ~p", [self(), ExoSelf_PId]),
 		PF = S#state.pf,
 		AF = S#state.af,
@@ -92,28 +96,13 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 		end,
 		SI_PIds = S#state.si_pids,
 		MI_PIds = S#state.mi_pids,
-		neuron:loop(U_S,ExoSelf_PId,SI_PIds,MI_PIds,[],[])
-	catch
-		Error:Reason ->
-			NeuronId = case S#state.id of
-				undefined -> self();
-				Id -> Id
-			end,
-			qlog:xLog(qStatus, "Neuron ~p (id: ~p) crashed in loop: ~p:~p", [self(), NeuronId, Error, Reason]),
-			erlang:error(Error, Reason)
-	end;
+		neuron:loop(U_S,ExoSelf_PId,SI_PIds,MI_PIds,[],[]);
 loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
-	try
 		receive
 			{ExoSelf_PId,reset_prep}->
 				neuron:flush_buffer(),
 				ExoSelf_PId ! {self(),ready},
-				RO_PIds = S#state.ro_pids,
-				receive 
-					{ExoSelf_PId, reset}->
-						fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]})
-				end,
-				loop(S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
+				reset_hold(S,ExoSelf_PId);
 			{ExoSelf_PId,terminate}->
 				ok
 		after 0 ->
@@ -157,12 +146,7 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 				{ExoSelf_PId,reset_prep}->
 					neuron:flush_buffer(),
 					ExoSelf_PId ! {self(),ready},
-					RO_PIds = S#state.ro_pids,
-					receive 
-						{ExoSelf_PId, reset}->
-							fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]})
-					end,
-					loop(S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
+					reset_hold(S,ExoSelf_PId);
 				{ExoSelf_PId,get_backup}->
 					NId = S#state.id,
 					ExoSelf_PId ! {self(),NId,S#state.si_pidps_backup,S#state.mi_pidps_backup},
@@ -170,17 +154,39 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 				{ExoSelf_PId,terminate}->
 					ok
 			end
-		end
-	catch
-		Error:Reason ->
-			NeuronId = case S#state.id of
-				undefined -> self();
-				Id -> Id
-			end,
-			qlog:xLog(qStatus, "Neuron ~p (id: ~p) crashed in loop: ~p:~p", [self(), NeuronId, Error, Reason]),
-			erlang:error(Error, Reason)
-	end.
+		end.
 %The neuron process waits for vector signals from all the processes that it's connected from, taking the dot product of the input and weight vectors, and then adding it to the accumulator. Once all the signals from Input_PIds are received, the accumulator contains the dot product to which the neuron then adds the bias and executes the activation function. After fanning out the output signal, the neuron again returns to waiting for incoming signals. When the neuron receives the {ExoSelf_PId,get_backup} message, it forwards to the exoself its full MInput_PIdPs list, and its Id. The MInput_PIdPs contains the modified, tuned and most effective version of the input_idps. The neuron process is also accepts weight_backup signal, when receiving it the neuron saves to process dictionary the current MInput_PIdPs. When the neuron receives the weight_restore signal, it reads back from the process dictionary the stored Input_PIdPs, and switches over to using it as its active Input_PIdPs list. When the neuron receives the weight_perturb signal from the exoself, it perturbs the weights by executing the perturb_Lipids/1 function, which returns the updated list. Finally, the neuron can also accept a reset_prep signal, which makes the neuron flush its buffer in the off chance that it has a recursively sent signal in its inbox. After flushing its buffer, the neuron waits for the exoself to send it the reset signal, at which point the neuron, now fully refreshed after the flush_buffer/0, outputs a default forward signal to its recursively connected elements, if any, and then drops back into the main loop.
+
+%reset_hold/2: the neuron has emptied its mailbox and told the exoself, and waits for one of two endings.
+%	reset          (exoself:reset_network/1 with config:episode_isolation/0 off, as before 8.23) it sends its recurrent
+%	               outputs their starting zero and goes back to work. Plastic weights and the diff_product memory stay
+%	               as they were.
+%	reset_flush    (the full reset, exoself:full_reset/2) a second round: a neuron that was still computing when this one
+%	               emptied its mailbox may have sent it one more message since. Only once every neuron has answered the
+%	               first round is none computing, so this round leaves the mailbox truly empty. Then reset_full puts the
+%	               neuron in the state of a fresh one: the weights it started the evaluation with (plasticity undone),
+%	               no memory of the previous input (signal_aggregator:diff_product/2), and the starting zero on every
+%	               recurrent output, sent only after every mailbox is empty so that it is not flushed away.
+reset_hold(S,ExoSelf_PId)->
+	receive
+		{ExoSelf_PId,reset}->
+			fanout(S#state.ro_pids,{self(),forward,[?RO_SIGNAL]}),
+			loop(S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
+		{ExoSelf_PId,reset_flush}->
+			neuron:flush_buffer(),
+			ExoSelf_PId ! {self(),ready},
+			receive
+				{ExoSelf_PId,reset_full}->
+					erase(diff_product),
+					U_S = S#state{si_pidps_current=S#state.si_pidps_bl},
+					fanout(U_S#state.ro_pids,{self(),forward,[?RO_SIGNAL]}),
+					loop(U_S,ExoSelf_PId,U_S#state.si_pids,U_S#state.mi_pids,[],[]);
+				{ExoSelf_PId,terminate}->
+					ok
+			end;
+		{ExoSelf_PId,terminate}->
+			ok
+	end.
 
 	fanout([Pid|Pids],Msg)->
 		Pid ! Msg,

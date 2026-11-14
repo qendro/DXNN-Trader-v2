@@ -1,0 +1,22 @@
+row_id,fold,episode_seed,outcome,kind,term,seeds,n,mean,sd,se,t,df,p_two_sided,source
+cmp-1,fold_2017,1,final_population_validation_median,cell,ff_vol,1,1,-1.4538,,,,,,ff_vol_e1: validation.csv val-6
+cmp-2,fold_2017,1,final_population_validation_median,cell,ff_vol,2,1,-2.4419,,,,,,ff_vol_e2: validation.csv val-12
+cmp-3,fold_2017,1,final_population_validation_median,cell,rec_vol,1,1,-7.425,,,,,,rec_vol_e1: validation.csv val-18
+cmp-4,fold_2017,1,final_population_validation_median,cell,rec_vol,2,1,-11.37,,,,,,rec_vol_e2: validation.csv val-24
+cmp-5,fold_2017,1,final_population_validation_median,arm_mean,ff_vol,1 2,2,-1.94785,0.6986922105,0.49405,,1,,
+cmp-6,fold_2017,1,final_population_validation_median,arm_mean,rec_vol,1 2,2,-9.3975,2.789536252,1.9725,,1,,
+cmp-7,fold_2017,1,final_population_validation_median,paired_difference,rec_vol minus ff_vol,1 2,2,-7.44965,2.090844041,1.47845,-5.038824445,1,0.124722331,
+cmp-8,fold_2017,1,final_population_validation_median,effect,recurrent minus feedforward,,0,,,,,,,needs all four arms for a seed
+cmp-9,fold_2017,1,final_population_validation_median,effect,vol minus level,,0,,,,,,,needs all four arms for a seed
+cmp-10,fold_2017,1,final_population_validation_median,effect,interaction (rec_vol - ff_vol) - (rec_level - ff_level),,0,,,,,,,needs all four arms for a seed
+cmp-11,fold_2017,1,bestN_validation_median_training_rule,cell,ff_vol,1,1,-2.6375,,,,,,ff_vol_e1: populations.csv pop-37
+cmp-12,fold_2017,1,bestN_validation_median_training_rule,cell,ff_vol,2,1,9.035,,,,,,ff_vol_e2: populations.csv pop-85
+cmp-13,fold_2017,1,bestN_validation_median_training_rule,cell,rec_vol,1,1,-11.42625,,,,,,rec_vol_e1: populations.csv pop-133
+cmp-14,fold_2017,1,bestN_validation_median_training_rule,cell,rec_vol,2,1,-8.29,,,,,,rec_vol_e2: populations.csv pop-181
+cmp-15,fold_2017,1,bestN_validation_median_training_rule,arm_mean,ff_vol,1 2,2,3.19875,8.253703903,5.83625,,1,,
+cmp-16,fold_2017,1,bestN_validation_median_training_rule,arm_mean,rec_vol,1 2,2,-9.858125,2.217663642,1.568125,,1,,
+cmp-17,fold_2017,1,bestN_validation_median_training_rule,paired_difference,rec_vol minus ff_vol,1 2,2,-13.056875,6.036040261,4.268125,-3.059159467,1,0.2011322742,
+cmp-18,fold_2017,1,bestN_validation_median_training_rule,effect,recurrent minus feedforward,,0,,,,,,,needs all four arms for a seed
+cmp-19,fold_2017,1,bestN_validation_median_training_rule,effect,vol minus level,,0,,,,,,,needs all four arms for a seed
+cmp-20,fold_2017,1,bestN_validation_median_training_rule,effect,interaction (rec_vol - ff_vol) - (rec_level - ff_level),,0,,,,,,,needs all four arms for a seed
+cmp-21,fold_2017,1,bestN_validation_median_rollover_rule_0.25,same_as,bestN_validation_median_training_rule,,,,,,,,,every value is the same CSV row as outcome bestN_validation_median_training_rule (same condition); not compared again

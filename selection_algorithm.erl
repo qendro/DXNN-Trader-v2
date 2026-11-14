@@ -57,7 +57,18 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,Survi
 		{Acc,NewPopAcc}.
 %The calculate_alotments/4 function accepts the AgentSummaries list and for each agent, using the NeuralEnergyCost, calcualtes how many offspring that agent can produce by using the agent's Fitness, TotNEurons, and NeuralEnergyCost values. The function first calculates how many neurons the agent is alloted, based on the agent's fitness and the cost of each neuron (which itself was calculated based on the average performance of the population). From the number of neurons alloted to the agent, the function then calculates how many offspring the agent should be alloted, by deviding the agent's NN size by the number of neurons it is alloted. The function also keeps track of how many offspring will be created from all these agents in general, by adding up all the offspring alotements. The calcualte_alotments/4 function does this for each tuple in the AgentSummaries, and then returns the calculated alotment list and NewPopAcc to the caller.
 
-	parallel_create_mutants(Agent_Id,Count)->
+	%With config:evolution_seed() set the offspring are made one after the other in this process, whose random generator
+	%config:seed_rand/1 has seeded: in parallel each would draw from a generator of its own seeded from the clock, and
+	%the order in which they finish (which decides the order of their ids and of the specie's list) would vary.
+	parallel_create_mutants(Agent_Id,Count) when Count > 0 ->
+		case config:evolution_seed() of
+			undefined -> spawn_create_mutants(Agent_Id,Count);
+			_ -> [population_monitor:create_MutantAgentCopy(Agent_Id) || _ <- lists:seq(1,Count)]
+		end;
+	parallel_create_mutants(_Agent_Id,_Count)->
+		[].
+
+	spawn_create_mutants(Agent_Id,Count)->
 		Parent = self(),
 		Pids = [spawn(fun()-> try MutantAgent_Id = population_monitor:create_MutantAgentCopy(Agent_Id), Parent ! {mutant_created,MutantAgent_Id} catch Error:Reason -> Parent ! {mutant_error,Error,Reason} end end) || _ <- lists:seq(1,Count)],
 		MutantAgent_Ids = [receive {mutant_created,MutantAgent_Id} -> MutantAgent_Id; {mutant_error,Error,Reason} -> qlog:benchmarker(self,io_lib:format("Clone error Agent_Id=~p Error=~p Reason=~p",[Agent_Id,Error,Reason])), exit({clone_failed,Error,Reason}) end || _ <- Pids],
@@ -112,6 +123,35 @@ top3(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,_Survival_Pe
 		Remaining = OffspringIndex - BatchSize,
 		case Remaining > 0 of true -> breed(Valid_AgentIds,Remaining,lists:append(MutantAgent_Ids,Acc)); false -> lists:append(MutantAgent_Ids,Acc) end.
 %The breed/3 function creates offspring from top 3 agents using parallel cloning for efficiency.
+
+rank(AgentSummaries,_NeuralEnergyCost,PopulationLimit,Survival_Percentage)->
+	%Best fitness first; between agents of equal fitness the one with fewer neurons comes first.
+	Sorted_AgentSummaries = lists:sort(fun({F1,N1,_},{F2,N2,_})-> (F1 > F2) orelse ((F1 == F2) andalso (N1 =< N2)) end,AgentSummaries),
+	TotSurvivors = erlang:max(1,erlang:min(PopulationLimit,round(length(Sorted_AgentSummaries)*Survival_Percentage))),
+	{Valid_AgentSummaries,Invalid_AgentSummaries} = lists:split(TotSurvivors,Sorted_AgentSummaries),
+	{_,_,Invalid_AgentIds} = lists:unzip3(Invalid_AgentSummaries),
+	{_,_,Valid_AgentIds} = lists:unzip3(Valid_AgentSummaries),
+	[genotype:delete_Agent(Agent_Id) || Agent_Id <- Invalid_AgentIds],
+	io:format("Valid_AgentSummaries:~p~n",[Valid_AgentSummaries]),
+	io:format("Invalid_AgentSummaries:~p~n",[Invalid_AgentSummaries]),
+	TopAgent_Ids = lists:sublist(Valid_AgentIds,3),
+	Alotments = apportion(lists:seq(TotSurvivors,1,-1),PopulationLimit-TotSurvivors),
+	MutantAgent_Ids = lists:append([parallel_create_mutants(Agent_Id,Alotment) || {Agent_Id,Alotment} <- lists:zip(Valid_AgentIds,Alotments), Alotment > 0]),
+	NewGenAgent_Ids = Valid_AgentIds++MutantAgent_Ids,
+	qlog:benchmarker(self,io_lib:format("Rank selection | survivors=~p | offspring=~p | new population size=~p",[TotSurvivors,length(MutantAgent_Ids),length(NewGenAgent_Ids)])),
+	{NewGenAgent_Ids,TopAgent_Ids}.
+%rank/4 is a selection algorithm that looks only at the order of the agents, never at the size of their fitness values or of their networks. The best Survival_Percentage of the specie survive unchanged, and the remaining places up to PopulationLimit are filled with their mutant offspring. The survivor ranked first of S gets a share of the offspring proportional to S, the second to S-1, and so on down to 1 for the last survivor. It is the selection to use when fitness can be negative or sits on an arbitrary scale (alpha_lcb, and the large negative values given to ineligible agents): competition/4 turns fitness into offspring through sums and ratios, which a single outlier or a negative total distorts, and it divides every allotment by the neuron count.
+
+	apportion(Weights,Total)->
+		WeightSum = lists:sum(Weights),
+		Shares = [Total*Weight/WeightSum || Weight <- Weights],
+		Floors = [trunc(Share) || Share <- Shares],
+		Leftover = Total - lists:sum(Floors),
+		%Hand the places lost to rounding to the largest fractional parts, best rank first on ties.
+		ByRemainder = lists:sort([{-(Share-Floor),Index} || {Index,Share,Floor} <- lists:zip3(lists:seq(1,length(Weights)),Shares,Floors)]),
+		Extra = [Index || {_,Index} <- lists:sublist(ByRemainder,Leftover)],
+		[Floor + case lists:member(Index,Extra) of true -> 1; false -> 0 end || {Index,Floor} <- lists:zip(lists:seq(1,length(Weights)),Floors)].
+%apportion/2 splits Total whole offspring among parents in proportion to Weights (largest remainder method), so the result always sums to exactly Total.
 
 competition(ProperlySorted_AgentSummaries)->
 	TotEnergy = lists:sum([Fitness || {Fitness,_TotN,_Agent_Id}<-ProperlySorted_AgentSummaries]),

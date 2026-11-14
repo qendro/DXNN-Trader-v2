@@ -42,7 +42,13 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 			Sensors = [S#sensor{id={{-1,generate_UniqueId()},sensor},cx_id=Cx_Id,generation=Generation}|| S<- morphology:get_InitSensors(Morphology)],
 			[case S#sensor.vl =< 0 of true -> qlog:xLog(qStatus, "sensor_zero_vl name=~p params=~p", [S#sensor.name, S#sensor.parameters]); false -> ok end || S <- Sensors],
 			Actuators = [A#actuator{id={{1,generate_UniqueId()},actuator},cx_id=Cx_Id,generation=Generation}||A<-morphology:get_InitActuators(Morphology)],
-			N_Ids=construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Sensors,Actuators,[],[]),
+			{N_Ids,Pattern} = case config:init_hidden_neurons() of
+				H when is_integer(H), H > 0 ->
+					construct_InitialHiddenLayer(Cx_Id,Generation,SpecCon,Sensors,Actuators,H,config:init_recurrent() == true);
+				_ ->
+					Layer_NIds = construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Sensors,Actuators,[],[]),
+					{Layer_NIds,[{0,Layer_NIds}]}
+			end,
 			S_Ids = [S#sensor.id || S<-Sensors],
 			A_Ids = [A#actuator.id || A<-Actuators],
 			Cortex = #cortex{
@@ -72,6 +78,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 			[case CPP#sensor.vl =< 0 of true -> qlog:xLog(qStatus, "sensor_zero_vl name=~p params=~p", [CPP#sensor.name, CPP#sensor.parameters]); false -> ok end || CPP <- Substrate_CPPs],
 			Substrate_CEPs = [CEP#actuator{id={{1,generate_UniqueId()},actuator},cx_id=Cx_Id,generation=Generation}||CEP<-morphology:get_InitSubstrateCEPs(Dimensions,SPlasticity)],
 			N_Ids=construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Substrate_CPPs,Substrate_CEPs,[],[]),
+			Pattern = [{0,N_Ids}],
 			S_Ids = [S#sensor.id || S<-Sensors],
 			A_Ids = [A#actuator.id || A<-Actuators],
 			CPP_Ids = [CPP#sensor.id || CPP<-Substrate_CPPs],
@@ -95,7 +102,7 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 			}
 	end,
 	write(Cortex),
-	{Cx_Id,[{0,N_Ids}],Substrate_Id}.
+	{Cx_Id,Pattern,Substrate_Id}.
 %construct_Cortex/3 generates a new Cx_Id, extracts the morphology from the Constraint record passed to it in SpecCon, and then extracts the initial sensors and actuators for that morphology. After the sensors and actuators are extracted, the function calls construct_InitialNeuroLayer/7, which creates a single layer of neurons connected to the specified sensors and actuators, and returns the ids of the created neurons. Finally, the sensors and actuator ids are extracted from the sensors and actuators, and the cortex record is composed and stored to the database.
 
 	construct_InitialNeuroLayer(Cx_Id,Generation,SpecCon,Sensors,[A|Actuators],AAcc,NIdAcc)->
@@ -108,6 +115,24 @@ construct_Cortex(Agent_Id,Generation,SpecCon,Encoding_Type,SPlasticity,SLinkform
 		[write(A) || A <- AAcc],
 		NIdAcc.
 %construct_InitialNeuroLayer/7 creates a set of neurons for each Actuator in the actuator list. The neurons are initialized in the construct_InitialNeurons/6, where they are connected to the actuator, and from a random subset of the sensors passed to the function. The construct_InitialNEurons/6 function returns the updated sensors, some of which have now an updated set of fanout_ids which includes the new neuron ids they were connected to. The actuator's fanin_ids is then updated to include the neuron ids that were connected to it. Once all the actuators have been connected to, the sensors and the actuators are written to the database, and the set of neuron ids created within the function is returned to the caller.
+
+	%construct_InitialHiddenLayer/7 builds the starting network when config:init_hidden_neurons/0 is H > 0 (REVIEW.md
+	%8.23): H hidden neurons in layer 0, each reading every starting sensor, and for each actuator as many output neurons
+	%in layer 0.5 as its vector is long, each reading every hidden neuron and feeding the actuator. With Recurrent
+	%(config:init_recurrent/0) each hidden neuron also reads its own previous output (a link to itself is recurrent,
+	%calculate_ROIds/3). Weights, activation function and aggregator are drawn as for any new neuron (construct_Neuron/6);
+	%there is no bias, as in the one-neuron start. Writes the sensors and actuators with their links and returns
+	%{NeuronIds,Pattern}.
+	construct_InitialHiddenLayer(Cx_Id,Generation,SpecCon,Sensors,Actuators,H,Recurrent)->
+		Hidden = [{{0,Unique_Id},neuron} || Unique_Id <- generate_ids(H,[])],
+		Outputs = [{A,[{{0.5,Unique_Id},neuron} || Unique_Id <- generate_ids(A#actuator.vl,[])]} || A <- Actuators],
+		Output_Ids = lists:append([O_Ids || {_A,O_Ids} <- Outputs]),
+		Sensor_Specs = [{S#sensor.id,S#sensor.vl} || S <- Sensors],
+		[construct_Neuron(Cx_Id,Generation,SpecCon,N_Id,Sensor_Specs ++ [{N_Id,1} || Recurrent],Output_Ids ++ [N_Id || Recurrent]) || N_Id <- Hidden],
+		[construct_Neuron(Cx_Id,Generation,SpecCon,O_Id,[{H_Id,1} || H_Id <- Hidden],[A#actuator.id]) || {A,O_Ids} <- Outputs, O_Id <- O_Ids],
+		[write(S#sensor{fanout_ids=Hidden ++ S#sensor.fanout_ids}) || S <- Sensors],
+		[write(A#actuator{fanin_ids=O_Ids}) || {A,O_Ids} <- Outputs],
+		{Hidden ++ Output_Ids,[{0,Hidden},{0.5,Output_Ids}]}.
 
 		construct_InitialNeurons(Cx_Id,Generation,SpecCon,[N_Id|N_Ids],Sensors,Actuator)->
 			case rand:uniform() >= 0.5 of
@@ -462,6 +487,9 @@ clone_Agent(Agent_Id,CloneAgent_Id)->
 				write(A#agent{
 					id = CloneAgent_Id,
 					cx_id = CloneCx_Id,
+					%The layer pattern lists neuron ids, so it has to follow the clone like everything else. It used to keep the
+					%original agent's ids, which only worked while nothing ever looked an id up in it (remove_neuron does).
+					pattern = [{LayerIndex,[clone_id(IdsNCloneIds,N_Id) || N_Id <- LayerN_Ids]} || {LayerIndex,LayerN_Ids} <- A#agent.pattern],
 					evo_hist = U_EvoHist
 				});
 			Substrate_Id ->
@@ -493,6 +521,9 @@ clone_Agent(Agent_Id,CloneAgent_Id)->
 					id = CloneAgent_Id,
 					cx_id = CloneCx_Id,
 					substrate_id = CloneSubstrate_Id,
+					%The layer pattern lists neuron ids, so it has to follow the clone like everything else. It used to keep the
+					%original agent's ids, which only worked while nothing ever looked an id up in it (remove_neuron does).
+					pattern = [{LayerIndex,[clone_id(IdsNCloneIds,N_Id) || N_Id <- LayerN_Ids]} || {LayerIndex,LayerN_Ids} <- A#agent.pattern],
 					evo_hist = U_EvoHist
 				})
 		end,
@@ -569,19 +600,21 @@ clone_Agent(Agent_Id,CloneAgent_Id)->
 	
 	map_EvoHist(TableName,EvoHist)-> map_EvoHist(TableName,EvoHist,[]).
 	map_EvoHist(TableName,[{MO,E1Id,E2Id,E3Id}|EvoHist],Acc)->
-		Clone_E1Id = ets:lookup_element(TableName,E1Id,2),
-		Clone_E2Id = ets:lookup_element(TableName,E2Id,2),
-		Clone_E3Id = ets:lookup_element(TableName,E3Id,2),
-		map_EvoHist(TableName,EvoHist,[{MO,Clone_E1Id,Clone_E2Id,Clone_E3Id}|Acc]);
+		map_EvoHist(TableName,EvoHist,[{MO,clone_id(TableName,E1Id),clone_id(TableName,E2Id),clone_id(TableName,E3Id)}|Acc]);
 	map_EvoHist(TableName,[{MO,E1Id,E2Id}|EvoHist],Acc)->
-		Clone_E1Id = ets:lookup_element(TableName,E1Id,2),
-		Clone_E2Id = ets:lookup_element(TableName,E2Id,2),
-		map_EvoHist(TableName,EvoHist,[{MO,Clone_E1Id,Clone_E2Id}|Acc]);
+		map_EvoHist(TableName,EvoHist,[{MO,clone_id(TableName,E1Id),clone_id(TableName,E2Id)}|Acc]);
 	map_EvoHist(TableName,[{MO,E1Id}|EvoHist],Acc)->
-		Clone_E1Id = ets:lookup_element(TableName,E1Id,2),
-		map_EvoHist(TableName,EvoHist,[{MO,Clone_E1Id}|Acc]);
+		map_EvoHist(TableName,EvoHist,[{MO,clone_id(TableName,E1Id)}|Acc]);
 	map_EvoHist(_TableName,[],Acc)->
 		lists:reverse(Acc).
+
+	%The history can name an element that a removal mutation has since deleted (genome_mutator:remove_neuron/1,
+	%remove_sensor/1). Such an element has no clone; its id is kept as it is, since the entry is only a record.
+	clone_id(TableName,Id)->
+		case ets:lookup(TableName,Id) of
+			[{Id,CloneId}] -> CloneId;
+			[] -> Id
+		end.
 %map_EvoHist/2 is a wrapper for map_EvoHist/3, which in turn accepts the evo_hist list containing the mutation operator tuples that have been appplied to the NN system. The function is used when a clone of a NN system is created. The function updates the original Ids of the elements the mutation oeprators have been applied to, to the clone's Ids, so that the updated evo_hist can reflect the clone's topology, as if the mutation operators have been applied to it, and that it is not a clone. Once all the tuples in the evo_hist have been updated with the clone element ids, the list is reverted to its proper order, and the updated list is returned to the caller.
 	
 speciate(Agent_Id)->

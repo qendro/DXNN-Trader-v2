@@ -116,3 +116,6 @@ dialyzer_warnings
 # Local configuration
 config/local.config
 priv/local/
+
+# Archived night runs
+nights/

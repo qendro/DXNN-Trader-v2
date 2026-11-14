@@ -18,6 +18,12 @@
 %% Standard forex trader morphology (uses EURUSD1 with existing sensor configuration)
 %% Fixed: Use function call instead of macro for dynamic config
 get_init_constraints() ->
+    %% One species per entry. config:families() copies of the same constraint give that many independent families:
+    %% population_monitor:mutate_population/5 selects and breeds inside each species, mutants stay in their parent's
+    %% species, and clone_population_for_next_run/2 carries every species into the next run.
+    lists:append(lists:duplicate(erlang:max(1,config:families()),family_constraints())).
+
+family_constraints() ->
     [#constraint{morphology=Morphology,connection_architecture=CA, population_evo_alg_f=config:population_evo_alg_f(), neural_pfns=config:neural_plasticity_functions(),agent_encoding_types=config:agent_encoding_types()} || Morphology<-[config:morphology()],CA<-[config:connection_architecture()]].
 
 %% ============================================================================
@@ -126,18 +132,48 @@ format_config_summary(RunIndex, RunConfigs) ->
     TuningDur = get_config_value(tuning_duration, ConfigOverrides, fun() -> {const,1} end),
     
     % Format compactly with line breaks for readability
-    TuningDurStr = case TuningDur of
-        {const, N} -> io_lib:format("const(~p)", [N]);
-        Other -> io_lib:format("~p", [Other])
+    % Evaluation settings are read live: the run's overrides are already loaded when this is called.
+    % In episode mode with episode_tuning off the agents are not tuned at all, whatever their tuning_duration says.
+    EpisodeTuningOff = (config:evaluation_mode() == episodes) andalso (config:episode_tuning() =/= true),
+    TuningDurStr = case {EpisodeTuningOff, TuningDur} of
+        {true, _} -> "off";
+        {_, {const, N}} -> io_lib:format("const(~p)", [N]);
+        {_, Other} -> io_lib:format("~p", [Other])
+    end,
+    TuneEpisodesStr = case EpisodeTuningOff of
+        true -> "off";
+        false -> integer_to_list(config:episodes_tune())
+    end,
+    EvalStr = case config:evaluation_mode() of
+        episodes ->
+            io_lib:format(" | eval=episodes fitness=~w spread=~p cost_schedule=~w val_spread=~w min_trades=~p | episode_bars=~p warmup=~p tune=~s score=~p val=~p val_every=~p | train=~w val=~w | stall_ms=~p | selection_memory=~p time_limit_s=~p generation_limit=~p",
+                [config:fitness_function(), config:account_spread(), config:cost_schedule(), config:validation_spread(), config:min_trades_per_episode(),
+                 config:episode_bars(), config:episode_warmup_bars(),
+                 TuneEpisodesStr, config:episodes_score(), config:episodes_val(), config:validate_population_every(), config:train_span(), config:val_span(),
+                 config:stall_timeout_ms(), config:selection_memory(), config:run_time_limit_s(), config:generation_limit()])
+                ++ io_lib:format(" | arm=~s episode_seed=~w evolution_seed=~w | isolation=~w sense_before_trade=~w rollover_rule=~w late_fill=~w | plt_encoding=~w position_sensor=~w init_hidden=~w init_recurrent=~w validate_last=~w",
+                [case config:get_val(test_arm, undefined) of undefined -> "reference"; Arm -> Arm end,
+                 config:episode_seed(), config:evolution_seed(), config:episode_isolation(), config:sense_before_trade(),
+                 config:rollover_rule(), config:late_fill(), config:plt_encoding(), config:position_sensor(),
+                 config:init_hidden_neurons(), config:init_recurrent(), config:validate_last_generation()]);
+        EvalMode ->
+            io_lib:format(" | eval=~w fitness=~w spread=~p", [EvalMode, config:fitness_function(), config:account_spread()])
     end,
     lists:flatten(io_lib:format(
         "morph=~w enc=~w arch=~w | gt=~p-~p bench=~p-~p | "
         "evo=~w sel=~w fpost=~w | survival=~p | "
-        "specie_limit=~p init_size=~p tuning=~s",
+        "specie_limit=~p init_size=~p tuning=~s~s",
         [Morph, Enc, Arch, GtStart, GtEnd, BenchStart, BenchEnd,
          EvoAlg, Selection, FPost, Survival,
-         SpecieSizeLimit, InitSpecieSize, TuningDurStr]
+         SpecieSizeLimit, InitSpecieSize, TuningDurStr, EvalStr]
     )).
+
+%% Every run whose agents are compared on the validation span counts as one trial (see eval_protocol:record_trial/2).
+record_validation_trial(Population_Id, RunIndex, ConfigStr) ->
+    case config:evaluation_mode() of
+        episodes -> eval_protocol:record_trial(Population_Id, io_lib:format("run=~p | ~s", [RunIndex, ConfigStr]));
+        _ -> ok
+    end.
 
 get_config_value(Key, ConfigOverrides, DefaultFun) ->
     case lists:keyfind(Key, 1, ConfigOverrides) of
@@ -352,6 +388,7 @@ start({evo, SourcePopId}) ->
 
 %% Internal start function (similar to benchmarker:start)
 start_internal(Mode, RunConfigs) ->
+    warn_if_load_compaction(),
     % 1. Initialize config
     config:init(),
     
@@ -419,6 +456,23 @@ start_internal(Mode, RunConfigs) ->
     ExpRunnerPid = spawn(exp_runner, prep, [E, Mode, SourcePopId]),
     {ok, ExpRunnerPid}.
 
+%% The VM must be started with "+scl false". With the default (compaction of load on) the scheduler threads that go to
+%% sleep while few agents run do not all come back when the next generation starts: after one stretch with a single agent
+%% running, 144 agents were evaluated on 2 of 10 cores for the rest of the run (REVIEW.md 8.20).
+warn_if_load_compaction() ->
+    Args = case catch erlang:system_info(emu_args) of
+        L when is_list(L) -> L;
+        _ -> []
+    end,
+    case scl_off(Args) of
+        true -> ok;
+        false -> io:format("WARNING | this VM was started without \"+scl false\": expect it to use about 2 cores, whatever the machine has (REVIEW.md 8.20)~n")
+    end.
+
+scl_off(["-scl","false"|_]) -> true;
+scl_off([_|Rest]) -> scl_off(Rest);
+scl_off([]) -> false.
+
 %% Apply run configs for a specific run index
 apply_run_configs(ExperimentId, RunIndex, RunConfigs) ->
     case RunConfigs of
@@ -447,8 +501,287 @@ generate_run_id() ->
 
 %% Get run configs - customize this function with your experiment configs
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
-
+%%
+%% get_run_configs/0 is what exp_runner:start/1 runs. Three environment variables choose what it returns (REVIEW.md 8.23):
+%%   DXNN_TEST_ARM        unset or empty: the reference experiment, reference_run_configs/0, exactly as before.
+%%                        ff_level | rec_level | ff_vol | rec_vol: one arm of the four-arm experiment (arm_run_configs/1).
+%%                        fold_2015 | fold_2016 | fold_2017: rec_level on a chronological fold. Any arm can be put on a
+%%                        fold with a plus sign, e.g. ff_vol+fold_2015. Any other value stops the experiment at start.
+%%   DXNN_EPISODE_SEED    an integer: the episode draws of every run are reproducible ({episode_seed,{Seed,RunIndex}}:
+%%                        each chained run draws its own, episodes:begin_generation/2).
+%%   DXNN_EVOLUTION_SEED  an integer: the first population's genotypes, every generation's selection and mutation are
+%%                        reproducible ({evolution_seed,{Seed,RunIndex}}, config:seed_rand/1).
+%% With none of them set the result is reference_run_configs/0, unchanged. The arm, once an experiment has started, is
+%% stored in its experiment record with the rest of its run configs, so a resumed experiment keeps it.
 get_run_configs() ->
+    Configs = case env_string("DXNN_TEST_ARM") of
+        undefined -> reference_run_configs();
+        Arm -> [{I, [{test_arm, Arm} | List]} || {I, List} <- arm_run_configs(Arm)]
+    end,
+    with_seeds(Configs, env_integer("DXNN_EPISODE_SEED"), env_integer("DXNN_EVOLUTION_SEED")).
+
+with_seeds(Configs, undefined, undefined) ->
+    Configs;
+with_seeds(Configs, EpisodeSeed, EvolutionSeed) ->
+    [{I, List ++ [{episode_seed, {EpisodeSeed, I}} || EpisodeSeed =/= undefined]
+              ++ [{evolution_seed, {EvolutionSeed, I}} || EvolutionSeed =/= undefined]} || {I, List} <- Configs].
+
+env_string(Name) ->
+    case os:getenv(Name) of
+        false -> undefined;
+        Value ->
+            case string:trim(Value) of
+                "" -> undefined;
+                Trimmed -> Trimmed
+            end
+    end.
+
+env_integer(Name) ->
+    case env_string(Name) of
+        undefined ->
+            undefined;
+        Value ->
+            case string:to_integer(Value) of
+                {Int, ""} -> Int;
+                _ -> erlang:error({bad_environment_variable, Name, Value})
+            end
+    end.
+
+%% arm_run_configs/1: the four-arm experiment of REVIEW.md 8.23 and its chronological folds. Two questions, crossed:
+%%   ff | rec        feedforward against recurrent. Both start from the same network: three hidden neurons that read
+%%                   every starting sensor, and one output neuron that reads them and drives the trade
+%%                   (genotype:construct_InitialHiddenLayer/7). rec gives each hidden neuron a link to itself
+%%                   (init_recurrent) and allows recurrent links in mutation; ff allows none
+%%                   (connection_architecture feedforward, genome_mutator:filter_OutlinkIdPool/3).
+%%   level | vol     the price lists (fx_PLT) scaled by the price level as before, or by the trailing volatility
+%%                   (plt_encoding, fx_series:answer_at/3).
+%% Common to all: the reference setup of reference_base/2 (plain neurons, the mutation mix, price lists, indicators,
+%% the six-value clock), one family of 48, 32 episodes per evaluation; the position as a sensor from the start
+%% (position_sensor; position only, not open profit); no position opened, closed or reversed in hours 21 to 23
+%% (rollover_rule); every agent validated at generation 0 and at the last generation of each run
+%% (validate_last_generation); fixed generation counts and no wall-time limit, so machines of different speed do the
+%% same work: free 30, ramp 60, then 150 generations at a quarter pip in three runs of 50 (each run's population stays
+%% in Mnesia, so one is saved every 50 generations).
+%% The folds differ only in the spans: fold_2017 has the spans of the four arms.
+%% "pilot": the rec_vol arm cut to 6, 6 and 8 generations and 40 validation episodes, for testing a machine or the cloud
+%% path end to end. Full size otherwise (48 agents, 32 episodes), so its gen_seconds can be compared between machines.
+%% It passes through two chained-run changes, the cost ramp, validation at first and last generations, and completion.
+arm_run_configs("pilot") ->
+    [{I, lists:keystore(episodes_val, 1, lists:keystore(generation_limit, 1, List, {generation_limit, G}), {episodes_val, 40})}
+     || {{I, List}, G} <- lists:zip(lists:sublist(arm_run_configs("rec_vol"), 3), [6, 6, 8])];
+%% "night": one long run of the rec_vol setup with more agents (REVIEW.md 8.24). Four families of 48 on the same
+%% episodes; free trading 20 generations, the cost ramp 40, then four runs of NightGens at a quarter pip, each leaving
+%% its population in Mnesia. Every agent is validated at the last generation of each run, on 120 episodes of 2017 (a
+%% full pass of 192 agents on all 369 would take up to half an hour). Each quarter-pip run also has a wall-time cap; a
+%% run ended by the cap skips its validation pass.
+arm_run_configs("night") ->
+    NightGens = 45,
+    [R1, R2, R3 | _] = arm_run_configs("rec_vol"),
+    Set = fun(List, Changes) -> lists:foldl(fun({K, _} = Kv, Acc) -> lists:keystore(K, 1, Acc, Kv) end, List, Changes) end,
+    Common = [{families, 4}, {validate_population_every, 0}, {validate_last_generation, true}, {episodes_val, 120}],
+    [{1, Set(element(2, R1), Common ++ [{generation_limit, 20}])},
+     {2, Set(element(2, R2), Common ++ [{generation_limit, 40}, {cost_schedule, [{0,0.0},{40,0.000025}]}])}]
+    ++ [{I, Set(element(2, R3), Common ++ [{generation_limit, NightGens}, {run_time_limit_s, 6000}])} || I <- [3, 4, 5, 6]];
+arm_run_configs(Name) ->
+    {Arch, Encoding, Fold} = parse_arm(Name),
+    Target = 0.000025,
+    {TrainSpan, ValSpan} = fold_spans(Fold),
+    ArmSettings = [
+        {families, 1},
+        {connection_architecture, case Arch of ff -> feedforward; rec -> recurrent end},
+        {init_hidden_neurons, 3},
+        {init_recurrent, Arch == rec},
+        {plt_encoding, Encoding},
+        {position_sensor, true},
+        {rollover_rule, true}, {late_fill, false},
+        {validate_last_generation, true},
+        %% The score selection ranks by (REVIEW.md 8.26): the t-statistic of drift-free money in pips. alpha_t (in
+        %% reference_base/2) divides by the agent's own exposure and was inflated by "take the gain, hold the loss" (8.25).
+        {fitness_function, alpha_pips_t},
+        {train_span, TrainSpan}, {val_span, ValSpan}
+    ],
+    Base = lists:foldl(fun({Key, _} = Setting, Acc) -> lists:keystore(Key, 1, Acc, Setting) end, reference_base(Target, 1), ArmSettings),
+    Stage = fun(Extra) -> Base ++ [{min_trades_per_episode, 2} | Extra] end,
+    [
+        {1, Stage([{account_spread, 0.0}, {generation_limit, 30}])},
+        {2, Stage([{account_spread, 0.0}, {cost_schedule, [{0,0.0},{60,Target}]}, {generation_limit, 60}])},
+        {3, Stage([{account_spread, Target}, {generation_limit, 50}])},
+        {4, Stage([{account_spread, Target}, {generation_limit, 50}])},
+        {5, Stage([{account_spread, Target}, {generation_limit, 50}])}
+    ].
+
+parse_arm(Name) ->
+    {ArmName, Fold} = case string:split(Name, "+") of
+        [A, F] -> {A, F};
+        [A] ->
+            case lists:member(A, fold_names()) of
+                true -> {"rec_level", A};
+                false -> {A, "fold_2017"}
+            end
+    end,
+    case {lists:keyfind(ArmName, 1, arm_table()), lists:member(Fold, fold_names())} of
+        {{_, Arch, Encoding}, true} -> {Arch, Encoding, Fold};
+        _ -> erlang:error({unknown_test_arm, Name, ["pilot", "night"] ++ [Known || {Known, _, _} <- arm_table()] ++ fold_names()})
+    end.
+
+arm_table() ->
+    [{"ff_level", ff, level}, {"rec_level", rec, level}, {"ff_vol", ff, vol}, {"rec_vol", rec, vol}].
+
+fold_names() ->
+    ["fold_2015", "fold_2016", "fold_2017"].
+
+fold_spans("fold_2015") -> {{{2012,1,2},{2014,12,31}}, {{2015,1,1},{2015,12,31}}};
+fold_spans("fold_2016") -> {{{2012,1,2},{2015,12,31}}, {{2016,1,1},{2016,12,31}}};
+fold_spans("fold_2017") -> {{{2012,1,2},{2016,12,31}}, {{2017,1,1},{2017,12,31}}}.
+
+%% Data and periods (REVIEW.md 8.12, 8.13, 8.15 and 8.16): fx_tables/EURUSD1.txt holds 2012 to 2024 of the long price
+%% file (4.78 million one-minute bars). This config is the forward test inside that history: training draws its
+%% episodes from 2012 to 2016, validation is 2017, and 2018 to 2020 is the test. The test years are in the loaded file
+%% but no run reads them: one agent chosen on 2017 is replayed on them once, afterwards (the protocol is in 8.16).
+%% Why these years: the pattern the agents of the overnight run learned (8.15) was in the prices up to about 2020 and
+%% has faded since, so 2021 to 2024 cannot show whether an agent learns to trade, only that the pattern is gone.
+%% January 2025 to November 2026 is not in the loaded file at all: it stays in fx_tables/EURUSD_M1_MIDPOINT_UTC.txt
+%% and is not touched by this experiment.
+%% The file's clock is local market time, not UTC (one hour ahead of UTC in summer). That is harmless here and matters
+%% only when a trained agent is connected to a live feed.
+%%
+%% Staged curriculum (see REVIEW.md, sections 8.9 to 8.11): the same population goes through three stages. The last
+%% stage is split into two runs so that the experiment leaves two saved populations to choose from.
+%%
+%%   run 1     free   30 generations. Trades cost nothing.
+%%   run 2     ramp   60 generations. The cost per round trip rises a little every generation, from nothing to a
+%%                    quarter pip (cost_schedule).
+%%   runs 3-4  hold   the cost stays at a quarter pip, the level real trading is assumed to cost. Each run lasts Hold
+%%                    seconds of wall time (run_time_limit_s) however many generations that is, so the experiment ends
+%%                    about 2 x Hold + 25 minutes after it starts, whatever size the networks grow to.
+%%                    In the overnight run the agents stopped improving within the first hundred quarter-pip
+%%                    generations, about half an hour (8.15); raise Hold to give them longer.
+%%                    The trade minimum is 2 positions per episode in every run. Lowering it to 0.5 (runs 5 and 6 of
+%%                    the overnight run) changed nothing except letting agents that hold one position in for a few
+%%                    generations.
+%%
+%% If the experiment is interrupted, the populations of the runs that finished are in Mnesia and their GEN_SUMMARY lines
+%% in logs/Benchmarker/generation_summary.log.
+%%
+%% The objective is the same in all three stages: money after cost. Only the cost changes. Trading as such is not
+%% rewarded beyond the minimum below: with free trades the agents of the second trial already opened about 300 positions
+%% per 1,000 bars without being asked to, and on the train span the rules that come closest to paying after a quarter
+%% pip open between 0.5 and 14 (measured, REVIEW.md 8.9; none of them pays reliably), so a reward for trading would
+%% pull away from them.
+%%
+%% What every run has in common (Base):
+%%   - evaluation_mode episodes: each generation draws fresh score episodes from train_span; fitness is alpha_t on the
+%%     score episodes: the t-statistic of the money the agent made per unit of position, after cost, with the average
+%%     drift of the whole span taken out (fx:ep_stat/4). One lucky window does not win, and being long in a span that
+%%     happened to rise earns nothing.
+%%   - min_trades_per_episode 2: an agent that opens fewer positions per episode on average is ranked below every
+%%     agent that does, by how many it opened. That is the only place where trading itself is rewarded; it keeps
+%%     "never trade" out. Fractions are allowed (0.5 means 16 positions in a 32-episode evaluation).
+%%   - selection_memory 0.85: selection ranks by a decaying average of each agent's score relative to the median of its
+%%     generation (selection_memory.erl), not by one generation's score. A family that is really better is no longer
+%%     removed by one unlucky draw. GEN_SUMMARY still reports the raw scores.
+%%   - validation_spread: validation episodes always cost a quarter pip, also while training is still free, so the
+%%     validation columns of GEN_SUMMARY read at the real cost from the first generation to the last.
+%%   - episode_tuning false: no weight tuning inside a generation (it took two thirds of the compute in the first trial
+%%     and nothing it found carried over). Weights change through the mutate_weights mutation.
+%%   - val_span is never used for selection. Every 40 generations each agent is also run on every validation episode
+%%     (episodes_val is an upper limit; about 370 fit in 2017) and the result is logged (GEN_SUMMARY lines in
+%%     logs/Benchmarker/generation_summary.log). All of them, because a subset is the same subset at every check and
+%%     its luck repeats: the 200 of the overnight run read 2.4 pips per episode worse than the whole period (8.15).
+%%     One year resolves about 2.4 pips per episode, so read val_net_pips_ep as a range, not as a result.
+%%   - the sensors answered from the shared price arrays (price lists on 15-minute, hourly, 4-hour and daily bars,
+%%     indicators, a clock) are offered next to the raw ones, and removal mutations are in the default operator list.
+%%   - init_sensors series: a new agent starts with all four price lists and the indicators, not with one sensor drawn
+%%     at random. With one, the whole population read its founder's sensor for the rest of the experiment: the forward
+%%     run of 2026-11-12 read four-hour bars only and learned nothing (REVIEW.md 8.17). Like the encoding, this is
+%%     fixed when the agents are created, so only its run-1 value takes effect.
+%%   - families: with more than one, the population is that many separate species of 48 that never mix. Each is an
+%%     independent attempt on the same episodes, and each gets a FAMILY_SUMMARY line per generation next to GEN_SUMMARY.
+%%     The default 1 is the experiment as it was. Also fixed at creation.
+%%   - selection is rank (the fitness can be negative, which competition cannot handle).
+%%   - neural encoding: it evaluates about 7 times faster than the substrate. Use [substrate] to compare.
+%%   - population 48 and 32 score episodes from the first generation. Small networks are cheap, and with 8 episodes the
+%%     first stage of the third trial learned nothing.
+%% Nothing limits how often an agent may trade and nothing limits network size.
+%% In GEN_SUMMARY read positive (agents above zero after cost), gross_pips_trade (must exceed the cost in pips) and
+%% net_pips_ep, and the val_ versions of the same. vm_mb and processes should stay level through the run.
+%% episode_bars stays fixed so the validation episodes are identical in all runs.
+%% Yardstick (REVIEW.md 8.12): on the training years a one-line rule (take the other side of a move of more than about
+%% 11 pips within 60 bars, leave when it is undone) makes +2.7 pips per 1,000 bars after a quarter pip. net_pips_ep is
+%% in the same unit.
+%%
+%% apply_run_configs/3 clears every override before loading a run, so each entry is Base ++ its own changes.
+%% Note: tuning_duration, the selection function, the encoding and the mutation operators are stored in the agents and
+%% the population when they are created, so only their run-1 values take effect.
+reference_run_configs() ->
+    Target = 0.000025,   % a quarter pip per round trip (0.0001 = 1 pip)
+    %% Three families overnight (REVIEW.md 8.18): 9 h 28 min on 2026-11-12, about 8 h 30 min expected since the changes
+    %% of REVIEW.md 8.20. For the one-family experiment set Families = 1 and Hold = 3600 (about 2 h 40 min).
+    %% Start the VM with "+scl false" (README.md).
+    Hold = 10800,        % wall seconds for each of the two quarter-pip runs (3 h: each of three families gets the generations one family gets in 1 h)
+    Families = 3,        % independent families of 48 agents. A generation takes Families times as long: change Hold with it
+    Base = reference_base(Target, Families),
+    [
+        {1, Base ++ [{min_trades_per_episode, 2},   {account_spread, 0.0},                                        {generation_limit, 30}]},
+        {2, Base ++ [{min_trades_per_episode, 2},   {account_spread, 0.0}, {cost_schedule, [{0,0.0},{60,Target}]}, {generation_limit, 60}]},
+        {3, Base ++ [{min_trades_per_episode, 2},   {account_spread, Target}, {generation_limit, 100000}, {run_time_limit_s, Hold}]},
+        {4, Base ++ [{min_trades_per_episode, 2},   {account_spread, Target}, {generation_limit, 100000}, {run_time_limit_s, Hold}]}
+    ].
+
+%% reference_base/2: what every run of the reference experiment has in common (see the comment above
+%% reference_run_configs/0). The arms of arm_run_configs/1 start from it too.
+reference_base(Target, Families) ->
+    [
+        {evaluation_mode, episodes},
+        {fitness_function, alpha_t},
+        %% Forward test inside the long history (REVIEW.md 8.16): train on 2012 to 2016, validate on all of 2017.
+        %% 2018 to 2020 is the test. No run reads it; one agent chosen on 2017 is replayed on it once, afterwards.
+        %% (The overnight run of 8.15 used train 2012-01-02..2020-12-31, validation 2021-01-04..2024-12-31, 200 episodes
+        %% every 20 generations.)
+        {train_span, {{2012,1,2},{2016,12,31}}}, {val_span, {{2017,1,1},{2017,12,31}}},
+        {episode_bars, 1000}, {episode_warmup_bars, 30}, {episodes_val, 400},
+        {validate_population_every, 1000000},   % validation at generation 0 of each run only (it was every 40 generations: 27% of the night, REVIEW.md 8.20)
+        {validation_spread, Target},
+        {selection_memory, 0.85},
+        %% Sensors answered from the shared price arrays, offered next to the raw price lists and the chart image.
+        {plt_specs, [{15,32},{60,24},{240,30},{1440,20}]}, {indicator_sensor, true}, {clock_sensor, true}, {clock_harmonics, 2},
+        {init_sensors, series_clock},   % the price lists, the indicators and the clock from the first generation (REVIEW.md 8.22)
+        {families, Families},
+        %% Plain neurons (REVIEW.md 8.22): tanh or linear of a weighted sum, no plasticity. With nine functions, three
+        %% aggregators and twelve plasticity rules each family's output neuron was one type drawn by lot, and one draw
+        %% (cos of a product) held long all night. Fixed when the agents are created.
+        {neural_activation_functions, [tanh, linear]},
+        {neural_plasticity_functions, [none]},
+        {neural_aggregation_functions, [dot_product]},
+        %% Weights: half of all mutations (350 of 699; it was 25 of 449, and with episode_tuning off nothing else changes a
+        %% weight). The operators that changed a neuron's aggregator or plasticity are gone with the choices they had.
+        {mutation_operators, [
+            {mutate_weights,350}, {mutate_af,25}, {add_bias,25}, {remove_bias,10},
+            {add_neuron,60}, {add_inlink,50}, {add_outlink,40}, {outsplice,15},
+            {add_sensor,10}, {add_sensorlink,30}, {add_actuatorlink,20},
+            {remove_neuron,20}, {remove_inlink,15}, {remove_outlink,15}, {remove_sensorlink,10}, {remove_sensor,4}]},
+        %% No chart image and no raw one-minute lists: 600 and 90 to 270 inputs each, a quarter of an agent's time, and
+        %% no measured gain (REVIEW.md 8.15, 8.20, 8.22).
+        {pli_resolutions, []}, {pci_horizontal_resolutions, []},
+        {generation_test, false},   % no benchmark step: it ran each family's best agent alone on 2017 every 500 evaluations (8% of the night of REVIEW.md 8.19) and left the VM on two cores afterwards (8.20)
+        %% Each episode starts from a freshly reset network, and every sensor reads a bar before its trade is taken
+        %% (REVIEW.md 8.23). Before, the 32 episodes of an evaluation ran back to back on one network.
+        {episode_isolation, true}, {sense_before_trade, true},
+        %% GEN_SUMMARY also scores never trading, always long, the 60-bar momentum rule and a time-of-day rule on the
+        %% generation's episodes (REVIEW.md 8.23), next to the two reversal rules it always had.
+        {extra_baselines, true},
+        {agent_encoding_types, [neural]},
+        {population_selection_f, rank}, {population_fitness_postprocessor_f, none},
+        {episode_tuning, false}, {episodes_tune, 1},   % episodes_tune is only drawn, not run, while tuning is off
+        {tuning_duration, {const,4}},                  % only used if episode_tuning is switched on
+        {survival_percentage, 0.5},
+        {episodes_score, 32}, {specie_size_limit, 48}, {init_specie_size, 48}
+    ].
+
+%% The previous 12-phase curriculum (one fixed recent window per run, total_profit). Kept as the reference design:
+%% point get_run_configs/0 at it to reproduce the old behaviour. account_spread now defaults to 0.0, so add
+%% {account_spread, 0.00015} to each entry to reproduce it with costs.
+get_run_configs_legacy() ->
     [
         %% All runs use total_profit (net equity after spread). The previous phase0/phase1/phase2
         %% functions rewarded trade counts more than P&L (a losing 49-trade agent outscored a
@@ -503,15 +836,19 @@ prep(E, Mode, SourcePopId) ->
     % Log run start
     ConfigStr = format_config_summary(E#experiment.run_index, E#experiment.run_configs),
     qlog:exp_runner(run_start, {E#experiment.id, E#experiment.run_index, Population_Id, Mode, ConfigStr}),
-    
+    record_validation_trial(Population_Id, E#experiment.run_index, ConfigStr),
+
     % Handle population creation/cloning
+    % With config:evolution_seed() set, the random choices of the new genotypes are reproducible (config:seed_rand/1).
     case Mode of
         fresh ->
             S = population_monitor:prep_PopState(PMP, Constraints),
+            config:seed_rand(0),
             population_monitor:init_population(S, Constraints);
         new_evo ->
             % First run: fresh, subsequent: clone
             S = population_monitor:prep_PopState(PMP, Constraints),
+            config:seed_rand(0),
             population_monitor:init_population(S, Constraints);
         {evo, _} ->
             % Clone population from source (creates new agent IDs, preserves artifacts)
@@ -606,6 +943,7 @@ loop(E, P_Id) ->
                     % Log next run start
                     ConfigStr = format_config_summary(U_RunIndex, E#experiment.run_configs),
                     qlog:exp_runner(run_start, {E#experiment.id, U_RunIndex, NextPopId, new_evo, ConfigStr}),
+                    record_validation_trial(NextPopId, U_RunIndex, ConfigStr),
                     qlog:benchmarker(P_Id, io_lib:format("Run Start: Experiment id: ~p Run Index: ~p, NextPopId: ~p", [E#experiment.id, U_RunIndex, NextPopId])),
                     
                     % Clone population for next run (new_evo mode clones from previous run, preserves artifacts)
@@ -758,15 +1096,37 @@ resume(E, Population_Id) ->
     ),
     
     qlog:xLog(qStatus, "exp_runner:resume | pop_id=~p | run_index=~p/~p", [Population_Id, U_E#experiment.run_index, U_E#experiment.tot_runs]),
-    population_monitor:continue(Population_Id),
+    case supervised() of
+        true ->
+            %% A restored run keeps its experiment's limits and reports back to this loop (benchmarker_pid).
+            population_monitor:start(population_monitor:prep_PopState(PMP, E#experiment.init_constraints));
+        false ->
+            population_monitor:continue(Population_Id)
+    end,
     loop(U_E, Population_Id).
 
 %% ============================================================================
 %% CHECKPOINT SYSTEM
 %% ============================================================================
 
+%% True when a cloud worker (dxnn_worker.py) supervises this VM: GCP ("gcs") or OCI ("oci_object_storage").
+%% The worker takes transactional Mnesia backups (dxnn_runtime) and uploads them itself.
+supervised() ->
+    case os:getenv("DXNN_STORAGE_PROVIDER") of
+        "gcs" -> true;
+        "oci_object_storage" -> true;
+        _ -> false
+    end.
+
 %% Checkpoint configuration
 should_checkpoint() ->
+    %% Legacy file-copy checkpoints and S3 uploads stay on the AWS path.
+    case supervised() of
+        true -> false;
+        false -> legacy_should_checkpoint()
+    end.
+
+legacy_should_checkpoint() ->
     case config:checkpoint_enabled() of
         true -> true;
         false -> false;
@@ -960,8 +1320,14 @@ trigger_s3_upload(PopulationId) ->
 %% Checkpoint and exit (for experiment completion and spot interruptions)
 %% Only exits if running in AWS environment to trigger S3 upload
 checkpoint_and_exit() ->
+    case supervised() of
+        true -> dxnn_runtime:finish();
+        false -> legacy_checkpoint_and_exit()
+    end.
+
+legacy_checkpoint_and_exit() ->
     checkpoint(),
-    
+
     case should_checkpoint() of
         true ->
             qlog:exp_runner(checkpoint_and_exit, {aws_detected, exiting}),

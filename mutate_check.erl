@@ -134,9 +134,15 @@ verify_sensor_connections_bidirectional(Agent_Id, S_Ids) ->
             verify_sensor_bidirectional(Sensors, Sensor_Map, Neuron_Map, Neuron_Input_Map)
     end.
 
+%% all_input_ids/1: the ids of everything that sends to neuron N, through a standard input (input_idps) or a
+%% modulatory one (input_idps_modulation). A link checker must count both: an element that feeds a neuron only as a
+%% modulatory input is correctly wired, and "repairing" it would add a second link from the same element.
+all_input_ids(N) ->
+    [Id || {Id,_WeightsP} <- N#neuron.input_idps ++ N#neuron.input_idps_modulation].
+
 build_neuron_input_map(Neurons) ->
     lists:foldl(fun(N, Acc) ->
-        {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+        Input_Ids = all_input_ids(N),
         Sensor_Inputs = [I || I <- Input_Ids, case I of {_,sensor} -> true; _ -> false end],
         [{N#neuron.id, Sensor_Inputs}|Acc]
     end, [], Neurons).
@@ -404,7 +410,7 @@ collect_sensor_to_neuron_fixes_tx(Agent_Id, [S_Id|S_Rest], Generation, Acc) ->
         case Fanout_Id of
             {_,neuron} ->
                 N = genotype:read({neuron,Fanout_Id}),
-                {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+                Input_Ids = all_input_ids(N),
                 case lists:member(S_Id, Input_Ids) of
                     false -> 
                         U_N = genome_mutator:link_ToNeuron(S_Id, S#sensor.vl, N, Generation),
@@ -419,7 +425,7 @@ collect_sensor_to_neuron_fixes_tx(Agent_Id, [S_Id|S_Rest], Generation, Acc) ->
 collect_neuron_sensor_fixes_tx(_Agent_Id, [], _Generation, Acc) -> Acc;
 collect_neuron_sensor_fixes_tx(Agent_Id, [N_Id|N_Rest], Generation, Acc) ->
     N = genotype:read({neuron,N_Id}),
-    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+    Input_Ids = all_input_ids(N),
     Acc1 = lists:foldl(fun(Input_Id, AccIn) ->
         case Input_Id of
             {_,sensor} ->
@@ -465,7 +471,7 @@ collect_cpp_to_neuron_fixes_tx(Agent_Id, [CPP_Id|CPP_Rest], Generation, Acc) ->
         case N_Id of
             {_,neuron} ->
                 N = genotype:read({neuron,N_Id}),
-                {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+                Input_Ids = all_input_ids(N),
                 case lists:member(CPP_Id, Input_Ids) of
                     false -> 
                         U_N = genome_mutator:link_ToNeuron(CPP_Id, CPP#sensor.vl, N, Generation),
@@ -480,7 +486,7 @@ collect_cpp_to_neuron_fixes_tx(Agent_Id, [CPP_Id|CPP_Rest], Generation, Acc) ->
 collect_neuron_to_cpp_fixes_tx(_Agent_Id, [], _CPP_Ids, _Generation, Acc) -> Acc;
 collect_neuron_to_cpp_fixes_tx(Agent_Id, [N_Id|N_Rest], CPP_Ids, Generation, Acc) ->
     N = genotype:read({neuron,N_Id}),
-    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+    Input_Ids = all_input_ids(N),
     Acc1 = lists:foldl(fun(Input_Id, AccIn) ->
         case Input_Id of
             {_,sensor} ->
@@ -566,7 +572,7 @@ fix_isolated_self_recurrent(Agent_Id) ->
 link_sensor_to_neuron_if_absent(Agent_Id, Generation, S_Id, N_Id) ->
     S = genotype:read({sensor,S_Id}),
     N = genotype:read({neuron,N_Id}),
-    {Input_Ids,_} = lists:unzip(N#neuron.input_idps),
+    Input_Ids = all_input_ids(N),
     case {lists:member(N_Id, S#sensor.fanout_ids), lists:member(S_Id, Input_Ids)} of
         {true, true} -> ok;
         {false, false} -> genome_mutator:link_FromElementToElement(Agent_Id, S_Id, N_Id);

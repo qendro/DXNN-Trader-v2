@@ -56,7 +56,7 @@ ensure_fx_complete(BenchmarkId) ->
             wait_fx_ready(BenchmarkId);
         _Pid ->
             qlog:benchmarker(BenchmarkId, "FX process already running"),
-            exp_runner:start(new_evo)
+            start_experiment()
     end.
 
 %% Blocks until we see an fx_updated message
@@ -64,7 +64,14 @@ wait_fx_ready(BenchmarkId) ->
     receive
         fx_updated ->
             qlog:benchmarker(BenchmarkId, "FX ready"),
-            exp_runner:start(new_evo)
+            start_experiment()
+    end.
+
+%% Under the cloud worker (GCP or OCI) a restore continues the persisted experiment instead of creating one.
+start_experiment() ->
+    case exp_runner:supervised() of
+        true -> dxnn_runtime:resume_or_new();
+        false -> exp_runner:start(new_evo)
     end.
 
 %% Create Mnesia schema if it doesn't exist

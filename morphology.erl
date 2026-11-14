@@ -10,22 +10,46 @@ get_InitSensors(Morphology)->
 		undefined ->
 			% No ETS table, use default behavior
 			Sensors = morphology:Morphology(sensors),
-			FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
-			[lists:nth(rand:uniform(length(FilteredSensors)),FilteredSensors)];
+			first_sensors(Sensors);
 		_ ->
 			% Check for custom sensors
 			case ets:lookup(agent_gen_overrides, {custom_sensors, Morphology}) of
 				[] ->
 					% No custom sensors, use default
 					Sensors = morphology:Morphology(sensors),
-					FilteredSensors = [S || S <- Sensors, S#sensor.name =/= fx_Internals],
-					[lists:nth(rand:uniform(length(FilteredSensors)),FilteredSensors)];
+					first_sensors(Sensors);
 				[{_, Custom_Sensors}] ->
 					% Use custom sensors from agent_gen
 					Custom_Sensors
 			end
 	end.
 	%[lists:nth(1,Sensors)].
+
+%first_sensors/1 chooses the sensors a new agent starts with (config:init_sensors/0). A first sensor must carry price
+%information, so the account-state and clock sensors are never among them.
+%	one     One sensor drawn at random: the original behaviour. A population becomes one family within its first 30
+%	        generations, so from then on the whole experiment reads whichever sensor that family's founder drew, and
+%	        another sensor arrives only when add_sensor happens to pick it (about one mutation in 400 for a given
+%	        sensor). The forward run of 2026-11-12 read four-hour bars and nothing else, and learned nothing; the one
+%	        run that did learn was the one where the indicators reached every agent (REVIEW.md 8.17).
+%	series  Every sensor answered from the shared price arrays: each fx_PLT list and fx_IND. The first neuron reads
+%	        one of them or all of them (genotype:construct_InitialNeurons/6), and add_sensorlink connects the others.
+%	        The raw sensors (fx_PLI, fx_PCI), the clock and the account state still arrive through add_sensor.
+%	        Falls back to one when no series sensor is switched on.
+%	series_clock  The same and the clock (REVIEW.md 8.22: EUR/USD has a time-of-day pattern, and the clock reached only a
+%	        third of the agents through add_sensor).
+%	With config:position_sensor/0 on, the position sensor (fx_Position) is added to whichever of these is chosen: an agent
+%	that reads its own position has it from the start (REVIEW.md 8.23).
+first_sensors(Sensors)->
+	Price = [S || S <- Sensors, not lists:member(S#sensor.name,[fx_Internals,fx_Clock,fx_Position])],
+	Series = [S || S <- Price, lists:member(S#sensor.name,[fx_PLT,fx_IND])],
+	Position = [S || S <- Sensors, S#sensor.name == fx_Position],
+	First = case {config:init_sensors(),Series} of
+		{series,[_|_]} -> Series;
+		{series_clock,[_|_]} -> Series ++ [S || S <- Sensors, S#sensor.name == fx_Clock];
+		_ -> [lists:nth(rand:uniform(length(Price)),Price)]
+	end,
+	First ++ Position.
 
 get_InitActuators(Morphology)->
 	% Check if agent_gen has custom actuators stored in ETS
@@ -140,10 +164,22 @@ forex_trader(actuators)->
 forex_trader(sensors)->
 	PLI_Sensors=  [#sensor{name=fx_PLI,type=standard,scape={private,fx_sim},format=no_geo,vl=HRes,parameters=[HRes,close]} || HRes<-config:pli_resolutions()],
 	PCI_Sensors = [#sensor{name=fx_PCI,type=standard,scape={private,fx_sim},format={symmetric,[HRes,VRes]},vl=HRes*VRes,parameters=[HRes,VRes]} || HRes <-config:pci_horizontal_resolutions(), VRes<-config:pci_vertical_resolutions()],
-	InternalSensors = [#sensor{name=fx_Internals,type=standard,scape={private,fx_sim},format=no_geo,vl=config:internal_sensor_dimensions(),parameters=[config:internal_sensor_dimensions()]}],%[Long|Short|Void],Value
+	%The account state: position and open profit (fx_Internals), or with config:position_sensor/0 the position only
+	%(fx_Position), which a new agent then also starts with (first_sensors/1).
+	InternalSensors = case config:position_sensor() of
+		true -> [#sensor{name=fx_Position,type=standard,scape={private,fx_sim},format=no_geo,vl=1,parameters=[position]}];
+		_ -> [#sensor{name=fx_Internals,type=standard,scape={private,fx_sim},format=no_geo,vl=config:internal_sensor_dimensions(),parameters=[config:internal_sensor_dimensions()]}]%[Long|Short|Void],Value
+	end,
+	%Sensors answered from the shared price arrays (fx_series.erl): price lists on coarser bars, indicators, a clock.
+	%They are offered next to the raw ones; add_sensor lets evolution pick. Empty unless switched on in config.
+	%The price lists carry their encoding (config:plt_encoding/0) in their parameters: [TF,N] or [TF,N,vol].
+	SeriesSensors =
+		[#sensor{name=fx_PLT,type=standard,scape={private,fx_sim},format=no_geo,vl=N,parameters=plt_parameters(TF,N)} || {TF,N}<-config:plt_specs()] ++
+		[#sensor{name=fx_IND,type=standard,scape={private,fx_sim},format=no_geo,vl=fx_series:vl(ind),parameters=[ind]} || config:indicator_sensor() == true] ++
+		[#sensor{name=fx_Clock,type=standard,scape={private,fx_sim},format=no_geo,vl=fx_series:vl(ClockSpec),parameters=ClockParameters} || config:clock_sensor() == true, {ClockSpec,ClockParameters} <- [clock_spec()]],
 	%PLI_Sensors.
 	%PCI_Sensors. %Inital state [BASE]
-	PLI_Sensors++PCI_Sensors++InternalSensors.
+	PLI_Sensors++PCI_Sensors++SeriesSensors++InternalSensors.
 	%PCI_Sensors++PLI_Sensors++InternalSensors.
 	%PLI_Sensors.%++InternalSensors. %qq
 	%PLI_Sensors++InternalSensors. % qq - Enable internal sensors for more mutation options
@@ -166,3 +202,16 @@ forex_trader_1m(sensors)->
 generate_id() ->
 	{MegaSeconds,Seconds,MicroSeconds} = now(), 
 	1/(MegaSeconds*1000000 + Seconds + MicroSeconds/1000000).
+
+plt_parameters(TF,N)->
+	case config:plt_encoding() of
+		vol -> [TF,N,vol];
+		_ -> [TF,N]
+	end.
+
+%clock_spec/0: what the clock sensor asks the simulator for, and the parameters stored with the sensor.
+clock_spec()->
+	case config:clock_harmonics() of
+		H when is_integer(H), H > 1 -> {{clock,H},[clock,H]};
+		_ -> {clock,[clock]}
+	end.

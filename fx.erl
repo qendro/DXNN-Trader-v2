@@ -248,71 +248,152 @@ sim(ExoSelf)->io:format("Started~n"),
 % - terminate - Terminates the simulation.
 % The function also handles a timeout of 10 seconds to recheck the state.
 % If the simulation is over, it returns the total profit and resets the state and account.
-sim(ExoSelf,S,A)-> 
+%With config:sense_before_trade/0 on, the exoself tells the simulator how many sensors read it ({_,sensors,N}), and a
+%bar's trade is not taken off the mailbox until N senses have been answered for that bar (sim_senses/3). Without it a
+%sensor whose neurons reach the actuator only through recurrent links can be served after the trade, that is, from the
+%next bar, depending on how the processes happen to be scheduled.
+sim(ExoSelf,S,A)->
+	case get(fx_sensors) of
+		N when is_integer(N) ->
+			case senses_served() < N of
+				true -> sim_senses(ExoSelf,S,A);
+				false -> sim_main(ExoSelf,S,A)
+			end;
+		_ ->
+			sim_main(ExoSelf,S,A)
+	end.
+
+	senses_served()->
+		case get(fx_senses) of
+			undefined -> 0;
+			K -> K
+		end.
+
+	count_sense()->
+		put(fx_senses,senses_served()+1).
+
+%sim_senses/3: some sensors have not read this bar yet. Everything but a trade is handled; a trade waits in the mailbox.
+sim_senses(ExoSelf,S,A)->
 	receive
+		{_From,eval_mode,Mode}->
+			on_eval_mode(ExoSelf,S,A,Mode);
+		{_From,sensors,N}->
+			on_sensors(ExoSelf,S,A,N);
+		{From,sense,TableName,Feature,Parameters,Start,Finish}->
+			on_sense(ExoSelf,From,TableName,Feature,Parameters,Start,Finish,S,A);
+		{From,sense,internals,Parameters}->
+			on_internals(ExoSelf,From,Parameters,S,A);
+		restart ->
+			fx:sim(ExoSelf,#state{},create_account());
+		{_From,terminate} ->
+			ok;
+		terminate ->
+			ok
+		after 10000 ->
+			fx:sim(ExoSelf,S,A)
+	end.
+
+	%eval_mode is sent by the exoself before an evaluation: tune | score | validation select the episode set used when
+	%config:evaluation_mode() is episodes. Any other value (or no message at all) keeps the legacy single window.
+	%With config:episode_isolation/0 on it also puts the simulator back to idle. Normally it is idle already; it is not
+	%when a sensor read it after the previous evaluation ended, which started an evaluation with the old episode set.
+	on_eval_mode(ExoSelf,S,A,Mode)->
+		put(eval_mode,Mode),
+		put(fx_senses,0),
+		case config:episode_isolation() of
+			true ->
+				erase(ep_ctx),
+				put(prev_PC,0),
+				fx:sim(ExoSelf,#state{},create_account());
+			_ ->
+				fx:sim(ExoSelf,S,A)
+		end.
+
+	on_sensors(ExoSelf,S,A,N)->
+		put(fx_sensors,N),
+		put(fx_senses,0),
+		fx:sim(ExoSelf,S,A).
+
+	on_sense(ExoSelf,From,TableName,Feature,Parameters,Start,Finish,S,A)->
+		U_S = sense_reply(From,TableName,Feature,Parameters,Start,Finish,S,A),
+		count_sense(),
+		fx:sim(ExoSelf,U_S,A).
+
+	on_internals(ExoSelf,From,Parameters,S,A)->
+		From ! {self(),internals(A,Parameters)},
+		count_sense(),
+		%This sense does not carry the table that starts an evaluation (the price senses do), so an agent whose only
+		%sensor is this one never started: every trade was answered "nothing happened" for ever, the cortex kept cycling,
+		%and the evaluation never ended (overnight run of 2026-11-11, an agent that had lost its price sensor to
+		%remove_sensor). In episode mode everything needed to start is in the config, so start here too.
+		fx:sim(ExoSelf,start_if_idle(S),A).
+
+	%sense_reply/8 answers a price sense and returns the simulator state, which a sense starts if it is idle.
+	% Parameters is a list that can contain the resolution and type of sensor (e.g., graph_sensor, list_sensor).
+	% Start and Finish are the indices to start and finish sensing (legacy mode only).
+	sense_reply(From,TableName,Feature,Parameters,Start,Finish,S,A)->
+		{Result,U_S}=case S#state.table_name of
+			undefined ->
+				sense(eval_init_state(S,TableName,Feature,Start,Finish),Parameters);
+			CurrentTableName when CurrentTableName =:= TableName ->
+				sense(S,Parameters);
+			_OtherTableName ->
+				%% Table name mismatch, reinitialize state
+				sense(eval_init_state(S,TableName,Feature,Start,Finish),Parameters)
+		end,
+		From ! {self(),Result},
+		case config:sensor_debug_tag() of
+			true ->
+				IndexT = U_S#state.index,
+				NextIndexT = fx:next(TableName,IndexT),
+				RowT = fx:lookup(TableName,IndexT),
+				NextRowT = fx:lookup(TableName,NextIndexT),
+				QuoteT = RowT#technical.close,
+				NextQuoteT = NextRowT#technical.close,
+				io:format("Sense~n Index:~p~n Quote:~p~n Next Index:~p~n Next Quote:~p~n NetWorth:~p~n",[IndexT,QuoteT,NextIndexT,NextQuoteT,A#account.balance + A#account.unrealized_PL]);
+			false ->
+				ok
+		end,
+		U_S.
+
+	%internals/2: what the account-state sensors read.
+	%	position   [Position]: -1, 0 or 1, the position held now (fx_Position)
+	%	otherwise  [Position, OpenPnL, PrevOpenPnL] (fx_Internals). P&L terms are signed by position (positive = winning)
+	%	           and expressed in units of 0.1% of price (~11.7 pips at 1.17) so they sit in a range neurons can use.
+	internals(A,position)->
+		[position(A)];
+	internals(A,_Parameters)->
+		case A#account.order of
+			undefined ->
+				[0,0,0];
+			O ->
+				Position = O#order.position,
+				CurPC = O#order.percentage_change,
+				PrevPC = case get(prev_PC) of undefined -> CurPC; V -> V end,
+				[Position, Position*CurPC*10, Position*PrevPC*10]
+		end.
+
+sim_main(ExoSelf,S,A)->
+	receive
+		{_From,eval_mode,Mode}->
+			on_eval_mode(ExoSelf,S,A,Mode);
+		{_From,sensors,N}->
+			on_sensors(ExoSelf,S,A,N);
 		{From,sense,TableName,Feature,Parameters,Start,Finish}->%Parameters:{VL,SignalEncoding}
-			% This is the main sensing signal that starts the simulation.
-			% It receives the table name, feature, parameters, start and finish indices.
-			% Parameters is a list that can contain the resolution and type of sensor (e.g., graph_sensor, list_sensor).
-			% Start and Finish are the indices to start and finish sensing.
-			% The function initializes the state with the given parameters and starts sensing the market data.
-			% It returns the result of the sensing operation to the From process.
-			% The result is a tuple of the form {Result,U_S}, where Result is the sensed data and U_S is the updated state.
-			% If the table name is undefined, it initializes the state with the given parameters.
-			%io:format("******************************STARTING TO PROCESS SENSE SIGNAL******************************~n"),
-			{Result,U_S}=case S#state.table_name of
-				undefined ->
-					sense(init_state(S,TableName,Feature,Start,Finish),Parameters);
-				CurrentTableName when CurrentTableName =:= TableName ->
-					sense(S,Parameters);
-				_OtherTableName ->
-					%% Table name mismatch, reinitialize state
-					sense(init_state(S,TableName,Feature,Start,Finish),Parameters)
-			end,
-			From ! {self(),Result},
-				%io:format("******************************FINISHED PROCESSING SENSE SIGNAL******************************~n"),
-				case config:sensor_debug_tag() of
-					true ->
-						%timer:sleep(10000),
-						IndexT = U_S#state.index,
-						NextIndexT = fx:next(TableName,IndexT),
-						RowT = fx:lookup(TableName,IndexT),
-						NextRowT = fx:lookup(TableName,NextIndexT),
-						QuoteT = RowT#technical.close,
-						NextQuoteT = NextRowT#technical.close,
-						io:format("Sense~n Index:~p~n Quote:~p~n Next Index:~p~n Next Quote:~p~n NetWorth:~p~n",[IndexT,QuoteT,NextIndexT,NextQuoteT,A#account.balance + A#account.unrealized_PL]);
-					false ->
-						ok
-				end,
-				fx:sim(ExoSelf,U_S,A);
-		{From,sense,internals,_Parameters}->
-			%Internals are the current long/short/nothing position, the buy price (or -1 if in do nothing state)
-			%io:format("A#account.order: ~p~n",[A#account.order]),
-			% This is the current state of the account
-			% It returns the current position, entry price, and previous percentage change.
-			% Parameters is a list that can contain the resolution and type of sensor (e.g., graph_sensor, list_sensor).
-			% The result is a list of three elements: [Position, Entry, Previous_Percentage_Change].
-			% If there is no order, it returns [0, 0, 0].
-			%Result = [Position, OpenPnL, PrevOpenPnL]. P&L terms are signed by position (positive = winning) and
-			%expressed in units of 0.1% of price (~11.7 pips at 1.17) so they sit in a range neurons can use.
-			%Previously the raw entry price (~1.17, near-constant) and an unsigned tiny percentage were sent.
-			Result = case A#account.order of
-				undefined ->
-					[0,0,0];
-				O ->
-					Position = O#order.position,
-					CurPC = O#order.percentage_change,
-					PrevPC = case get(prev_PC) of undefined -> CurPC; V -> V end,
-					[Position, Position*CurPC*10, Position*PrevPC*10]
-			end,
-			From ! {self(),Result},
-			fx:sim(ExoSelf,S,A);
+			on_sense(ExoSelf,From,TableName,Feature,Parameters,Start,Finish,S,A);
+		{From,sense,internals,Parameters}->
+			on_internals(ExoSelf,From,Parameters,S,A);
 		{From,trade,TableName,TradeSignal}->
-			case S#state.table_name of
-				undefined ->
+			%A trade ends the bar: the next bar's senses are counted from zero.
+			put(fx_senses,0),
+			case {S#state.table_name,get(ep_ctx)} of
+				{undefined,_} ->
 					% State not initialized - ignore early trade (likely from recurrent network)
 					From ! {self(),0,0},
 					fx:sim(ExoSelf,S,A);
+				{_,Ctx} when is_map(Ctx) ->
+					% Episode mode: several episodes per evaluation, fitness aggregated at the end
+					episode_trade(ExoSelf,From,S,A,Ctx,TradeSignal);
 				_ ->
 					% Process trade normally
 					{U_S, U_A} = make_trade(S,A,TradeSignal),
@@ -364,6 +445,331 @@ sim(ExoSelf,S,A)->
 		after 10000 ->
 			fx:sim(ExoSelf,S,A)
 	end.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% EPISODE MODE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%In episode mode (config:evaluation_mode() == episodes) one evaluation runs the agent through a list of episodes
+%{StartKey,Bars} published by episodes:begin_generation/2. The account is reset at the start of every episode. While an
+%evaluation is in progress its context lives in the process dictionary under ep_ctx:
+%	#{mode => tune|score|validation, queue => episodes still to run, done => stats of finished episodes, acc => accumulator}
+%The halt flag is only raised after the last episode, together with the fitness aggregated over all of them by
+%fitness_functions:aggregate_episodes/1.
+%
+%What is measured per episode (see ep_stat/4): with u_t the position held from bar t to t+1 and r_t = close[t+1]-close[t],
+%	gross  = sum(u_t*r_t)		P&L per unit of position, before cost
+%	timing = gross - mu*sum(u_t) - spread*entries
+%	alpha  = timing / sqrt(sum(r_t^2))
+%	z      = timing / sqrt(sum(u_t^2 * r_t^2))
+%timing is the money the agent made per unit of position, after cost, on a market whose average drift has been taken
+%out. mu is ONE number for all train episodes (the average change of the close per bar over the whole train span) and
+%one for all validation episodes (the same average over the validation set), see episodes:drift/1. It is fixed before
+%any agent runs, so being long in a period that happened to rise earns nothing, and the score cannot be moved by
+%anything the agent does.
+%alpha expresses timing in units of the market's movement over the episode, so it grows with how much the agent trades:
+%a position that knows nothing about the next bar gives about 0 +/- sqrt(active), where active (also reported) is the
+%share of the market's variance the agent was exposed to.
+%z expresses it in units of its own standard deviation under "the position knows nothing about the next bar": about
+%0 +/- 1 whether the agent is in the market all the time or for a few bars, so z does not favour either.
+%
+%Until November 2026 timing was gross - mean(u)*sum(r_t), with mean(u) taken over the same episode. That looks like the
+%same correction but is not: a rule that sells after a rise is short, on average, in exactly the episodes that rose, so
+%-mean(u)*sum(r_t) is positive for it whether or not it makes money. On a random walk that formula gave a 240-bar
+%reversal rule about +0.3 z per episode and the matching momentum rule -0.3 (measured on the train span: 11.7 pips of
+%credit per episode against 1.1 pips of money). eval_protocol:random_walk_check/0 guards against this.
+%
+%The cost per round trip also depends on the span: config:account_spread() on train episodes and
+%config:validation_spread() on validation episodes (the same unless validation_spread is set).
+
+%start_if_idle/1 starts an episode evaluation on a simulator that has not been started yet (see the internals clause of
+%sim/3). It does nothing in legacy mode, where the window comes with the price sense.
+start_if_idle(S) when S#state.table_name =/= undefined->
+	S;
+start_if_idle(S)->
+	case episode_mode() of
+		false ->
+			S;
+		Mode ->
+			case episodes:current_set(Mode) of
+				[] -> S;
+				_ -> eval_init_state(S,config:primary_currency_pair(),close,undefined,undefined)
+			end
+	end.
+
+%eval_init_state/5 is called on the first sense of an evaluation. It decides between episode mode and the legacy window.
+eval_init_state(S,TableName,Feature,Start,Finish)->
+	Episodes = case episode_mode() of
+		false -> [];
+		Mode -> episodes:current_set(Mode)
+	end,
+	case Episodes of
+		[] ->
+			erase(ep_ctx),
+			init_state(S,TableName,Feature,Start,Finish);
+		[Episode|Queue] ->
+			put(ep_ctx,#{mode=>get(eval_mode),queue=>Queue,done=>[],acc=>ep_acc_new(get(eval_mode),span_of(get(eval_mode)))}),
+			init_episode_state(S,TableName,Feature,Episode)
+	end.
+
+	episode_mode()->
+		case {config:evaluation_mode(),get(eval_mode)} of
+			{episodes,Mode} when Mode == tune; Mode == score; Mode == validation -> Mode;
+			_ -> false
+		end.
+
+init_episode_state(S,TableName,Feature,{StartKey,Bars})->
+	S#state{
+		table_name = TableName,
+		feature = Feature,
+		index_start = StartKey,
+		index_end = walk(TableName,StartKey,Bars),
+		index = StartKey,
+		price_list = [],
+		cycle = 0,
+		realized_pl_by_cycle = []
+	}.
+
+	walk(_TableName,Key,0)->
+		Key;
+	walk(TableName,Key,N)->
+		case ets:next(TableName,Key) of
+			'$end_of_table' -> Key;
+			NextKey -> walk(TableName,NextKey,N-1)
+		end.
+
+%The accumulator. The exposure series is only kept for validation runs, where eval_protocol uses it for the shift test.
+%Span (train | validation) says which span the episode belongs to; it decides the drift taken out of the score and the
+%cost charged per round trip. Agents run tune and score evaluations on the train span and validation ones on the
+%validation span (span_of/1); scripted policies name the span themselves (run_policy/4).
+%u_series, the position at every bar, is kept only for a validation evaluation with config:validation_series/0 on:
+%eval_protocol:evaluate_agent/2 and replay tools switch it on. A population's own validation does not keep it. Kept for
+%48 agents on 369 episodes it took 0.6 GB at the peak of the generation, unread (REVIEW.md 8.18).
+ep_acc_new(Mode,Span)->
+	#{
+		step=>0,n=>0,entries=>0,sum_u=>0,sum_abs_u=>0,sum_ur=>0.0,sum_r=>0.0,sum_r2=>0.0,sum_u2r2=>0.0,
+		warmup=>config:episode_warmup_bars(),
+		floor=>config:account_extinction_threshold(),
+		%Fill rules (ep_step/4), read once per episode.
+		rollover=>config:rollover_rule() == true,
+		late=>config:late_fill() == true,
+		pending=>0,
+		span=>Span,
+		mu=>episodes:drift(Span),
+		spread=>span_spread(Span),
+		u_series=>case (Mode == validation) andalso (config:validation_series() == true) of true -> []; false -> off end
+	}.
+
+	span_of(validation)-> validation;
+	span_of(_)-> train.
+
+	span_spread(validation)->
+		case config:validation_spread() of
+			undefined -> config:account_spread();
+			Spread -> Spread
+		end;
+	span_spread(_)->
+		config:account_spread().
+
+%ep_step/4 applies one trade signal and advances one bar. It is a pure function of its arguments (apart from prev_PC in
+%the process dictionary, as in the legacy path) so the agent simulator and the scripted policies of eval_protocol share it.
+%Returns {continue,U_S,U_A,U_Acc} | {episode_over,EpStat} | {extinct,EpStat}.
+%Two fill rules apply here, so that the agents and the scripted policies (run_policy/4) are filled the same way:
+%	late_fill      (config:late_fill/0) the signal given on a bar is filled at the next bar's close, one minute later;
+%	               the signal filled on this bar is the one given on the previous bar (pending in Acc). During the
+%	               warm-up the signal is 0, so the first scored bar is always flat.
+%	rollover_rule  (config:rollover_rule/0) on a bar whose hour on the file's clock is 21, 22 or 23 no position is
+%	               opened, closed or reversed: the position held is kept whatever the signal.
+ep_step(S,A0,Acc,TradeSignal)->
+	#{step:=Step,warmup:=Warmup,floor:=Floor,spread:=Spread} = Acc,
+	%The account charges what the episode's span says, whatever it was created with.
+	A = A0#account{spread=Spread},
+	Scored = Step >= Warmup,
+	Signal = case Scored of true -> TradeSignal; false -> 0 end,
+	PrevPosition = position(A),
+	Wanted = case maps:get(late,Acc,false) of
+		true -> maps:get(pending,Acc,0);
+		false -> Signal
+	end,
+	Filled = case maps:get(rollover,Acc,false) andalso rollover_hour(S#state.index) of
+		true -> PrevPosition;
+		false -> Wanted
+	end,
+	{U_S,U_A} = make_trade(S,A,Filled),
+	Position = position(U_A),
+	case (U_A#account.balance + U_A#account.unrealized_PL) =< Floor of
+		true ->
+			{extinct,ep_stat(U_S,U_A,Acc,extinct)};
+		false ->
+			case update_state(U_S) of
+				sim_over ->
+					{episode_over,ep_stat(U_S,U_A,Acc,complete)};
+				U_S2 ->
+					U_Acc = case Scored of
+						false ->
+							Acc#{step:=Step+1,pending=>Signal};
+						true ->
+							TableName = S#state.table_name,
+							R = (lookup(TableName,U_S2#state.index))#technical.close - (lookup(TableName,S#state.index))#technical.close,
+							Entry = case (Position =/= 0) and (Position =/= PrevPosition) of true -> 1; false -> 0 end,
+							#{n:=N,entries:=Entries,sum_u:=SumU,sum_abs_u:=SumAbsU,sum_ur:=SumUR,sum_r:=SumR,sum_r2:=SumR2,sum_u2r2:=SumU2R2,u_series:=USeries} = Acc,
+							Acc#{
+								step:=Step+1,n:=N+1,entries:=Entries+Entry,pending=>Signal,
+								sum_u:=SumU+Position,sum_abs_u:=SumAbsU+abs(Position),
+								sum_ur:=SumUR+Position*R,sum_r:=SumR+R,sum_r2:=SumR2+R*R,
+								sum_u2r2:=SumU2R2+Position*Position*R*R,
+								u_series:=case USeries of off -> off; _ -> [Position|USeries] end
+							}
+					end,
+					{continue,U_S2,update_account(U_S2,U_A),U_Acc}
+			end
+	end.
+
+	position(A)->
+		case A#account.order of
+			undefined -> 0;
+			O -> O#order.position
+		end.
+
+	%rollover_hour/1: the bar with this key is in hours 21 to 23 of the file's clock (local market time).
+	rollover_hour(Key)->
+		element(4,Key) >= 21.
+
+%ep_stat/4 turns the accumulator of a finished episode into its statistics.
+ep_stat(S,A,Acc,Status)->
+	#{n:=N,entries:=Entries,sum_u:=SumU,sum_abs_u:=SumAbsU,sum_ur:=SumUR,sum_r:=SumR,sum_r2:=SumR2,sum_u2r2:=SumU2R2,u_series:=USeries,
+		span:=Span,mu:=Mu,spread:=Spread} = Acc,
+	Vol = math:sqrt(SumR2),
+	Cost = Entries*Spread,
+	MeanU = case N of 0 -> 0.0; _ -> SumU/N end,
+	Timing = SumUR - Mu*SumU - Cost,
+	Alpha = case (N > 0) and (Vol > 0) of
+		true -> Timing/Vol;
+		false -> 0.0
+	end,
+	%sum(u^2 * r^2): the variance of the gross P&L if the position knew nothing about the next bar
+	ActiveVar = float(SumU2R2),
+	Z = case ActiveVar > 1.0e-9*SumR2 of
+		true -> Timing/math:sqrt(ActiveVar);
+		false -> 0.0
+	end,
+	#{
+		z=>Z,
+		active=>case SumR2 > 0 of true -> ActiveVar/SumR2; false -> 0.0 end,
+		span=>Span,
+		mu=>Mu,
+		spread=>Spread,
+		status=>Status,
+		start=>S#state.index_start,
+		bars=>N,
+		entries=>Entries,
+		mean_u=>MeanU,
+		mean_abs_u=>case N of 0 -> 0.0; _ -> SumAbsU/N end,
+		gross=>SumUR,
+		drift=>SumR,
+		vol=>Vol,
+		cost=>Cost,
+		%money after cost with the span's drift taken out, in price units (alpha_pips_t, REVIEW.md 8.26)
+		timing=>Timing,
+		alpha=>Alpha,
+		pnl=>float(A#account.balance + A#account.unrealized_PL - config:account_initial_balance()),
+		legacy=>case fitness_functions:is_episode_fitness(config:fitness_function()) of
+			true -> undefined;
+			false -> fitness_functions:calculate_fitness(S,A)
+		end,
+		u_series=>case USeries of off -> off; _ -> lists:reverse(USeries) end
+	}.
+
+%episode_trade/6 is the trade handler of sim/3 in episode mode.
+episode_trade(ExoSelf,From,S,A,Ctx,TradeSignal)->
+	#{mode:=Mode,queue:=Queue,done:=Done,acc:=Acc} = Ctx,
+	case ep_step(S,A,Acc,TradeSignal) of
+		{continue,U_S,U_A,U_Acc} ->
+			put(ep_ctx,Ctx#{acc:=U_Acc}),
+			From ! {self(),0,0},
+			fx:sim(ExoSelf,U_S,U_A);
+		{episode_over,EpStat} when Queue =/= [] ->
+			[NextEpisode|U_Queue] = Queue,
+			put(ep_ctx,Ctx#{queue:=U_Queue,done:=[EpStat|Done],acc:=ep_acc_new(Mode,span_of(Mode))}),
+			NextS = init_episode_state(#state{},S#state.table_name,S#state.feature,NextEpisode),
+			NextA = create_account(),
+			case config:episode_isolation() of
+				true ->
+					%The actuator waits for this answer and the cortex for the actuator, so no new bar starts until the
+					%exoself has reset the network (exoself:episode_boundary/3) and says go.
+					ExoSelf ! {self(),episode_boundary},
+					boundary_wait(ExoSelf,From,S,A,NextS,NextA);
+				_ ->
+					put(prev_PC,0),
+					From ! {self(),0,0},
+					fx:sim(ExoSelf,NextS,NextA)
+			end;
+		{_LastEpisodeOverOrExtinct,EpStat} ->
+			EpStats = lists:reverse([EpStat|Done]),
+			Fitness = fitness_functions:aggregate_episodes(EpStats),
+			publish_evaluation(ExoSelf,Mode,Fitness,EpStats),
+			From ! {self(),Fitness,1},
+			erase(ep_ctx),
+			put(prev_PC,0),
+			fx:sim(ExoSelf,#state{},create_account())
+	end.
+
+	%boundary_wait/6: an episode has ended and the next one is ready (NextS, NextA), but the bar that would start it is
+	%held until the exoself has reset the network. A sense that arrives meanwhile was sent for the bar just finished (a
+	%sensor off the path to the actuator, without config:sense_before_trade/0) and is answered from that bar; the
+	%exoself waits for every sensor to finish before it resets the neurons.
+	boundary_wait(ExoSelf,From,S,A,NextS,NextA)->
+		receive
+			{ExoSelf,episode_go} ->
+				put(prev_PC,0),
+				put(fx_senses,0),
+				From ! {self(),0,0},
+				fx:sim(ExoSelf,NextS,NextA);
+			{SFrom,sense,TableName,Feature,Parameters,Start,Finish} ->
+				_ = sense_reply(SFrom,TableName,Feature,Parameters,Start,Finish,S,A),
+				boundary_wait(ExoSelf,From,S,A,NextS,NextA);
+			{SFrom,sense,internals,Parameters} ->
+				SFrom ! {self(),internals(A,Parameters)},
+				boundary_wait(ExoSelf,From,S,A,NextS,NextA);
+			{_From,terminate} ->
+				ok;
+			terminate ->
+				ok
+		end.
+
+	%The exoself reads the statistics of its latest evaluation from the eval_stats table (created by population_monitor
+	%or eval_protocol). The scape only knows the exoself's pid, so that is the key.
+	publish_evaluation(ExoSelf,Mode,Fitness,EpStats)->
+		%Tuning evaluations are not published: nobody reads them, and there are many per agent.
+		case (Mode =/= tune) andalso (ets:whereis(eval_stats) =/= undefined) of
+			true -> ets:insert(eval_stats,{{ExoSelf,Mode},Fitness,EpStats});
+			false -> ok
+		end,
+		Sum = fitness_functions:episode_summary(EpStats),
+		qlog:agent_trades(ExoSelf,io_lib:format("FITNESS_EVAL | mode=~p | fitness_function=~p | fitness=~.4f | episodes=~p | mean_z=~.4f | mean_alpha=~.4f | std_alpha=~.4f | entries=~p | mean_abs_exposure=~.3f | active=~.3f | holder_episodes=~p | pnl=~.2f",
+			[Mode,config:fitness_function(),float(Fitness),maps:get(episodes,Sum),maps:get(mean_z,Sum),maps:get(mean_alpha,Sum),maps:get(std_alpha,Sum),maps:get(entries,Sum),maps:get(mean_abs_u,Sum),maps:get(mean_active,Sum),maps:get(holder_episodes,Sum),maps:get(pnl,Sum)])).
+
+%run_policy/3 runs a scripted policy through the same episode simulator, without spawning an agent. Used by eval_protocol
+%for baselines and integrity checks. Policy = fun(StepNo,Close,Position) -> -1 | 0 | 1. Returns one stat map per episode.
+%run_policy/4 also says which span the episodes come from (train | validation), which decides drift and cost; Mode only
+%decides whether the exposure series is kept.
+run_policy(Policy,Episodes,Mode)->
+	run_policy(Policy,Episodes,Mode,span_of(Mode)).
+run_policy(Policy,Episodes,Mode,Span)->
+	TableName = config:primary_currency_pair(),
+	[begin
+		put(prev_PC,0),
+		policy_loop(Policy,init_episode_state(#state{},TableName,close,Episode),create_account(),ep_acc_new(Mode,Span),0)
+	end || Episode <- Episodes].
+
+	%A policy of arity 4 is also given the bar's key {Y,M,D,H,Mi,S,Rate} (eval_protocol:policy(clock)).
+	policy_loop(Policy,S,A,Acc,StepNo)->
+		Close = (lookup(S#state.table_name,S#state.index))#technical.close,
+		Signal = case is_function(Policy,4) of
+			true -> Policy(StepNo,Close,position(A),S#state.index);
+			false -> Policy(StepNo,Close,position(A))
+		end,
+		case ep_step(S,A,Acc,Signal) of
+			{continue,U_S,U_A,U_Acc} -> policy_loop(Policy,U_S,U_A,U_Acc,StepNo+1);
+			{_Over,EpStat} -> EpStat
+		end.
 
 %This function initializes the state for the simulation.
 % It takes the current state S, the table name TableName, the feature to be used Feature,
@@ -534,7 +940,10 @@ sense(S,Parameters)->
 		[HRes,VRes,graph_sensor]->
 			{Result,U_S}=plane_encoded(HRes,VRes,S);
 		[HRes,list_sensor]->
-			{Result,U_S}=list_encoded(HRes,S)
+			{Result,U_S}=list_encoded(HRes,S);
+		[Spec,series_sensor]->
+			%Answered from the packed arrays every agent shares (fx_series.erl); the simulator keeps no window for these.
+			{fx_series:answer(S#state.table_name,S#state.index,Spec),S}
 	end.
 
 % This function encodes the list sensor data.
@@ -635,7 +1044,8 @@ init()->
 init_table(metadata)->
 	ets:new(metadata,[set,public,named_table,{keypos,2}]);
 init_table(TableName)->
-	Table = ets:new(TableName,[ordered_set,public,named_table,{keypos,2}]),
+	%read_concurrency: every simulator reads this table several times per bar and nothing writes to it during a run.
+	Table = ets:new(TableName,[ordered_set,public,named_table,{keypos,2},{read_concurrency,true}]),
 	[insert(metadata,#metadata{feature = {TableName,Feature}}) || Feature <- ?FEATURES],
 	Table.
 
@@ -788,50 +1198,80 @@ insert_ForexRaw(URL,Flag)->
 	{FileName,_FileExtension} = extract_filename(File),
 	{CurrencyPair,TimeFrame} = extract_cpair(FileName), 
 	TableName = CurrencyPair++TimeFrame,
+	%The heartbeat calls this every few seconds. A file that has not changed since it was last parsed (same size and
+	%modification time) is skipped, so the price file is parsed once at startup and again only when new rows arrive.
+	Signature = {filelib:file_size(URL),filelib:last_modified(URL)},
 	case lists:member(TableName,[atom_to_list(TN) || TN<-?ALL_TABLES]) of
+		true when Signature == {0,0} ->
+			cant_read;
 		true ->
-			case file:read_file(URL) of
-					{ok,Data} ->
-						file:close(URL),
-						List = binary_to_list(Data),
-						case Flag of
-							init ->
-								exit("Can not yet recognize Flag: init~n");
-							update ->
-								% Check if this is live trading (has "_LIVE" suffix) or normal training
-								case string:str(TimeFrame, "_LIVE") > 0 of
-									true ->
-										% Live trading: extract sampling rate and use current format
-										SamplingRate = timeframe_to_integer(TimeFrame),
-										case update_ForexDB(list_to_atom(TableName),CurrencyPair,SamplingRate,List) of
-											undefined ->
-												done;
-											NewestKey ->
-												io:format("New FOREX_DB update starting with:~p~n",[NewestKey]),
-												fx ! {self(),fx_updated,NewestKey},
-												done
-										end;
-									false ->
-										% Normal training: use original format (list_to_integer directly)
-										case update_ForexDB(list_to_atom(TableName),CurrencyPair,list_to_integer(TimeFrame),List) of
-											undefined ->
-												done;
-											NewestKey ->
-												io:format("New FOREX_DB update starting with:~p~n",[NewestKey]),
-												%calculate_ForexTechnicals(TableName,CurrencyPair,NewestKey),
-												%calculate_ForexMetaData(TableName,CurrencyPair,?FOREX_TECHNICAL--[key]),
-												fx ! {self(),fx_updated,NewestKey},
-												done
-										end
-								end
-						end;
-					{error,Error} ->
-						%io:format("******** Error reading file:~p in insert_ForexRaw(URL,Flag):~p~n",[URL,Error]),
-						cant_read
+			case get({fx_parsed,URL}) == Signature of
+				true ->
+					unchanged;
+				false ->
+					case file:read_file(URL) of
+						{ok,Data} ->
+							case Flag of
+								init ->
+									exit("Can not yet recognize Flag: init~n");
+								update ->
+									% Live trading files ("_LIVE" suffix) carry the sampling rate as leading digits; training files are just the number
+									SamplingRate = case string:str(TimeFrame, "_LIVE") > 0 of
+										true -> timeframe_to_integer(TimeFrame);
+										false -> list_to_integer(TimeFrame)
+									end,
+									Result = update_ForexDB_lines(list_to_atom(TableName),CurrencyPair,SamplingRate,Data,undefined),
+									put({fx_parsed,URL},Signature),
+									erlang:garbage_collect(),
+									case Result of
+										undefined ->
+											done;
+										NewestKey ->
+											io:format("New FOREX_DB update starting with:~p~n",[NewestKey]),
+											fx ! {self(),fx_updated,NewestKey},
+											done
+									end
+							end;
+						{error,_Error} ->
+							%io:format("******** Error reading file:~p in insert_ForexRaw(URL,Flag):~p~n",[URL,Error]),
+							cant_read
+					end
 			end;
 		false ->
 			io:format("******** TableName:~p is unknown, file rejected.~n",[TableName])
 	end.
+
+	%update_ForexDB_lines/5 feeds the file to update_ForexDB/4 one line at a time and returns the key of the first row that
+	%was new (undefined if none was). The previous version converted the whole file to one character list first, which
+	%costs 16 bytes per byte of file (about 1 GB for the 63 MB EURUSD1.txt, more during garbage collection) on every pass.
+	update_ForexDB_lines(TableName,CurrencyPair,SamplingRate,Data,FirstNewKey)->
+		case binary:split(Data,<<"\n">>) of
+			[Line,Rest] ->
+				update_ForexDB_lines(TableName,CurrencyPair,SamplingRate,Rest,update_ForexDB_line(TableName,CurrencyPair,SamplingRate,Line,FirstNewKey));
+			[Line] ->
+				update_ForexDB_line(TableName,CurrencyPair,SamplingRate,Line,FirstNewKey)
+		end.
+
+		update_ForexDB_line(TableName,CurrencyPair,SamplingRate,Line,FirstNewKey)->
+			Row = case byte_size(Line) of
+				0 -> <<>>;
+				Size ->
+					case binary:last(Line) of
+						$\r -> binary:part(Line,0,Size-1);
+						_ -> Line
+					end
+			end,
+			case Row of
+				<<>> ->
+					FirstNewKey;
+				_ ->
+					%update_ForexDB/4 expects every row to end in "\r\n"; it returns the row's key if the row was new
+					NewKey = update_ForexDB(TableName,CurrencyPair,SamplingRate,binary_to_list(Row)++"\r\n"),
+					case FirstNewKey of
+						undefined -> NewKey;
+						_ -> FirstNewKey
+					end
+			end.
 	
 	extract_dir(URL)-> extract_dir(URL,[]).
 	extract_dir(List,DirAcc)->

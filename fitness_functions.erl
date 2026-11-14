@@ -60,6 +60,156 @@ calculate_fitness(State, Account, FunctionName, Generation) ->
     end.
 
 %% ===================================================================
+%% Episode-Mode Aggregation (config:evaluation_mode() == episodes)
+%% ===================================================================
+%% In episode mode fx.erl produces one statistics map per episode (fx:ep_stat/4) and the fitness of an evaluation is
+%% an aggregate over those maps:
+%%
+%% - alpha_t   : mean(z)*sqrt(K), the t-statistic of the agent's money after cost over the K episodes. Without skill and
+%%               without cost it is about 0 +/- 1 for every eligible agent, however much or little the agent trades; with
+%%               skill it grows with the number of good decisions. With a cost, an agent without skill is below zero by
+%%               what it paid, measured against how much it was in the market, so many short trades score worst.
+%%               Flaw (REVIEW.md 8.25): z divides by the agent's own exposure in the episode, so an agent that leaves
+%%               with a small gain and holds a loss scores well and loses money.
+%% - alpha_money_t: mean(alpha)/max(sd(alpha),config:alpha_money_sd_floor())*sqrt(K) (money_t/2, REVIEW.md 8.26): the
+%%               t-statistic of the money after cost in units of the market's movement. The divisor of each episode is
+%%               the market's, not the agent's, so the score has the sign of the (volatility-weighted) money.
+%%               Flaw (REVIEW.md 8.26): dividing each episode by its own volatility still pays small gains in quiet
+%%               episodes and large losses in busy ones.
+%% - alpha_pips_t: mean(m)/max(sd(m),config:alpha_pips_sd_floor())*sqrt(K) with m = episode_pips/1, the money after cost
+%%               with the span's drift taken out, in pips (REVIEW.md 8.26). No per-episode division at all: the score
+%%               is the t-statistic of drift-free money, so neither when the agent is in nor which episodes it wins can
+%%               move it away from the money.
+%% - alpha_lcb : mean(alpha) - z*std(alpha)/sqrt(K), a lower confidence bound on the per-episode timing alpha, with
+%%               z = config:fitness_lcb_z(). It rewards an edge that shows up in most episodes over one lucky episode,
+%%               but while the population has no skill it is highest for agents that barely trade (measured: median
+%%               entries per episode fell from 50 to 5 in 8 generations), so it suits later phases, not the first.
+%% - alpha_mean: mean(alpha) (alpha_lcb with z = 0). Noise grows with activity, so lucky draws favour busy agents.
+%% - any other name (total_profit, sharpe_ratio, ...): that single-window function, averaged over the episodes.
+%%
+%% alpha and z are defined in fx.erl. Both measure the money made per unit of position after cost, on a market whose
+%% average drift over the whole span has been taken out. alpha is in units of the market's movement, z in units of its
+%% own no-skill deviation.
+%%
+%% Eligibility: an agent must open at least config:min_trades_per_episode() positions per episode on average. An agent
+%% below that gets EPISODE_FLOOR + entries: far below every eligible agent, but still rising with activity, so there is a
+%% slope leading out of the never-trade and buy-and-hold corners. An agent that wipes out its account gets EPISODE_RUIN.
+-define(EPISODE_FLOOR,-1000.0).
+-define(EPISODE_RUIN,-2000.0).
+
+is_episode_fitness(alpha_t) -> true;
+is_episode_fitness(alpha_money_t) -> true;
+is_episode_fitness(alpha_pips_t) -> true;
+is_episode_fitness(alpha_lcb) -> true;
+is_episode_fitness(alpha_mean) -> true;
+is_episode_fitness(_) -> false.
+
+episode_floor() -> ?EPISODE_FLOOR.
+episode_ruin() -> ?EPISODE_RUIN.
+
+aggregate_episodes(EpStats) ->
+    aggregate_episodes(EpStats, config:fitness_function()).
+
+aggregate_episodes([], _FunctionName) ->
+    ?EPISODE_RUIN;
+aggregate_episodes(EpStats, FunctionName) ->
+    case lists:any(fun(EpStat) -> maps:get(status, EpStat) == extinct end, EpStats) of
+        true ->
+            ?EPISODE_RUIN;
+        false ->
+            case FunctionName of
+                alpha_t -> if_eligible(EpStats, fun(K) -> functions:avg([maps:get(z, EpStat) || EpStat <- EpStats]) * math:sqrt(K) end);
+                alpha_money_t -> if_eligible(EpStats, fun(_K) -> money_t([maps:get(alpha, EpStat) || EpStat <- EpStats], config:alpha_money_sd_floor()) end);
+                alpha_pips_t -> if_eligible(EpStats, fun(_K) -> money_t([episode_pips(EpStat) || EpStat <- EpStats], config:alpha_pips_sd_floor()) end);
+                alpha_lcb -> alpha_bound(EpStats, config:fitness_lcb_z());
+                alpha_mean -> alpha_bound(EpStats, 0.0);
+                _ -> functions:avg([maps:get(legacy, EpStat) || EpStat <- EpStats])
+            end
+    end.
+
+%% money_t/2: the score of alpha_money_t from the per-episode alphas of one evaluation (REVIEW.md 8.26):
+%%     mean(alpha) / max(sd(alpha), Floor) * sqrt(K)
+%% alpha is an episode's money after cost with the span's drift taken out, divided by the market's own movement in that
+%% episode, sqrt(sum(r^2)) (fx:ep_stat/4). The divisor of each episode is the market's, so an agent cannot raise its
+%% score by choosing when to be in the market: an episode it loses counts with its full size. sd is the sample standard
+%% deviation over the K episodes (0 when K = 1). Floor (config:alpha_money_sd_floor/0) is the smallest sd the ratio may
+%% divide by: the sd of alpha of an agent without skill that is in the market a few percent of the time. Without it an
+%% agent that takes the same tiny gain in every episode would have a tiny sd and an arbitrarily large score. The result
+%% is kept above ?MONEY_T_MIN so that an eligible agent always ranks above every ineligible one (EPISODE_FLOOR + at most
+%% 900). A Floor of zero or less with sd = 0 gives 0.
+-define(MONEY_T_MIN, -99.0).
+money_t([], _Floor) ->
+    0.0;
+money_t(Alphas, Floor) ->
+    K = length(Alphas),
+    Divisor = erlang:max(sample_std(Alphas), Floor),
+    case Divisor > 0 of
+        true -> erlang:max(?MONEY_T_MIN, functions:avg(Alphas) / Divisor * math:sqrt(K));
+        false -> 0.0
+    end.
+
+%% scores/1: both t-statistics of one evaluation, whatever the fitness function in force; for replay tools and logs.
+scores(EpStats) ->
+    #{alpha_t => aggregate_episodes(EpStats, alpha_t), alpha_money_t => aggregate_episodes(EpStats, alpha_money_t),
+      alpha_pips_t => aggregate_episodes(EpStats, alpha_pips_t)}.
+
+%% episode_pips/1: the money of one episode after cost with the span's drift taken out, in pips (alpha_pips_t). This is
+%% timing in fx:ep_stat/4, the numerator of alpha and z: sum(u*r) - mu*sum(u) - cost. Statistics saved before the timing
+%% key existed are rebuilt from gross, cost, mu and the mean position.
+episode_pips(EpStat) ->
+    Timing = case maps:find(timing, EpStat) of
+        {ok, T} -> T;
+        error -> maps:get(gross, EpStat) - maps:get(cost, EpStat) - maps:get(mu, EpStat) * maps:get(mean_u, EpStat) * maps:get(bars, EpStat)
+    end,
+    Timing / config:pip_size().
+
+alpha_bound(EpStats, Z) ->
+    if_eligible(EpStats, fun(K) ->
+        Alphas = [maps:get(alpha, EpStat) || EpStat <- EpStats],
+        functions:avg(Alphas) - Z * sample_std(Alphas) / math:sqrt(K)
+    end).
+
+%% Applies the eligibility rule shared by the alpha fitness functions; Fun gets the number of episodes.
+if_eligible(EpStats, Fun) ->
+    K = length(EpStats),
+    Entries = lists:sum([maps:get(entries, EpStat) || EpStat <- EpStats]),
+    case Entries >= config:min_trades_per_episode() * K of
+        false -> ?EPISODE_FLOOR + erlang:min(Entries, 900);
+        true -> Fun(K)
+    end.
+
+%% True when an evaluation with this summary (episode_summary/1) traded enough to be scored on alpha.
+eligible(#{episodes := K, entries := Entries, ruined := Ruined}) ->
+    (not Ruined) andalso (K > 0) andalso (Entries >= config:min_trades_per_episode() * K).
+
+sample_std([_]) ->
+    0.0;
+sample_std(Values) ->
+    Avg = functions:avg(Values),
+    math:sqrt(lists:sum([(V - Avg) * (V - Avg) || V <- Values]) / (length(Values) - 1)).
+
+%% Summary of one evaluation, used for logging and for the per-generation census.
+%% holder_episodes counts episodes in which the agent kept one side for more than 90% of the scored bars.
+episode_summary(EpStats) ->
+    K = length(EpStats),
+    Alphas = [maps:get(alpha, EpStat) || EpStat <- EpStats],
+    #{
+        episodes => K,
+        mean_alpha => case K of 0 -> 0.0; _ -> functions:avg(Alphas) end,
+        std_alpha => case K of 0 -> 0.0; _ -> sample_std(Alphas) end,
+        mean_z => case K of 0 -> 0.0; _ -> functions:avg([maps:get(z, EpStat) || EpStat <- EpStats]) end,
+        mean_active => case K of 0 -> 0.0; _ -> functions:avg([maps:get(active, EpStat) || EpStat <- EpStats]) end,
+        entries => lists:sum([maps:get(entries, EpStat) || EpStat <- EpStats]),
+        mean_abs_u => case K of 0 -> 0.0; _ -> functions:avg([maps:get(mean_abs_u, EpStat) || EpStat <- EpStats]) end,
+        holder_episodes => length([1 || EpStat <- EpStats, abs(maps:get(mean_u, EpStat)) > 0.9]),
+        pnl => float(lists:sum([maps:get(pnl, EpStat) || EpStat <- EpStats])),
+        %% gross and cost are in price units per unit of position, summed over the episodes: plain money, no drift taken out.
+        gross => float(lists:sum([maps:get(gross, EpStat) || EpStat <- EpStats])),
+        cost => float(lists:sum([maps:get(cost, EpStat) || EpStat <- EpStats])),
+        ruined => lists:any(fun(EpStat) -> maps:get(status, EpStat) == extinct end, EpStats)
+    }.
+
+%% ===================================================================
 %% Fitness Function: time_weighted
 %% ===================================================================
 %% Time-weighted fitness with discounts for late profits and bonuses/penalties.
