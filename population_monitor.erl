@@ -39,7 +39,8 @@ get_init_constraints() ->
 	evaluations_limit = config:evaluations_limit(),
 	fitness_goal = inf,
 	benchmarker_pid,
-	goal_reached=false
+	goal_reached=false,
+	checkpoint_waiter=undefined
 }).
 %%==================================================================== API
 %%--------------------------------------------------------------------
@@ -84,9 +85,10 @@ init(S) ->
 	P = genotype:dirty_read({population,Population_Id}),
 	[put({evaluations,Specie_Id},0) || Specie_Id<-P#population.specie_ids],
 	T = P#population.trace,
-	TotEvaluations=T#trace.tot_evaluations,
+	{RestoreGeneration,TotEvaluations}=restore_checkpoint_progress(Population_Id,S#state.pop_gen,T#trace.tot_evaluations),
 	io:format("Initial Tot Evaluations:~p~n",[TotEvaluations]),
 	State = S#state{
+		pop_gen = RestoreGeneration,
 		population_id = Population_Id,
 		activeAgent_IdPs = ActiveAgent_IdPs,
 		tot_agents = length(Agent_Ids),
@@ -115,6 +117,10 @@ init(S) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
+handle_call(dxnn_checkpoint_pause,From,S) when S#state.evolutionary_algorithm == generational, S#state.op_tag == continue ->
+	{noreply,S#state{op_tag=pause,checkpoint_waiter=From}};
+handle_call(dxnn_checkpoint_pause,_From,S) ->
+	{reply,{error,checkpoint_not_available},S};
 handle_call({stop,normal},_From, S)->
 	ActiveAgent_IdPs = S#state.activeAgent_IdPs,
 	[Agent_PId ! {self(),terminate} || {_DAgent_Id,Agent_PId}<-ActiveAgent_IdPs],
@@ -200,7 +206,11 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 					{stop,normal,U_S};
 				pause ->
 					io:format("Population Monitor has paused.~n"),
-					U_S = S#state{agents_left=0,pop_gen=U_PopGen},
+					case S#state.checkpoint_waiter of
+						undefined -> ok;
+						Waiter -> gen_server:reply(Waiter,{ok,Population_Id,U_PopGen,S#state.tot_evaluations})
+					end,
+					U_S = S#state{activeAgent_IdPs=[],agents_left=0,pop_gen=U_PopGen,checkpoint_waiter=undefined},
 					{noreply,U_S}
 			end;
 		false ->
@@ -282,6 +292,14 @@ handle_cast({Agent_Id,terminated,Fitness},S) when S#state.evolutionary_algorithm
 			{noreply,U_S}
 	end;
 
+handle_cast(dxnn_checkpoint_cancel,S) when S#state.checkpoint_waiter =/= undefined ->
+	gen_server:reply(S#state.checkpoint_waiter,{error,cancelled}),
+	{noreply,S#state{op_tag=continue,checkpoint_waiter=undefined}};
+handle_cast(dxnn_checkpoint_cancel,S) ->
+	case S#state.op_tag of
+		pause -> handle_cast({op_tag,continue},S);
+		_ -> {noreply,S}
+	end;
 handle_cast({op_tag,pause},S) when S#state.op_tag == continue ->
 	U_S = S#state{op_tag = pause},
 	{noreply,U_S};
@@ -821,3 +839,14 @@ print_SpecieDiversity([Specie_Id|Specie_Ids])->
 	print_SpecieDiversity(Specie_Ids);
 print_SpecieDiversity([])->
 	done.
+
+%% Resume counters only for the exact population represented by the backup.
+restore_checkpoint_progress(PopulationId,Generation,Evaluations) ->
+    case os:getenv("DXNN_RESTORE_DIR") of
+        false -> {Generation,Evaluations};
+        Dir ->
+            case file:consult(filename:join(Dir,"progress.term")) of
+                {ok,[{PopulationId,G,E}]} when is_integer(G),G>=0,is_integer(E),E>=0 -> {G,E};
+                _ -> {Generation,Evaluations}
+            end
+    end.

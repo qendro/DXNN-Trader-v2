@@ -16,7 +16,10 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,Survi
 	{_TopFitnessList,_TopTotNs,TopAgent_Ids} = lists:unzip3(TopAgentSummaries),
 	io:format("NeuralEnergyCost:~p~n",[NeuralEnergyCost]),
 
-	{AlotmentsP,NextGenSize_Estimate} = calculate_alotments(Valid_AgentSummaries,NeuralEnergyCost,[],0),
+	%Offspring allotment uses fitness relative to the worst agent of the specie. Raw fitness values sit on a large
+	%positive offset (e.g. equity ~300 +/- a few dollars), so without the shift every agent gets almost the same
+	%allotment and the 1/TotNeurons term decides selection instead of P&L.
+	{AlotmentsP,NextGenSize_Estimate} = calculate_alotments(shift_fitness(Valid_AgentSummaries,ProperlySorted_AgentSummaries),NeuralEnergyCost,[],0),
 	Normalizer = case NextGenSize_Estimate of
 		0 -> 1.0;  % Prevent division by zero
 		_ -> abs(NextGenSize_Estimate)/PopulationLimit
@@ -26,6 +29,23 @@ competition(ProperlySorted_AgentSummaries,NeuralEnergyCost,PopulationLimit,Survi
 	NewGenAgent_Ids = gather_survivors(AlotmentsP,Normalizer,PopulationLimit,[]),
 	{NewGenAgent_Ids,TopAgent_Ids}.
 %The competition/4 is part of the selection algorithm dubbed "competition". The function accepts a Survival_Percentage parameter that determines what fraction of the population survives to the next generation. The function first executes calculate_alotments/4 to calculate the number of offspring alloted for each agent in the Sorted_AgentSummaries list. The function then calculates the Normalizer value, which is used then used to proportionalize the alloted number of offspring to each agent, to ensure that the final specie size is within PopulationLimit. The function then drops into the gather_survivors/3 function which, using the normalized offspring allotment values, creates the actual mutant offspring.
+
+	%shift_fitness/2 rescales survivor fitness to (Fitness - MinFitness) + Eps, where MinFitness is taken over the whole
+	%specie (survivors and culled), so the weakest survivor still gets a small positive share. If every agent has the
+	%same fitness the summaries are returned unchanged. The overall scale cancels out in the normalizer of competition/4.
+	shift_fitness(Valid_AgentSummaries,[])->
+		Valid_AgentSummaries;
+	shift_fitness(Valid_AgentSummaries,All_AgentSummaries)->
+		Fitnesses = [F || {F,_,_} <- All_AgentSummaries],
+		MinF = lists:min(Fitnesses),
+		Range = lists:max(Fitnesses) - MinF,
+		case Range > 0 of
+			true ->
+				Eps = 0.01*Range,
+				[{F-MinF+Eps,TotN,Id} || {F,TotN,Id} <- Valid_AgentSummaries];
+			false ->
+				Valid_AgentSummaries
+		end.
 
 	calculate_alotments([{Fitness,TotNeurons,Agent_Id}|Sorted_AgentSummaries],NeuralEnergyCost,Acc,NewPopAcc)->
 		NeuralAlotment = Fitness/NeuralEnergyCost,

@@ -5,6 +5,7 @@
 -define(DELTA_MULTIPLIER,math:pi()*2).
 -define(SAT_LIMIT,math:pi()*2).
 -define(SEARCH_PARAMTERS_MUTATION_PROBABILITY,0.1).
+-define(MAX_FAILED_MUTATIONS_PER_SUCCESS,10).
 -define(ES_MUTATORS,[
 	mutate_tuning_selection,
 	mutate_tuning_duration,
@@ -85,28 +86,34 @@ mutate(Agent_Id)->
 			end.
 %apply_ESMutators/2 with uniform distribution chooses a random evolutionary strategy mutation operator from the ?ES_MUTATORS list of such functions, and applies it to the agent. Whether the mutation succcessful or not, the function counts down the total number of mutation operators left to apply. This is to ensure that if the researcher set for each such evolutionary strategy to be static, having only one available mutatable parameter for every agent, the system will eventually try to mutate the strategy TotMutations number of times, and then return to the caller.
 
-	apply_Mutators(Agent_Id,0)->
+	apply_Mutators(Agent_Id,MutationIndex)->
+		apply_Mutators(Agent_Id,MutationIndex,MutationIndex*?MAX_FAILED_MUTATIONS_PER_SUCCESS).
+
+	apply_Mutators(Agent_Id,0,_FailuresLeft)->
 		mutate_check:fix_connectivity_if_needed(Agent_Id),
 		%connectivity_fix:fix_connectivity_if_needed(Agent_Id),
 		done;
-	apply_Mutators(Agent_Id,MutationIndex)->
+	apply_Mutators(Agent_Id,_MutationIndex,0)->
+		%Every operator kept failing (e.g. all applicable ones are exhausted). Keep the successful ones.
+		mutate_check:fix_connectivity_if_needed(Agent_Id),
+		done;
+	apply_Mutators(Agent_Id,MutationIndex,FailuresLeft)->
 		Result = apply_NeuralMutator(Agent_Id),
 		case Result of
 			{atomic,_} ->
-				apply_Mutators(Agent_Id,MutationIndex-1);
-			Error ->
-				%io:format("******** Error:~p~nRetrying with new Mutation...~n",[Error]),
-				apply_Mutators(Agent_Id,MutationIndex)
+				apply_Mutators(Agent_Id,MutationIndex-1,FailuresLeft);
+			_Error ->
+				%io:format("******** Error:~p~nRetrying with new Mutation...~n",[_Error]),
+				apply_Mutators(Agent_Id,MutationIndex,FailuresLeft-1)
 		end.
-%apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented. Connectivity is validated and fixed only after all mutations are complete (when MutationIndex reaches 0).
+%apply_Mutators/2 applies the set number of successfull mutation operators to the Agent. If a mutaiton operator exits with an error, only that operator is rolled back and the function tries another mutaiton operator. It is only after a sucessfull mutation operator is applied that the MutationIndex is decremented. A failure budget prevents an endless loop when no operator can succeed. Connectivity is validated and fixed only after all mutations are complete.
 
 		apply_NeuralMutator(Agent_Id)->
 			A = genotype:read({agent,Agent_Id}),
 			MutatorsP = A#agent.mutation_operators,
 			Mutator = select_random_MO(MutatorsP),
-			genome_mutator:Mutator(Agent_Id),
-			{atomic,ok}.
-%apply_NeuralMutator/1 applies the available mutation operators to the NN. This function is always called from within mutate/1 which already has a transaction, so no additional transaction wrapper is needed. Returns {atomic,ok} for compatibility with the caller's error handling.
+			mnesia:transaction(fun()-> genome_mutator:Mutator(Agent_Id) end).
+%apply_NeuralMutator/1 applies one randomly chosen mutation operator inside a NESTED transaction. mutate/1 already runs in a transaction; nesting means that when an operator exits (e.g. add_bias on a neuron that already has a bias), only that operator's writes are rolled back and {aborted,Reason} is returned. Previously the operator ran directly in the outer transaction, so any single failure aborted the whole mutate/1 call and the offspring silently stayed an unmutated clone of its parent (~92% of offspring in testing).
 			
 			select_random_MO(MutatorsP)->
 				TotSize = lists:sum([SliceSize || {_MO,SliceSize} <- MutatorsP]),

@@ -81,9 +81,19 @@ fx_PLI(Exoself_Id,VL,Parameters,Scape)->
 			normalize(Result)
 	end.
 
+%normalize/1 expresses each price relative to the window mean, in units of 0.1% of price (~11.7 pips at 1.17).
+%The previous version divided raw prices (~1.17) by the vector's L2 norm, so every input was ~1/sqrt(N) and the
+%actual price movement only showed up around the 5th decimal place, i.e. the network saw a near-constant vector.
+%Using the mean (not the newest bar) as reference keeps the encoding independent of list order, which differs
+%between fx.erl and live_scape.erl.
+normalize([])->
+	[];
 normalize(Vector)->
-	Normalizer=math:sqrt(lists:sum([Val*Val||Val<-Vector])),
-	[Val/Normalizer || Val <- Vector].
+	Mean = lists:sum(Vector)/length(Vector),
+	case Mean == 0 of
+		true -> [0.0 || _ <- Vector];
+		false -> [(Val-Mean)/Mean*1000 || Val <- Vector]
+	end.
 
 fx_Internals(Exoself_Id,VL,Parameters,Scape)->
 	Scape ! {self(),sense,internals,Parameters},

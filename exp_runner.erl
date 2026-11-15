@@ -449,30 +449,38 @@ generate_run_id() ->
 %% Usage: exp_runner:start(fresh) - automatically uses these configs
 
 get_run_configs() ->
+    case os:getenv("DXNN_RUN_CONFIGS_FILE") of
+        false -> default_run_configs();
+        Path ->
+            {ok, [RunConfigs]} = file:consult(Path),
+            true = is_list(RunConfigs),
+            true = lists:all(fun({N, Settings}) -> is_integer(N) andalso N > 0 andalso is_list(Settings); (_) -> false end, RunConfigs),
+            RunConfigs
+    end.
+
+default_run_configs() ->
     [
+        %% All runs use total_profit (net equity after spread). The previous phase0/phase1/phase2
+        %% functions rewarded trade counts more than P&L (a losing 49-trade agent outscored a
+        %% profitable 1-trade agent). Windows and population sizes are unchanged; the phased
+        %% curriculum (spread ramp, multi-window evaluation) is a separate step.
         %% Phase A: Behavior bootstrap (short)
-        %% Goal: Get the network to just learn how to close trades without blowing up.
-        %% We use phase0_close_trades to encourage activity. No size bloat allowed.
-        {1, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 2600}, {gt_end, 1800}, {specie_size_limit, 12}, {init_specie_size, 12}, {generation_limit, 10}, {survival_percentage, 0.5}]},
-        {2, [{fitness_function, phase0_close_trades}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 3600}, {gt_end, 2600}, {specie_size_limit, 14}, {init_specie_size, 14}, {generation_limit, 12}, {survival_percentage, 0.50}]},
+        {1, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 2600}, {gt_end, 1800}, {specie_size_limit, 12}, {init_specie_size, 12}, {generation_limit, 10}, {survival_percentage, 0.5}]},
+        {2, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,10}}, {gt_start, 3600}, {gt_end, 2600}, {specie_size_limit, 14}, {init_specie_size, 14}, {generation_limit, 12}, {survival_percentage, 0.50}]},
 
-        %% Phase B: Profit + risk (PnL-weighted)
-        %% Goal: Shift focus immediately to actual profitability vs risk. We weight the PnL 
-        %% heavily (pscore_weight) while keeping trade quality as a secondary factor.
-        {3, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none}, {fitness_phase1_pscore_weight, 0.72}, {fitness_phase1_tradescore_weight, 0.28}, {tuning_duration, {const,20}}, {gt_start, 5000}, {gt_end, 3400}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 40}, {survival_percentage, 0.5}]},
-        {4, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none}, {fitness_phase1_pscore_weight, 0.78}, {fitness_phase1_tradescore_weight, 0.22}, {tuning_duration, {const,20}}, {gt_start, 6200}, {gt_end, 4600}, {specie_size_limit, 24}, {init_specie_size, 24}, {generation_limit, 50}, {survival_percentage, 0.5}]},
-        {5, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none}, {fitness_phase1_pscore_weight, 0.84}, {fitness_phase1_tradescore_weight, 0.16}, {tuning_duration, {const,20}}, {gt_start, 7400}, {gt_end, 5600}, {specie_size_limit, 28}, {init_specie_size, 28}, {generation_limit, 60}, {survival_percentage, 0.5}]},
-        {6, [{fitness_function, phase1_profit_risk}, {population_fitness_postprocessor_f, none}, {fitness_phase1_pscore_weight, 0.88}, {fitness_phase1_tradescore_weight, 0.12}, {tuning_duration, {const,20}}, {gt_start, 8600}, {gt_end, 6600}, {specie_size_limit, 32}, {init_specie_size, 32}, {generation_limit, 60}, {survival_percentage, 0.5}]},
+        %% Phase B
+        {3, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 5000}, {gt_end, 3400}, {specie_size_limit, 20}, {init_specie_size, 20}, {generation_limit, 40}, {survival_percentage, 0.5}]},
+        {4, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 6200}, {gt_end, 4600}, {specie_size_limit, 24}, {init_specie_size, 24}, {generation_limit, 50}, {survival_percentage, 0.5}]},
+        {5, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 7400}, {gt_end, 5600}, {specie_size_limit, 28}, {init_specie_size, 28}, {generation_limit, 60}, {survival_percentage, 0.5}]},
+        {6, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 8600}, {gt_end, 6600}, {specie_size_limit, 32}, {init_specie_size, 32}, {generation_limit, 60}, {survival_percentage, 0.5}]},
 
-        %% Phase C: Profit optimization (direct objective pressure)
-        %% Goal: Pure emphasis on maximizing PnL while navigating varying historical context.
-        %% We cap the generation limit to avoid overfitting on exact historical slices.
-        {7, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 7000}, {gt_end, 5200}, {specie_size_limit, 32}, {init_specie_size, 32}, {generation_limit, 70}, {survival_percentage, 0.50}]},
-        {8, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 8200}, {gt_end, 6200}, {specie_size_limit, 36}, {init_specie_size, 36}, {generation_limit, 70}, {survival_percentage, 0.50}]},
-        {9, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 9400}, {gt_end, 7000}, {specie_size_limit, 40}, {init_specie_size, 40}, {generation_limit, 80}, {survival_percentage, 0.50}]},
-        {10, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 10600}, {gt_end, 7800}, {specie_size_limit, 44}, {init_specie_size, 44}, {generation_limit, 80}, {survival_percentage, 0.45}]},
-        {11, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 11800}, {gt_end, 8600}, {specie_size_limit, 48}, {init_specie_size, 48}, {generation_limit, 90}, {survival_percentage, 0.45}]},
-        {12, [{fitness_function, phase2_profit_optimization}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 13000}, {gt_end, 9400}, {specie_size_limit, 48}, {init_specie_size, 48}, {generation_limit, 100}, {survival_percentage, 0.45}]}
+        %% Phase C
+        {7, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 7000}, {gt_end, 5200}, {specie_size_limit, 32}, {init_specie_size, 32}, {generation_limit, 70}, {survival_percentage, 0.50}]},
+        {8, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 8200}, {gt_end, 6200}, {specie_size_limit, 36}, {init_specie_size, 36}, {generation_limit, 70}, {survival_percentage, 0.50}]},
+        {9, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 9400}, {gt_end, 7000}, {specie_size_limit, 40}, {init_specie_size, 40}, {generation_limit, 80}, {survival_percentage, 0.50}]},
+        {10, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 10600}, {gt_end, 7800}, {specie_size_limit, 44}, {init_specie_size, 44}, {generation_limit, 80}, {survival_percentage, 0.45}]},
+        {11, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 11800}, {gt_end, 8600}, {specie_size_limit, 48}, {init_specie_size, 48}, {generation_limit, 90}, {survival_percentage, 0.45}]},
+        {12, [{fitness_function, total_profit}, {population_fitness_postprocessor_f, none}, {tuning_duration, {const,20}}, {gt_start, 13000}, {gt_end, 9400}, {specie_size_limit, 48}, {init_specie_size, 48}, {generation_limit, 100}, {survival_percentage, 0.45}]}
     ].
 %% Prep function (similar to benchmarker:prep)
 prep(E, Mode, SourcePopId) ->
@@ -760,7 +768,12 @@ resume(E, Population_Id) ->
     ),
     
     qlog:xLog(qStatus, "exp_runner:resume | pop_id=~p | run_index=~p/~p", [Population_Id, U_E#experiment.run_index, U_E#experiment.tot_runs]),
-    population_monitor:continue(Population_Id),
+    case os:getenv("DXNN_STORAGE_PROVIDER") of
+        "oci_object_storage" ->
+            ResumeState = population_monitor:prep_PopState(PMP, E#experiment.init_constraints),
+            population_monitor:start(ResumeState);
+        _ -> population_monitor:continue(Population_Id)
+    end,
     loop(U_E, Population_Id).
 
 %% ============================================================================
@@ -769,6 +782,14 @@ resume(E, Population_Id) ->
 
 %% Checkpoint configuration
 should_checkpoint() ->
+    %% The OCI supervisor uses acknowledged Mnesia backups and native storage.
+    %% Legacy file-copy checkpoints and S3 uploads remain on the AWS path.
+    case os:getenv("DXNN_STORAGE_PROVIDER") of
+        "oci_object_storage" -> false;
+        _ -> legacy_should_checkpoint()
+    end.
+
+legacy_should_checkpoint() ->
     case config:checkpoint_enabled() of
         true -> true;
         false -> false;
@@ -962,6 +983,12 @@ trigger_s3_upload(PopulationId) ->
 %% Checkpoint and exit (for experiment completion and spot interruptions)
 %% Only exits if running in AWS environment to trigger S3 upload
 checkpoint_and_exit() ->
+    case os:getenv("DXNN_STORAGE_PROVIDER") of
+        "oci_object_storage" -> dxnn_runtime:finish();
+        _ -> legacy_checkpoint_and_exit()
+    end.
+
+legacy_checkpoint_and_exit() ->
     checkpoint(),
     
     case should_checkpoint() of

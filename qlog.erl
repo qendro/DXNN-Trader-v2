@@ -692,7 +692,7 @@ exp_runner(Event, Data) ->
                     Gens = [A#agent.generation || A <- Ags],
                     {AIds, Ags, Fits, Gens}
             end,
-            BestFitness = case Fitnesses of [] -> 0.0; _ -> lists:max(Fitnesses) end,
+            BestFitness = case Fitnesses of [] -> 0.0; _ -> float(lists:max(Fitnesses)) end,
             AvgFitness = case Fitnesses of [] -> 0.0; _ -> lists:sum(Fitnesses) / length(Fitnesses) end,
             MaxGen = case Generations of [] -> 0; _ -> lists:max(Generations) end,
             AgentCount = length(AgentIds),
@@ -713,7 +713,7 @@ exp_runner(Event, Data) ->
         mutate_specie ->
             {Specie_Id, PopulationLimit, AvgFitness, MaxFitness, MinFitness, NeuralEnergyCost} = Data,
             io:format(File, "[~s] | mutate_specie | specie: ~p | population_limit: ~p | avg_fitness: ~.4f | max_fitness: ~.4f | min_fitness: ~.4f | neural_energy_cost: ~.4f~n",
-                [Timestamp, Specie_Id, PopulationLimit, AvgFitness, MaxFitness, MinFitness, NeuralEnergyCost]);
+                [Timestamp, Specie_Id, PopulationLimit, float(AvgFitness), float(MaxFitness), float(MinFitness), float(NeuralEnergyCost)]);
             
         run_failed ->
             {RunId, RunIndex, Reason} = Data,

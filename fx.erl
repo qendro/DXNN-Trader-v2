@@ -293,16 +293,17 @@ sim(ExoSelf,S,A)->
 			% Parameters is a list that can contain the resolution and type of sensor (e.g., graph_sensor, list_sensor).
 			% The result is a list of three elements: [Position, Entry, Previous_Percentage_Change].
 			% If there is no order, it returns [0, 0, 0].
+			%Result = [Position, OpenPnL, PrevOpenPnL]. P&L terms are signed by position (positive = winning) and
+			%expressed in units of 0.1% of price (~11.7 pips at 1.17) so they sit in a range neurons can use.
+			%Previously the raw entry price (~1.17, near-constant) and an unsigned tiny percentage were sent.
 			Result = case A#account.order of
 				undefined ->
 					[0,0,0];
 				O ->
-					%io:format("O:~p~n",[O]),
 					Position = O#order.position,
-					Entry = O#order.entry,
-					_Percentage_Change = O#order.percentage_change,
-					%io:format("self():~p CurPC:~p PrevPC:~p~n",[self(),Percentage_Change,get(prev_PC)]),
-					[Position,Entry,get(prev_PC)]
+					CurPC = O#order.percentage_change,
+					PrevPC = case get(prev_PC) of undefined -> CurPC; V -> V end,
+					[Position, Position*CurPC*10, Position*PrevPC*10]
 			end,
 			From ! {self(),Result},
 			fx:sim(ExoSelf,S,A);
