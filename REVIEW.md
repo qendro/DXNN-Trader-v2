@@ -1918,6 +1918,185 @@ Per generation (identical in both runs; the score is `alpha_pips_t`; validation 
 DXNN_TEST_ARM=night DXNN_EPISODE_SEED=1 DXNN_EVOLUTION_SEED=1 caffeinate -is erl +Bd +scl false -noshell -eval "{ok,P}=launcher:start(), R=erlang:monitor(process,P), receive {'DOWN',R,_,_,_} -> ok end, timer:sleep(1000), halt()." > run.out 2>&1
 ```
 
+### 8.27 The night arm under `alpha_pips_t`: no candidate, so 2018–2020 stays unread
+
+**Short version.** The night arm of 8.24 ran once more, now under `alpha_pips_t` and the pass rule in `PREREG_NIGHT_ALPHA_PIPS.md`, on a GCP VM. It finished. The score tracked money in every generation (`rho_score_money` median 0.99). On 2017 all four registered candidates lost money: −2.43, −0.58, −4.45 and −34.61 pips per episode. None passes, so nothing was run on 2018–2020. The candidate choice turned out to have a flaw (ties, below). It does not change the result: all twelve tied agents lose on 2017.
+
+**The run.** `DXNN_TEST_ARM=night DXNN_EPISODE_SEED=1 DXNN_EVOLUTION_SEED=1` on `n2-custom-12-24576` (12 vCPU, x86-64), OTP 28.4.1 with the JIT, `+scl false`. Started 2026-11-14 18:07 UTC, finished 2026-11-15 05:17 UTC (11 h 10 min, `run.json`). Six chained runs, 240 generations, 192 agents in four families of 48. Exit code 0, `stalls` 0, `runaways` 0, `vm_mb` 1,450 to 1,497. A generation took 117 s at the start and about 180 s at the end; a generation with a validation pass took 586 to 832 s. Neurons per agent: 4 at the start, 15.2 on average (at most 24) at the end, 9 to 22 by family.
+
+**Checks on the download.** All 14 files in `final/result` match the SHA-256 values in `snapshot.json` (checked here). `config.erl` is identical to the training-core folder's (SHA-256 `7295378c…`). **Not verified:** the price-table hash registered in the PREREG (`e3047acf…`) is not recorded in any downloaded file, so I could not check that the VM loaded that table. The replay below checked its own copy: 2,225,779 rows, last row 2017-12-29 21:59. `run.json` also has `"checkpoint_error": "Error"` next to exit code 0. That is not explained.
+
+**Warning signs, in the order the PREREG gives.**
+
+1. *`rho_score_money`.* Median 0.99 over the 180 quarter-pip generations, lowest 0.83. Per family the medians are 0.98 to 0.99. The lowest single family value is 0.28 (family 2). No family's score rose while its money did not.
+2. *Money on each generation's new training episodes,* 0.25 pip. Mean over the 180 quarter-pip generations of each generation's median; se across generations:
+
+| | median agent | clock rule | always long | 60-bar momentum |
+|---|---|---|---|---|
+| all four families, pips per episode (se) | +2.24 (0.39) | +1.96 (0.44) | −1.49 (0.65) | −22.13 (0.72) |
+
+   The agents minus the clock rule, generation by generation: +0.29 ± 0.56. By family: +0.91 (0.64), +0.71 (0.61), +2.46 (0.59) and **+6.67 (0.61)** for family 4. Generations share agents, so these se values are not from independent samples.
+3. *Validation at the end of each run* (120 episodes of 2017, 0.25 pip, `GEN_SUMMARY`):
+
+| run | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| median money per episode, pips | −6.72 | −2.24 | −0.59 | −1.11 | −0.89 | −0.81 |
+| agents above zero, of 192 | 7 | 45 | 83 | 68 | 35 | 90 |
+
+   The baselines on the same 120 episodes: always long +1.99, clock rule +0.30, 60-bar momentum −15.71, never trade 0. The population's median was below zero at the end of every run. Some families' medians were above zero: family 4 in runs 2 to 4 (+0.12, +0.91, +0.64), family 1 in run 4 (+0.28), and families 2 and 4 in run 6 (+3.35, +2.32).
+4. *`score_money_check`* on the run-4 and run-6 populations (best 3 agents of each family by stored fitness, 600 training episodes, seed 97, 0.25 pip). Rank correlation of score with money: **1.00** on both. `alpha_t` gives 0.64 and 0.90. Money per episode, pips (se 2.0 to 2.5 per agent):
+
+| family | run 4 | run 6 |
+|---|---|---|
+| 1 | −6.40, +2.61, +2.65 | +3.66, +4.30, +4.41 |
+| 2 | −0.58, −0.38, −0.37 | −0.80, +0.45, +0.50 |
+| 3 | +2.25, +2.45, +2.47 | +1.20, +2.02, +2.30 |
+| 4 | +1.52, +6.76, +7.06 | **−31.53**, +2.91, +2.96 |
+
+   The three agents of each family here share one stored fitness: they are the tied agents described below. Their money can differ a lot, by up to 34 pips per episode in family 4 at run 6.
+
+**The registered 2017 replay** (`replay_2017/night_replay.erl`). Candidates by PREREG rule 1: per family, the agent with the highest stored fitness in the run-6 population. `resim` on all 369 episodes of 2017 (1,000 bars each), 0.25 pip, rollover rule on, fill now, price table cut at 2017-12-29 21:59, 55 s.
+
+| family | stored fitness | money per episode, pips (se, day blocks) | t | positions per episode | bars in the market, of 1,000 |
+|---|---|---|---|---|---|
+| 1 | 0.485 | −2.43 (2.19) | −1.11 | 12.8 | 955 |
+| 2 | 0.238 | −0.58 (2.19) | −0.27 | 3.7 | 951 |
+| 3 | 0.623 | −4.45 (1.95) | −2.28 | 6.9 | 956 |
+| 4 | 0.461 | −34.61 (2.98) | −11.62 | 156.7 | 940 |
+
+Baselines on the same 369 episodes (se across episodes): always long **+2.80** (2.13), clock rule **+1.40** (1.38), 60-bar momentum −14.95 (2.19), never trade 0. No candidate is above zero, so none passes rule 3. By rule 4, 2018–2020 stays unread.
+
+**A flaw in the pass rule: ties at the top** (`replay_2017/night_ties.erl`, `ties.out`). In each family of the run-6 population, the 48 agents hold only 24 distinct stored fitness values. Three agents share the top value. One comes from an earlier generation (7 to 9). The other two are one generation later (8 to 10) and carry one more mutation in `evo_hist`. `genotype:clone_Agent/2` copies the agent record, fitness included. So the saved population holds each survivor plus two mutated offspring that carry its score without ever having been evaluated. The candidate script sorts by fitness and takes the last of the tied agents. In all four families that was an offspring (`replay.out`: "next best" equals the candidate's value every time). Family 4's candidate, with 157 positions per episode, is an unevaluated mutant.
+
+All 12 tied agents, on the same 369 episodes:
+
+| family | lowest generation (the evaluated survivor) | the two offspring |
+|---|---|---|
+| 1 | −2.29 | −2.06, −2.43 |
+| 2 | −1.62 | −1.62, −0.58 |
+| 3 | −1.55 | −1.66, −4.45 |
+| 4 | −0.99 | −1.03, −34.61 |
+
+All twelve are below zero (median −1.64). The result does not depend on the tie-break. But the next pass rule must say how ties are broken, or the population must be saved before offspring are made. The 8.16 protocol had such a rule ("offspring carry their parent's number; the parent is taken"); `PREREG_NIGHT_ALPHA_PIPS.md` left it out. That the lowest-generation agent is the evaluated parent is inferred from generation and `evo_hist`. I did not trace it parent by parent.
+
+**What stands.**
+
+- No candidate. Nothing dated 2018 or later was read.
+- The score now means money: 0.99 per generation, 1.00 on fresh episodes. Under `alpha_t` the same arm gave −0.71 (8.25).
+- In-sample, the median agent made about what the clock rule made, and family 4 made more (+6.67). On 2017 no tied agent beat always long or the clock rule.
+- At the end the agents were in the market on 98 to 99% of bars (`active`).
+
+**Files.** `AWS-Deployment/output/gcp/downloads/dxxn-gcp-dxnn-checkpoints/night-alpha-pips/night-alpha-pips-e1b/final/result/` (logs, `run.json`, `snapshot.json`, Mnesia backups) and `…/final/replay_2017/` (`replay.out`, `ties.out`, `Resim/prereg_2017/`, `Resim/ties_2017/`, `baseline_*.csv`, the two `.erl` scripts).
+
+### 8.28 What a position really costs: Dukascopy bid and ask, 2003–2017
+
+**Source.** `session_flow/cost/COST_SCHEDULE.md` and `COST_TABLES.md` (git repository `session_flow`, commit `fff50db`). Dukascopy one-minute bid and ask bars for seven pairs, 2003–2017. The figures are half-spreads at each minute's close. A position is two half-spreads, plus a commission of 0.2 bp of value per side where stated. No return was computed and nothing dated 2018 or later was read. Rebuild: `python3 cost_schedule.py` in `session_flow/cost/` (about 8 minutes).
+
+**EUR/USD, one position, pips** (London hours = 03:00–11:59 New York):
+
+| period | spread only, London hours | spread only, all hours | spread only, hour 17 NY | + commission, London hours | + commission, all hours | + commission, hour 17 NY |
+|---|---|---|---|---|---|---|
+| 2008–2012 | 0.90 | 1.10 | 1.77 | 1.45 | 1.65 | 2.31 |
+| 2012 | 0.76 | 0.87 | 1.67 | 1.27 | 1.39 | 2.19 |
+| **2013–2017** | **0.27** | **0.36** | 1.13 | **0.75** | **0.84** | 1.61 |
+
+**Against what this log assumed** (0.25 pip per position, 0.5 as the central case):
+
+- The bare spread in liquid hours, 2013–2017, is about the 0.25 assumed (0.27). The assumption leaves the commission out. The commission alone is 0.44–0.53 pip per position, twice the whole 0.25.
+- With commission: 0.75 pip in London hours (3.0 × 0.25, 1.5 × 0.5) and 0.84 over all hours (3.4 × 0.25, 1.7 × 0.5). In 2012, the first training year, it is 1.39 over all hours.
+- With commission, no minute of 2003–2017 cost 0.5 pip or less.
+
+**The rollover.** Hour 17 New York costs 2.6 to 4.3 times the cheapest hours, depending on the pair. Minute by minute (Monday–Thursday, 2013–2017), the spread peaks at 17:00 at 4 to 7 times the 06:00–11:00 level. For EUR/USD that is 0.88 against 0.13 pip of half-spread. It halves within 5 to 10 minutes and stays at about 2 to 3.5 times daytime until 17:59. At 18:00 it drops in one step. The Sunday open is worse: EUR/USD 1.47 pip of half-spread at 17:00. The Asian session costs only 15–45% more than the cheapest hours.
+
+**The proposed cost model** (COST_EVIDENCE.md section 8: a year level times an hour cell, plus a term for the previous minute's range). It was fitted on 2008–2014 and checked on 2015–2017. The pass test was fixed before the fit: at least 2% lower RMSE under both year-level settings, and at least half the under-prediction removed on the 1% largest-range minutes. **The range term passed for no pair and no form.** For EUR/USD its fitted coefficient is about 0. The hour-and-year schedule carries almost all the predictable cost. The main error is the year level: carrying 2014 forward under-predicts EUR/USD's 2015–2017 mean by 31%.
+
+**Limits, as the source states them.** These are one vendor's quotes (Dukascopy SWFX) at the close of each minute, not fills. Slippage, size, depth, last-look rejections and latency are not measured. The level before 2013 may reflect how Dukascopy quoted (spreads sit on steps of 1.0, 1.4 and 2.0 pips); no second source was checked. Trust the shape (hour multipliers, rollover profile) more than the level. The commission is the project's assumption (Interactive Brokers, 0.2 bp per side); Dukascopy's own would add another 0.3–0.4 pip. Financing at the rollover is not included.
+
+### 8.29 The time-of-day rule on a basket of six pairs: registered, run once, STOP
+
+**What was tested.** The rule of 8.22 item 4, written as a template for other pairs. Short the home currency 08:00–12:00 in its own centre and long it against the dollar 11:00–15:00 New York (`session_flow/PREREG_BASKET.md`, commit `7a6525d`). Six pairs other than EUR/USD (GBP/USD, USD/JPY, AUD/USD, USD/CAD, USD/CHF, NZD/USD), equal notional, 2008–2017. Fills at the ask to buy and the bid to sell, plus 0.2 bp commission per side. t is the smaller of the day-block and week-block t. GO at t ≥ 3, OWNER DECIDES at 2 to 3, STOP below 2. Amendment 1 (`PREREG_BASKET_AMENDMENT_1.md`, commit `a174bb5`) fixed the data and what each outcome means, before the run. It changed no rule. Run once on 2026-11-15 (`RESULT.md`, `result.txt`, commit `e20ca03`).
+
+**Result.**
+
+| line (2008–2017) | bp a day | t day / t week | days |
+|---|---|---|---|
+| **six-pair basket, bid/ask + commission (decides)** | **−2.48** | −4.97 / **−5.06** | 2,604 |
+| the same, 5 minutes late | −2.88 | −5.80 / −5.99 | 2,605 |
+| the same, spreads × 2 | −5.40 | −10.79 / −10.88 | 2,604 |
+| the same, 2003–2007 (reported only) | −3.59 | −6.08 / −6.07 | 1,216 |
+| **six-pair basket at the mid, no cost** | **+1.21** | **+2.42** / +2.45 | 2,604 |
+| EUR/USD alone, bid/ask + commission (seven-pair line) | +1.41 | +1.75 / +1.80 | 2,600 |
+
+- **Decision printed by the tool: STOP** (t −5.06). The basket after cost is negative in every year 2008–2017 (−0.22 to −4.43 bp a day).
+- At the mid without cost, t_mid = +2.42. That is the amendment's row "OWNER DECIDES or STOP, t_mid 2 to 3: not settled. The owner decides. The default is to stop." No owner decision is recorded in these files.
+- At the mid, the home legs carry more than the dollar legs (+0.70, t 2.35, against +0.51, t 1.25). USD/JPY is negative even at the mid (−2.45, t −2.99).
+- The data guards were not triggered. Lowest coverage was NZD/USD 0.895 and AUD/USD 0.919.
+- The amendment had said in advance that at these spreads a STOP was the expected outcome even if the pattern is real.
+
+**Data problems, reported next to the result** (`market_data/dukascopy_m1/DATA_REPORT.md`; they do not change it):
+
+- **AUD/USD 2003 and 2007–2010 failed the clock check.** In those years it opens Sunday 22:00 UTC in every season and often stops Friday 16:00 UTC. The rollover spread points to short quoting hours on a UTC clock rather than a shifted clock, but that is not proven. The test was run on these data by the owner's decision (2026-11-15, before the run; amendment section 1).
+- The tool skipped 2,475 crossed AUD/USD rows (ask below bid, all 2007–2010) and 1 USD/JPY row. There are no 2002 files.
+
+**Corrections to earlier statements in this log.**
+
+- *The clock of `fx_tables/EURUSD1.txt`.* 8.22 item 4 says "the file's clock is London time". Against Dukascopy, 2012–2017, the file is UTC in winter and UTC + 1 hour in summer, with the change on the **US** dates (second Sunday of March, first Sunday of November). Late-October weeks after the UK change still need the hour. So the clock is New York time plus 5 hours, as 8.13 says (`DATA_REPORT.md` sections 1 and 6; all 72 months fit). It differs from London time only in the weeks when the US and European clocks disagree. For the same reason, Appendix C's "timestamps are assumed to be UTC" and section 2.1's "apparently UTC" hold only in winter.
+- *AUD/USD.* The log said nothing about AUD/USD before this section. The facts are as above: it did not pass the clock check for 2003 and 2007–2010, and it was run on the owner's decision.
+
+### 8.30 `flat_eval`: a single-process evaluator that matches the process path (built, not wired in)
+
+**What it is.** `flat_eval.erl` evaluates a saved agent's network in one Erlang process. The process path uses one process per neuron, sensor and actuator. `run_many/3` builds every price-list, indicator and clock input once per episode and shares it across agents. Only the position sensor is answered per agent. Git worktree `DXNN-flat-eval`, branch `sf/flat-eval`, commit `f1ef75a` (versions `356c584` and `91fb89d` before it). **Not merged, and not wired into the population loop.** No existing module was changed. Notes: `DXNN-flat-eval/FLAT_EVAL_NOTES.md`.
+
+**Same results.** Every episode's statistics were compared field by field with `=:=`: positions at every scored bar, money, cost, entries, drift, z, alpha. The runs used scratch copies of the 8.25 populations and a price table cut at the end of 2017.
+
+| set | agents | bars compared | mismatches |
+|---|---|---|---|
+| saved `_run4` + `_run6`, 100 training episodes | 384 | 37,209,600 | 0 |
+| saved, all 369 episodes of 2017 | 384 | 137,303,424 | 0 |
+| fresh agents, mutated or grown (992 with 21 to 42 neurons), 21 episodes | 2,091 (of 2,100 made; 9 refused) | 42,549,759 | 0 |
+
+**Speed.** This Mac (4 performance and 6 efficiency cores). 96 agents, 20 episodes, three repeats. The shared path against the process path: **9.5 times on one core** (225,000 against 23,600 bars a second), **13.0 times on ten** (824,000 against 63,000). The process path stops gaining at 4 cores. Ten cores here are worth 6 to 7.7 single-core equivalents even for work that shares nothing. Most of the remaining time is the weighted sums (`dot/3`, 57.5% in eprof). A native network step was estimated, not measured or built, at about 35 times the process path per core. This replaces Appendix C's estimate of "20 to 100×" with a measurement.
+
+**What it refuses** (each case was built and run through the process path, `flat_eval_check:refusal_check/2`):
+
+- circles of non-recurrent links, sensorless self-loops that feed the trade, neurons with no input, and inputs missing from a sender's outputs. The process path stalls or runs away on these.
+- malformed weights or bias, and duplicate inputs or outputs. These crash or silently change the network.
+- an output neuron one or two bars ahead. On the process path its leftover trade message stays in the actuator's mailbox across the reset, so every later episode trades one bar late. flat_eval does not imitate that.
+- all sensors unconnected.
+- episodes long enough for stray links to approach the runaway limit.
+
+It runs, and matches, sensorless self-loops that do not reach the trade, stray fanouts and stray outputs.
+
+**A bug it found, not fixed.** `exoself:link_Sensors/4` calls `genome_mutator:add_sensorlink/1` outside a transaction. When that fails, it logs with `io_lib:format/1`, which does not exist, so the exoself dies with `undef` (`exoself.erl` line 765). When it succeeds, the exoself has changed the genotype at random before running it.
+
+**What wiring it in would take** (notes section 6, not built). In `population_monitor:summon_agents/3`, give the agents `flat_eval` accepts to one helper process. That helper scores them, writes fitness and the ledger row, sends the casts the monitor counts, and writes the log lines. Everything else stays on the process path: tuning, plasticity, substrates, other aggregators, the refused shapes, and live trading.
+
+### 8.31 The overnight-against-daytime rule on US funds: registered, not run
+
+**What was registered** (`auction_flow/PREREG_AUCTION.md`, commit `c2d9e8e`). In every fund, every day: long overnight (buy in the closing auction, sell in the next opening auction) and short by day (sell at the open, buy back at the close). One unit each. 25 US-listed funds, SPY excluded, equal risk, 2008–2017, after a base cost of $0.0049 per share per side plus SEC and FINRA fees on sales. GO at t ≥ 3, STOP below 2. A missing or unreadable fund file gives **NO RESULT**. The tool (`auction_test.py`) was validated on SPY only: hand-built funds with dividends and splits, look-ahead tests, a planted 10 bp a day recovered (t 6.05), and 200 random walks, all STOP after cost.
+
+**It has not been run, and the recommendation is not to run it.** The reasons:
+
+- **SPY itself shows nothing in the test period.** In 2008–2017, SPY's overnight minus daytime was +0.29 bp a day before cost, t 0.12. In the equal-risk book the registration uses, it was +1.19 bp a day, t 0.57. The registered cost on SPY averaged 1.82 bp a day. In 1993–2007 the gross figure was +5.80 bp a day (t 3.17). The registration was written expecting a STOP.
+- **The data are not complete.** `market_data/etf_daily/DATA_REPORT.md`: of 26 funds collected (the 25 plus SPY), 17 are ready. Nine are quarantined: XLF because CNBC's "unadjusted" series is rescaled in most years, and EFA, LQD, XLU, XLV, XLY, EWZ, FXI and EWJ because dividend history is missing. So 16 of the 25 registered funds are usable, and the registration voids a run with any file missing.
+- **The "open" is probably not the auction price.** In the collected files the open behaves like the first consolidated trade. Sub-penny opens prove a non-auction print on 0.2% to 5% of days per fund. `EXECUTION_EVIDENCE.md` (commit `64eb069`) finds the same for other free vendors: Norgate and Alpaca document the first trade, and Yahoo does not document its open. It found no study of the size of the gap. NYSE's own figures show ETF opening prints up to 20 bp from the next five minutes' average. The registered stress of "open 5 bp worse" costs about 10 bp a day and may be too small for thin funds.
+- **Cost.** The registered rule costs about 1.8 bp a day on SPY, and per-share fees weigh several times more on cheaper funds (5.86 bp a day at a $37 price). An automated run through the IBKR API with routing directed to the listing exchange would cost about 1.8 times the registered per-share amount (evidence section 0.1). Not modelled: Rule 201 days from 2011-02-28 and locate failures, when the daytime short does not fill; listing moves (TLT to Nasdaq in 2016, IEF in 2017); and the $25,000 pattern-day-trader minimum to 2026-06-04.
+
+**What stays unseen.** No fund other than SPY has had a return computed by anyone (`DATA_REPORT.md` section 2, PREREG preamble). If the test is ever wanted, those data are still unseen. One leak, noted in the data report: onvista's and dividendhistory.org's pre-2018 scaling reveals that XLB, XLE, XLK, XLU and XLY split 2:1 after 2017 and USO reverse-split 1:8. No post-2017 price, date or return was seen. A status note is in `auction_flow/STATUS.md`.
+
+### 8.32 Where this leaves the project
+
+**What was found.**
+
+- **Three ideas, all smaller than their cost.** Short-horizon reversal in EUR/USD is real at zero cost. It is worth about 0.1 pip per trade at one-minute decisions (8.9). The overnight run's agents earned 0.48 pip per position before cost in the years where it existed (8.15). Both are below the real cost of 0.75 to 0.84 pip (8.28). The time-of-day rule, outside EUR/USD, makes +1.21 bp a day at the mid and −2.48 after bid and ask (8.29). On EUR/USD alone it makes +1.41 after cost, t 1.75. The overnight effect is +0.29 bp a day gross on SPY in 2008–2017 against a cost of 1.82 (8.31; the basket was not run).
+- **The real cost of trading** EUR/USD in 2013–2017 is 0.75 to 0.84 pip per position with commission (8.28), not the 0.25 this log simulated.
+- **The evolution machinery works.** It finds real in-sample structure: family 4 made +6.67 pips per episode on new training episodes (8.27). Since 8.26 its score means money. It runs unattended on a cloud VM, and the pilot reproduced exactly (8.26). `flat_eval` matches it 9.5 to 13 times faster, but is not wired in.
+- **Nothing found in-sample has held on 2017**, the gate year.
+
+**What is still unread.** No agent evolved on 2012–2016 has been run on 2018–2020 (the overnight run of 8.15 trained on those years; 8.16 set them aside for the forward test). January 2025 to November 2026 has not been read by anything. The other 24 funds' returns have not been computed.
+
+**What is open.** The owner's stated aim is to learn whether neuroevolution can find behaviour of its own that pays. None of the tests above measures that. Each one asked whether a known pattern survives cost, or whether agents beat it. The proposal on the table, **not yet decided**, has two parts: measure the smallest planted effect the system can recover and keep on unseen data, and pick an environment with many instruments and richer inputs. Nothing has been built or run for it.
+
 ## Appendix A. Methods
 
 - **Data statistics, simulator baselines, ridge baseline.** Three Node.js scripts (no dependencies) reading `fx_tables/EURUSD1.txt` in place. The simulator re-implementation follows `fx.erl`: act at the close just observed, one position, units = round(5000/entry), spread charged once on entry, flip = close then open, fitness = balance + open P&L. Random numbers are seeded.

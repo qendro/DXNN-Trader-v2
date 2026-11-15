@@ -119,3 +119,7 @@ priv/local/
 
 # Archived night runs
 nights/
+
+# Large market data kept local only (exceeds GitHub size limits)
+data/
+fx_tables/EURUSD_M1_MIDPOINT_UTC.txt
