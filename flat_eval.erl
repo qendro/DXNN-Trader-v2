@@ -19,7 +19,10 @@
 %%                                                   drift and cost, and whether positions are kept (fx:ep_acc_new/2).
 %%                                                   Default validation, which is what eval_protocol:run_agents_on/4 and
 %%                                                   resim use.
-%%               parallel => N                       run_many/3 only: N agents at a time (default 1)
+%%               parallel => N                       run_many/3 only: N workers (default 1)
+%%               share => true | false                run_many/3 only: compute each episode's sensor answers once and
+%%                                                   share them across the agents (default true; shared/3), or run each
+%%                                                   agent alone as version 1 did
 %%
 %% How the process network is reproduced, and why the result is the same and not merely close:
 %%   - Every neuron waits for one message from each of its inputs, in the order of its input list (a selective receive
@@ -37,13 +40,17 @@
 %%     fresh network (config:episode_isolation/0) and every sensor reads the bar being decided (sense_before_trade).
 %%   - An extinct episode ends the evaluation, as in fx:episode_trade/6.
 %%
-%% Supported (version 1): neural encoding; neurons with any activation function of functions.erl (tanh and linear are
-%% computed inline), dot_product, no plasticity, no modulation inputs; feedforward and recurrent links; sensors fx_PLT
-%% ([TF,N] and [TF,N,vol]), fx_IND, fx_Clock and fx_Position; one fx_Trade actuator fed by one neuron; episode mode with
-%% isolation and ordered sensing on. Anything else is {unsupported,Why}, so a caller can use the process path instead.
-%% That includes networks the process path cannot run as written: a circle of non-recurrent links (it waits for ever), a
-%% neuron that no sensor reaches (it fires for ever), links whose two ends disagree, a bias that is not the last input,
-%% weight lists of the wrong length, and an agent whose sensors are all unconnected (the process path mutates it first).
+%% Supported: neural encoding; neurons with any activation function of functions.erl (tanh and linear are computed
+%% inline), dot_product, no plasticity, no modulation inputs; feedforward and recurrent links; sensors fx_PLT ([TF,N] and
+%% [TF,N,vol]), fx_IND, fx_Clock and fx_Position; one fx_Trade actuator fed by one neuron; episode mode with isolation and
+%% ordered sensing on. Also two shapes the process path runs as if they were not there (checked against it in
+%% flat_eval_check:refusal_check/2): link entries their target never reads (stray links) and isolated sensorless
+%% self-loops. Anything else is {unsupported,Why}, so a caller can use the process path instead. That includes the
+%% networks the process path stalls on, runs away with or crashes on (a circle of non-recurrent links, a sensorless
+%% neuron that reaches the trade or has no input, an input nobody sends, a bias that is not last, weight lists of the
+%% wrong length, duplicate inputs or outputs), those it runs differently from the network written (an output neuron that
+%% fires ahead of the bar: its leftover trade survives the episode reset), and an agent whose sensors are all unconnected
+%% (the process path mutates it first, or crashes). FLAT_EVAL_NOTES.md has the table.
 -module(flat_eval).
 -export([run/3, run_many/3, compile/1, compile/2, run_net/3, check_config/0, net_info/1, sense_bar/5, think_bar/2, column_bytes/2]).
 -include("records.hrl").

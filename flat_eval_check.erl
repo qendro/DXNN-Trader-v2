@@ -528,7 +528,7 @@ speed2(Agent_Ids,Episodes,Repeats,CoresList)->
 		Busy = functions:avg([maps:get(busy,Run) || Run <- Rs]),
 		{Path,Cores,lists:min(Rates),functions:avg(Rates),lists:max(Rates),Busy}
 	end || Path <- Paths, Cores <- CoresList],
-	[io:format("SPEED2_ROW ~p cores=~p bars_per_s min ~.0f mean ~.0f max ~.0f busy_schedulers ~.2f~n",[P,C,Mn,Me,Mx,B]) || {P,C,Mn,Me,Mx,B} <- Table],
+	[io:format("SPEED2_ROW ~p cores=~p bars_per_s min ~.1f mean ~.1f max ~.1f busy_schedulers ~.2f~n",[P,C,Mn,Me,Mx,B]) || {P,C,Mn,Me,Mx,B} <- Table],
 	#{bars=>Bars,runs=>Runs,table=>Table}.
 
 	measure2(Path,Cores,Repeat,Agent_Ids,Episodes,Bars,Reference)->
@@ -550,7 +550,7 @@ speed2(Agent_Ids,Episodes,Repeats,CoresList)->
 		Busy = lists:sum([(A1-A0)/max(1,T1-T0b) || {{I,A0,T0b},{I,A1,T1}} <- lists:zip(W0,W1), I =< erlang:system_info(schedulers)]),
 		Same = Results =:= Reference,
 		Rate = Bars/Seconds,
-		io:format("SPEED2_RUN ~p cores=~p repeat=~p ~.2f s ~.0f bars/s busy=~.2f gcs=~p gc_mwords=~.0f same_as_reference=~p load_before=~s~n",
+		io:format("SPEED2_RUN ~p cores=~p repeat=~p ~.2f s ~.1f bars/s busy=~.2f gcs=~p gc_mwords=~.1f same_as_reference=~p load_before=~s~n",
 			[Path,Cores,Repeat,Seconds,Rate,Busy,GCs1-GCs0,(Words1-Words0)/1.0e6,Same,Load]),
 		#{path=>Path,cores=>Cores,repeat=>Repeat,seconds=>Seconds,rate=>Rate,busy=>Busy,gcs=>GCs1-GCs0,same=>Same,load=>Load}.
 
