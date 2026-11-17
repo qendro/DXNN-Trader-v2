@@ -1,0 +1,43 @@
+Stage 1 signal study
+pairs EURUSD GBPUSD USDJPY USDCHF USDCAD NZDUSD; decision TFs M15 H1 H4; horizons [1, 4, 16] decision bars; periods {'discovery': ['2008-01-01', '2011-12-31'], 'confirmation': ['2012-01-01', '2014-12-31'], 'full': ['2008-01-01', '2014-12-31']}
+pooled tests per period: 243; rows in CSV: 5103
+runtime 17.6 s
+
+GATE DECISION: STOP   (candidates 2, confirmed 0, best gross/cost among confirmed nan)
+  rule: discovery |t| >= 2.5 against zero and against placebo, same sign; confirmation Holm at 0.05 one-sided on max(p_std, p_diff) and both t >= 2.0; GO if a confirmed reaction has gross/cost >= 0.5, survives leaving out any one pair (t >= 2.0), lies beyond each placebo and is not flagged; OWNER DECIDES if a confirmed reaction has gross/cost >= 0.25 or fails only a guard; else STOP
+reported only: Holm at 0.05 over all pooled tests, full period: against zero ['M15 donchian20_break h1', 'M15 pivot_cross h1', 'M15 px_sma50_cross@M15 h1', 'M15 round_half_cross h1', 'M15 donchian20_break h4', 'M15 bb20_outside h1', 'M15 rsi_exit_30_70 h1', 'M15 round_half_cross h4', 'M15 bb20_outside h4', 'M15 round_big_touch h1', 'M15 round_big_cross h1', 'M15 pivot_cross h4', 'M15 donchian20_break h16', 'H1 round_big_cross h1', 'M15 round_big_touch h4', 'M15 px_sma200_cross@M15 h1', 'M15 bb20_outside h16', 'M15 rsi_enter_30_70 h1']; against placebo ['M15 round_big_touch h4', 'M15 round_big_touch h1']
+
+candidates (discovery) and their confirmation:
+  tf  signal                       h  sign  disc_mean disc_t  conf_mean conf_t conf_tdiff   cost  ratio  lopo  beyond_both  confirmed
+  M15 round_big_touch               4 +1    +0.641  +4.36    +0.191  +1.33  +1.19   1.491 +0.128 +0.48  True         False
+  M15 round_big_touch               1 +1    +0.294  +4.73    +0.120  +2.04  +0.70   1.497 +0.080 -0.04  True         False
+
+pooled tests, full period: distribution of t (gross at mid) and t against placebo
+  t_std: n 243, mean -0.53, sd 2.11, |t|>=2: 27.2%, |t|>=3: 12.3%
+  t_diff: n 243, mean +0.22, sd 1.12, |t|>=2: 9.9%, |t|>=3: 0.8%
+  mean cost per round trip at the events: 2.241 bp
+tests flagged IMPOSSIBLE? (|t| >= 8.0 or hit rate outside 0.25..0.75): 2
+  full M15 donchian20_break h1 NZDUSD: t -8.1 hit 0.43
+  full M15 donchian20_break h1 ALL: t -9.6 hit 0.44
+
+largest |t against placebo|, pooled, full period (tests with at least the gate's minimum events):
+  M15 round_big_touch              h4  n  31976 mean  +0.517 t +4.55 | placebo  -0.100 | diff t +4.31 | cost 2.263
+  M15 round_big_touch              h1  n  53157 mean  +0.247 t +5.16 | placebo  +0.029 | diff t +3.90 | cost 2.283
+  M15 px_sma50_cross@H4            h4  n   4398 mean  -0.493 t -1.80 | placebo  +0.091 | diff t -2.78 | cost 2.208
+  H1  px_sma50_cross@H4            h1  n   4398 mean  -0.490 t -1.79 | placebo  +0.093 | diff t -2.78 | cost 2.208
+  M15 pwh_touch                    h4  n   6497 mean  +0.724 t +3.62 | placebo  +0.082 | diff t +2.65 | cost 2.107
+  H1  px_sma200_cross@H1           h4  n   5104 mean  -1.338 t -2.56 | placebo  -0.222 | diff t -2.51 | cost 2.108
+  M15 px_sma200_cross@H1           h16 n   5103 mean  -1.337 t -2.56 | placebo  -0.225 | diff t -2.50 | cost 2.108
+  M15 pwl_break                    h4  n   6779 mean  -0.241 t -1.06 | placebo  -0.865 | diff t +2.38 | cost 2.093
+  M15 px_sma50_cross@H4            h16 n   4398 mean  -0.759 t -1.43 | placebo  +0.326 | diff t -2.35 | cost 2.312
+  H1  px_sma50_cross@H4            h4  n   4398 mean  -0.761 t -1.43 | placebo  +0.323 | diff t -2.35 | cost 2.313
+  H4  px_sma50_cross@H4            h1  n   4397 mean  -0.754 t -1.42 | placebo  +0.321 | diff t -2.33 | cost 2.313
+  H1  round_big_touch              h4  n  16146 mean  +0.732 t +2.50 | placebo  -0.069 | diff t +2.30 | cost 2.265
+  H1  pwh_touch                    h1  n   5641 mean  +0.587 t +2.89 | placebo  +0.013 | diff t +2.29 | cost 2.108
+  H1  donchian20_break             h4  n  16504 mean  -0.532 t -1.58 | placebo  -0.773 | diff t +2.27 | cost 2.047
+  H4  rsi_enter_30_70              h1  n   2191 mean  -1.047 t -1.45 | placebo  +0.283 | diff t -2.27 | cost 2.242
+
+controls (H1, h = 1, pooled, full period):
+  CANARY_future_pdh_break      n  11642 mean  +20.211 t  +45.10 hit 1.00 IMPOSSIBLE?
+  CONTROL_random_events        n  11594 mean   -0.033 t   -0.21 hit 0.49 
+

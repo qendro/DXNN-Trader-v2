@@ -1,0 +1,198 @@
+{
+ "through": "2014-12-31",
+ "git_commit": "52db13d7ab02466460aa0d6a49b4321659f50ad6",
+ "git_dirty": false,
+ "prereg_sha256": "0a4312f8c0fc67414a1bda244bc677a2e0d0e982d4bc4eabfaa34eee2d85132f",
+ "gate": {
+  "holm_full": {
+   "t_std": [
+    "M15 donchian20_break h1",
+    "M15 pivot_cross h1",
+    "M15 px_sma50_cross@M15 h1",
+    "M15 round_half_cross h1",
+    "M15 donchian20_break h4",
+    "M15 bb20_outside h1",
+    "M15 rsi_exit_30_70 h1",
+    "M15 round_half_cross h4",
+    "M15 bb20_outside h4",
+    "M15 round_big_touch h1",
+    "M15 round_big_cross h1",
+    "M15 pivot_cross h4",
+    "M15 donchian20_break h16",
+    "H1 round_big_cross h1",
+    "M15 round_big_touch h4",
+    "M15 px_sma200_cross@M15 h1",
+    "M15 bb20_outside h16",
+    "M15 rsi_enter_30_70 h1"
+   ],
+   "t_diff": [
+    "M15 round_big_touch h4",
+    "M15 round_big_touch h1"
+   ]
+  },
+  "decision": "STOP",
+  "n_candidates": 2,
+  "n_confirmed": 0,
+  "best_ratio": NaN,
+  "config": {
+   "disc_t": 2.5,
+   "min_events": 50,
+   "min_days": 30,
+   "alpha": 0.05,
+   "conf_t_min": 2.0,
+   "ratio_go": 0.5,
+   "ratio_owner": 0.25,
+   "lopo_t": 2.0
+  },
+  "no_result": []
+ },
+ "candidates": [
+  {
+   "tf": "M15",
+   "signal": "round_big_touch",
+   "horizon": 1,
+   "sign": 1.0,
+   "disc_mean": 0.29369773765386065,
+   "beyond_both_placebos": true,
+   "flag": "",
+   "disc_t": 4.733881747457152,
+   "disc_t_diff": 3.8881634486657584,
+   "conf_mean": 0.11950617625250239,
+   "conf_t": 2.036858616826006,
+   "conf_diff": 0.04871438413833261,
+   "conf_t_diff": 0.7015208706908322,
+   "conf_n": "14345",
+   "p": 0.2414890072513456,
+   "cost": 1.4965910794791109,
+   "ratio": 0.07985225750115828,
+   "ratio_beyond_placebo": 0.032550230190659474,
+   "lopo_min_t": -0.03824423574896495,
+   "holm_threshold": 0.05,
+   "confirmed": false
+  },
+  {
+   "tf": "M15",
+   "signal": "round_big_touch",
+   "horizon": 4,
+   "sign": 1.0,
+   "disc_mean": 0.641069429395661,
+   "beyond_both_placebos": true,
+   "flag": "",
+   "disc_t": 4.355755156556913,
+   "disc_t_diff": 4.1480550239902305,
+   "conf_mean": 0.191007440464135,
+   "conf_t": 1.32995055347866,
+   "conf_diff": 0.20470297817329952,
+   "conf_t_diff": 1.1866013087934397,
+   "conf_n": "8859",
+   "p": 0.11769245971432755,
+   "cost": 1.491064784345154,
+   "ratio": 0.12810136921583973,
+   "ratio_beyond_placebo": 0.13728644142259785,
+   "lopo_min_t": 0.48131066619673085,
+   "holm_threshold": 0.025,
+   "confirmed": false
+  }
+ ],
+ "guard": {
+  "EURUSD": {
+   "through": "2014-12-31",
+   "limit_utc": 1420063200,
+   "dropped_rows": {
+    "M15": 0,
+    "H1": 0,
+    "H4": 0,
+    "D1": 0,
+    "W1": 0
+   }
+  },
+  "GBPUSD": {
+   "through": "2014-12-31",
+   "limit_utc": 1420063200,
+   "dropped_rows": {
+    "M15": 0,
+    "H1": 0,
+    "H4": 0,
+    "D1": 0,
+    "W1": 0
+   }
+  },
+  "USDJPY": {
+   "through": "2014-12-31",
+   "limit_utc": 1420063200,
+   "dropped_rows": {
+    "M15": 0,
+    "H1": 0,
+    "H4": 0,
+    "D1": 0,
+    "W1": 0
+   }
+  },
+  "USDCHF": {
+   "through": "2014-12-31",
+   "limit_utc": 1420063200,
+   "dropped_rows": {
+    "M15": 0,
+    "H1": 0,
+    "H4": 0,
+    "D1": 0,
+    "W1": 0
+   }
+  },
+  "USDCAD": {
+   "through": "2014-12-31",
+   "limit_utc": 1420063200,
+   "dropped_rows": {
+    "M15": 0,
+    "H1": 0,
+    "H4": 0,
+    "D1": 0,
+    "W1": 0
+   }
+  },
+  "NZDUSD": {
+   "through": "2014-12-31",
+   "limit_utc": 1420063200,
+   "dropped_rows": {
+    "M15": 0,
+    "H1": 0,
+    "H4": 0,
+    "D1": 0,
+    "W1": 0
+   }
+  }
+ },
+ "pairs": [
+  "EURUSD",
+  "GBPUSD",
+  "USDJPY",
+  "USDCHF",
+  "USDCAD",
+  "NZDUSD"
+ ],
+ "horizons": [
+  1,
+  4,
+  16
+ ],
+ "periods": {
+  "discovery": [
+   "2008-01-01",
+   "2011-12-31"
+  ],
+  "confirmation": [
+   "2012-01-01",
+   "2014-12-31"
+  ],
+  "full": [
+   "2008-01-01",
+   "2014-12-31"
+  ]
+ },
+ "decision_tfs": [
+  "M15",
+  "H1",
+  "H4"
+ ],
+ "n_tests_pooled": 243
+}
