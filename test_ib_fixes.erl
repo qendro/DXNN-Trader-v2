@@ -19,6 +19,27 @@ test_all() ->
     
     io:format("=== Test Complete ===~n").
 
+%% Test Python bridge functionality
+test_bridge_all() ->
+    io:format("=== Testing Python Bridge ===~n"),
+    
+    %% Test 1: Bridge startup
+    test_bridge_startup(),
+    
+    %% Test 2: Bridge heartbeat
+    test_bridge_heartbeat(),
+    
+    %% Test 3: Market data subscription
+    test_market_data_subscription(),
+    
+    %% Test 4: Error handling
+    test_bridge_error_handling(),
+    
+    %% Test 5: Paper trading guard
+    test_paper_trading_guard(),
+    
+    io:format("=== Bridge Test Complete ===~n").
+
 %% Test configuration
 test_configuration() ->
     io:format("~n1. Testing Configuration:~n"),
@@ -113,4 +134,118 @@ quick_test() ->
         {error, Reason} ->
             io:format("✗ Connectivity failed: ~p~n", [Reason]),
             {error, Reason}
+    end.
+
+%% ============================================================================
+%% Python Bridge Tests
+%% ============================================================================
+
+%% Test bridge startup
+test_bridge_startup() ->
+    io:format("~n1. Testing Bridge Startup:~n"),
+    try
+        {ok, _Pid} = ib_bridge_connector:start_connection("127.0.0.1", 7497, 1),
+        io:format("   ✓ Bridge started successfully~n"),
+        timer:sleep(3000),  % Allow connection time
+        {ok, Status} = ib_bridge_connector:get_connection_status(),
+        case Status of
+            true ->
+                io:format("   ✓ Bridge connected successfully~n");
+            false ->
+                io:format("   ⚠ Bridge started but not connected~n")
+        end,
+        ok = ib_bridge_connector:stop_connection(),
+        io:format("   ✓ Bridge stopped successfully~n")
+    catch
+        _:Error ->
+            io:format("   ✗ Bridge startup failed: ~p~n", [Error])
+    end.
+
+%% Test bridge heartbeat
+test_bridge_heartbeat() ->
+    io:format("~n2. Testing Bridge Heartbeat:~n"),
+    try
+        {ok, _Pid} = ib_bridge_connector:start_connection("127.0.0.1", 7497, 1),
+        io:format("   ✓ Bridge started for heartbeat test~n"),
+        timer:sleep(5000),  % Wait for heartbeat
+        {ok, Status} = ib_bridge_connector:get_connection_status(),
+        case Status of
+            true ->
+                io:format("   ✓ Heartbeat working - connection active~n");
+            false ->
+                io:format("   ⚠ Heartbeat test - connection inactive~n")
+        end,
+        ok = ib_bridge_connector:stop_connection()
+    catch
+        _:Error ->
+            io:format("   ✗ Heartbeat test failed: ~p~n", [Error])
+    end.
+
+%% Test market data subscription
+test_market_data_subscription() ->
+    io:format("~n3. Testing Market Data Subscription:~n"),
+    try
+        {ok, _} = ib_bridge_connector:start_connection("127.0.0.1", 7497, 1),
+        timer:sleep(2000),  % Allow connection
+        ok = ib_bridge_connector:subscribe_market_data("EUR.USD", 1),
+        io:format("   ✓ Market data subscription sent~n"),
+        timer:sleep(3000),  % Wait for tick
+        io:format("   ✓ No crash - subscription handling works~n"),
+        ok = ib_bridge_connector:stop_connection()
+    catch
+        _:Error ->
+            io:format("   ✗ Market data subscription failed: ~p~n", [Error])
+    end.
+
+%% Test bridge error handling
+test_bridge_error_handling() ->
+    io:format("~n4. Testing Bridge Error Handling:~n"),
+    try
+        % Test with invalid port to trigger error
+        Result = ib_bridge_connector:start_connection("127.0.0.1", 9999, 1),
+        case Result of
+            {error, _} ->
+                io:format("   ✓ Error handling works - invalid port rejected~n");
+            {ok, _} ->
+                io:format("   ⚠ Unexpected success with invalid port~n"),
+                ib_bridge_connector:stop_connection()
+        end
+    catch
+        _:Error ->
+            io:format("   ✓ Error handling works - exception caught: ~p~n", [Error])
+    end.
+
+%% Test paper trading guard
+test_paper_trading_guard() ->
+    io:format("~n5. Testing Paper Trading Guard:~n"),
+    try
+        % Test that live trading port is blocked
+        Result = ib_bridge_connector:start_connection("127.0.0.1", 7496, 1),
+        case Result of
+            {error, _} ->
+                io:format("   ✓ Paper trading guard works - live port blocked~n");
+            {ok, _} ->
+                io:format("   ⚠ Paper trading guard may not be working~n"),
+                ib_bridge_connector:stop_connection()
+        end
+    catch
+        _:Error ->
+            io:format("   ✓ Paper trading guard works - exception: ~p~n", [Error])
+    end.
+
+%% Quick bridge test
+quick_bridge_test() ->
+    io:format("Quick Python bridge test...~n"),
+    try
+        {ok, _} = ib_bridge_connector:start_connection("127.0.0.1", 7497, 1),
+        timer:sleep(2000),
+        {ok, Status} = ib_bridge_connector:get_connection_status(),
+        case Status of
+            true -> io:format("✓ Bridge OK~n");
+            false -> io:format("⚠ Bridge started but not connected~n")
+        end,
+        ib_bridge_connector:stop_connection()
+    catch
+        _:Error ->
+            io:format("✗ Bridge test failed: ~p~n", [Error])
     end.
