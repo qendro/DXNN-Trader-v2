@@ -314,6 +314,17 @@ handle_cast({stop,shutdown},State)->
 %%                                       {stop, Reason, State}
 %% Description: Handling all non call/cast messages
 %%--------------------------------------------------------------------
+handle_info({'EXIT', Exoself_Pid, normal}, S) ->
+    %% Normal exit - not a crash, just agent completing successfully
+    {noreply, S};
+handle_info({'EXIT', Exoself_Pid, Reason}, S) ->
+    %% ACTUAL CRASH - Reason is something other than 'normal'
+    io:format("~n*** EXOSELF CRASH *** PID:~p Reason:~p~n~n", [Exoself_Pid, Reason]),
+    case lists:keyfind(Exoself_Pid, 2, S#state.activeAgent_IdPs) of
+        {Agent_Id, _} -> self() ! {Agent_Id, terminated, -999999};
+        false -> ok
+    end,
+    {noreply, S};
 handle_info(_Info, State) ->
     {noreply, State}.
 

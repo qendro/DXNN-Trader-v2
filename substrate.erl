@@ -22,7 +22,7 @@
 }).
 
 gen(ExoSelf_PId,Node)->
-	spawn(Node,?MODULE,prep,[ExoSelf_PId]).
+	spawn(Node,?MODULE,prep,[ExoSelf_PId]).		% Spawns substrate with n
 
 prep(ExoSelf)->
 	random:seed(now()),
@@ -47,45 +47,64 @@ prep(ExoSelf)->
 			substrate:loop(ExoSelf,S,SPIds,[])
 	end.
 
-loop(ExoSelf,S,[SPId|SPIds],SAcc)->
-	%io:format("~p~n",[S]),
+loop(ExoSelf,S,[SPId|SPIds],SAcc)->			% S=state, SPId=sensor pid, SPIds=list of sensor pids, SAcc=list of sensory signals
+	agent_logger:log_message(ExoSelf, substrate, self(), 'Expecting message from', {length(SPIds)+1, SPId, SPIds}),
 	receive
-		{SPId,forward,Sensory_Signal}->
+		{SPId,forward,Sensory_Signal}->		% 
+			agent_logger:log_message(ExoSelf, substrate, self(), received, {SPId, forward}),
 			loop(ExoSelf,S,SPIds,[Sensory_Signal|SAcc]);
 		{ExoSelf,reset_substrate}->
+			agent_logger:log_message(ExoSelf, substrate, self(), received, {ExoSelf, reset_substrate}),
 			U_S = S#state{
 				old_substrate=S#state.cur_substrate,
 				substrate_state_flag=reset
 			},
 			ExoSelf ! {self(),ready},
+			agent_logger:log_message(ExoSelf, substrate, self(), sent, {ExoSelf, ready}),
 			loop(ExoSelf,U_S,[SPId|SPIds],SAcc);
 		{ExoSelf,backup_substrate} ->
 %			io:format("reseting:~n"),
+			agent_logger:log_message(ExoSelf, substrate, self(), received, {ExoSelf, backup_substrate}),
 			U_S = S#state{
 				old_substrate=S#state.cur_substrate,
 				substrate_state_flag=reset
 			},
 			ExoSelf ! {self(),ready},
+			agent_logger:log_message(ExoSelf, substrate, self(), sent, {ExoSelf, ready}),
 			loop(ExoSelf,U_S,[SPId|SPIds],SAcc);
 		{ExoSelf,revert_substrate} ->
 %			io:format("reverting:~n"),
+			agent_logger:log_message(ExoSelf, substrate, self(), received, {ExoSelf, revert_substrate}),
 			U_S = S#state{
 				cur_substrate = S#state.old_substrate,
 				substrate_state_flag=reset
 			},
 			ExoSelf ! {self(),ready},
+			agent_logger:log_message(ExoSelf, substrate, self(), sent, {ExoSelf, ready}),
 			loop(ExoSelf,U_S,[SPId|SPIds],SAcc);
 		{ExoSelf,terminate}->
+			agent_logger:log_message(ExoSelf, substrate, self(), received, {ExoSelf, terminate}),
 %			io:format("Resulting substrate:~p~n",[Substrate]),
 			void;
 		Msg ->
+			agent_logger:log_message(ExoSelf, substrate, self(), unexpected, Msg),
 			io:format("Unknown Msg:~p~n",[Msg]),
+			%check if SPID is in remaining SPIds
+			case lists:member(SPId,SPIds) of
+				true ->
+					agent_logger:log_message(ExoSelf, substrate, self(), 'received_msg_out_of_order', {SPId, SPIds});
+				false ->
+					agent_logger:log_message(ExoSelf, substrate, self(), 'received_msg_from_not_in_spids', {SPId, SPIds}),
+					ok
+			end,
 			loop(ExoSelf,S,[SPId|SPIds],SAcc)
 %		after 20000 ->
 %			io:format("********ERROR: Substrate Crashed:~p~n",[S])
 	end;
 loop(ExoSelf,S,[],SAcc)->%All sensory signals received
+	agent_logger:log_message(ExoSelf, substrate, self(), all_sensors_received, length(SAcc)),
 	{U_Substrate,U_SMode,OAcc} = reason(SAcc,S),
+	agent_logger:log_message(ExoSelf, substrate, self(), sending_to_actuators, length(S#state.apids)),
 	advanced_fanout(OAcc,S#state.actuators,S#state.apids),
 	U_S = S#state{
 		cur_substrate=U_Substrate,
@@ -93,6 +112,7 @@ loop(ExoSelf,S,[],SAcc)->%All sensory signals received
 	},
 	loop(ExoSelf,U_S,S#state.spids,[]).
 
+%q Potential bottleneck here 15M calls
 reason(Input,S)->
 	Densities = S#state.densities,
 	Substrate = S#state.cur_substrate,
@@ -124,6 +144,7 @@ reason(Input,S)->
 
 advanced_fanout(OAcc,[Actuator|Actuators],[APId|APIds])->
 	{Output,OAccRem}=lists:split(Actuator#actuator.vl,OAcc),
+	agent_logger:log_message(self(), substrate, self(), sending_to_actuator, {Actuator, APId, Output}),
 	APId ! {self(),forward,Output},
 	advanced_fanout(OAccRem,Actuators,APIds);
 advanced_fanout([],[],[])->

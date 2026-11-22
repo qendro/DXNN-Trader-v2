@@ -43,7 +43,7 @@ start(Agent_Id,PM_PId)->
 
 start(Agent_Id,PM_PId,OpMode)->
 	%io:format("Starting exoself:~n  Agent_Id: ~p~n  PM_PId: ~p~n  OpMode: ~p~n", [Agent_Id, PM_PId, OpMode]),
-	spawn(exoself,prep,[Agent_Id,PM_PId,OpMode]).
+	spawn_link(exoself,prep,[Agent_Id,PM_PId,OpMode]).
 %The start/3 function spawns a new Agent_Id exoself process, belonging to the population_monitor process with the pid PM_PId, and using the OpMode with which it was spawned.
 
 prep(Agent_Id,PM_PId,OpMode)->
@@ -131,28 +131,40 @@ prep(Agent_Id,PM_PId,OpMode)->
 loop(S,gt)->
 	receive
 		{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag}->
+			agent_logger:log_message(self(), exoself, S#state.agent_id, received, {Cx_PId, evaluation_completed, Fitness, Cycles, attempt, S#state.attempt+1}),
 			%io:format("E Msg:~p~n E S:~p~n",[{Cx_PId,evaluation_completed,Fitness,Cycles,Time,GoalReachedFlag},S]),
 			IdsNPIds = S#state.idsNpids,
 			{U_HighestFitness,U_Attempt}=case Fitness > S#state.highest_fitness of
 				true ->
+					agent_logger:log_message(self(), exoself, S#state.agent_id, fitness_improved, {old, S#state.highest_fitness, new, Fitness}),
 					[NPId ! {self(),weight_backup} || NPId <- S#state.npids],
+					agent_logger:log_message(self(), exoself, S#state.agent_id, sent_to_neurons, {weight_backup, length(S#state.npids)}),
 					{Fitness,0};
 				false ->
+					agent_logger:log_message(self(), exoself, S#state.agent_id, fitness_not_improved, {fitness, Fitness, highest, S#state.highest_fitness}),
 					Perturbed_NIdPs=get(perturbed),
-					[ets:lookup_element(IdsNPIds,NId,2) ! {self(),weight_restore} || {NId,_Spread} <- Perturbed_NIdPs],
+					case Perturbed_NIdPs of
+						undefined -> ok;
+						_ -> 
+							[ets:lookup_element(IdsNPIds,NId,2) ! {self(),weight_restore} || {NId,_Spread} <- Perturbed_NIdPs],
+							agent_logger:log_message(self(), exoself, S#state.agent_id, sent_to_neurons, {weight_restore, length(Perturbed_NIdPs)})
+					end,
 					{S#state.highest_fitness,S#state.attempt+1}
 			end,
 			[PId ! {self(), reset_prep} || PId <- S#state.npids],
+			agent_logger:log_message(self(), exoself, S#state.agent_id, sent_to_neurons, {reset_prep, length(S#state.npids)}),
 			gather_acks(length(S#state.npids)),
 			[PId ! {self(), reset} || PId <- S#state.npids],
+			agent_logger:log_message(self(), exoself, S#state.agent_id, sent_to_neurons, {reset, length(S#state.npids)}),
 			case S#state.substrate_pid of
 				undefined ->
 					ok;
 				Substrate_PId ->
+					agent_logger:log_message(self(), exoself, S#state.agent_id, sent, {Substrate_PId, reset_substrate}),
 					Substrate_PId ! {self(),reset_substrate},
 					receive
 						{Substrate_PId,ready}->
-							ok
+							agent_logger:log_message(self(), exoself, S#state.agent_id, received, {Substrate_PId, ready})
 					end
 			end,
 			U_CycleAcc = S#state.cycle_acc+Cycles,
@@ -161,6 +173,7 @@ loop(S,gt)->
 			gen_server:cast(S#state.pm_pid,{self(),evaluations,S#state.specie_id,1,Cycles,Time}),
 			case (U_Attempt >= S#state.max_attempts) or (GoalReachedFlag == true) of
 				true ->	%End training
+					agent_logger:log_message(self(), exoself, S#state.agent_id, decision, {ending_training, max_attempts, S#state.max_attempts, attempts, U_Attempt, goal_reached, GoalReachedFlag}),
 					A=genotype:dirty_read({agent,S#state.agent_id}),
 					genotype:write(A#agent{fitness=U_HighestFitness}),
 					backup_genotype(S#state.idsNpids,S#state.npids),
@@ -174,13 +187,16 @@ loop(S,gt)->
 					end,
 					gen_server:cast(S#state.pm_pid,{S#state.agent_id,terminated,U_HighestFitness});
 				false -> %Continue training
+					agent_logger:log_message(self(), exoself, S#state.agent_id, decision, {continuing_training, attempts, U_Attempt, max_attempts, S#state.max_attempts}),
 					TuningSelectionFunction=S#state.tuning_selection_f,
 					PerturbationRange = S#state.perturbation_range,
 					AnnealingParameter = S#state.annealing_parameter,
 					ChosenNIdPs=tuning_selection:TuningSelectionFunction(S#state.nids,S#state.generation,PerturbationRange,AnnealingParameter),
 					[ets:lookup_element(IdsNPIds,NId,2) ! {self(),weight_perturb,Spread} || {NId,Spread} <- ChosenNIdPs],
+					agent_logger:log_message(self(), exoself, S#state.agent_id, sent_to_neurons, {weight_perturb, length(ChosenNIdPs)}),
 					%io:format("ChosenNPIds:~p~n",[ChosenNIdPs]),
 					put(perturbed,ChosenNIdPs),
+					agent_logger:log_message(self(), exoself, S#state.agent_id, sent, {Cx_PId, reactivate}),
 					Cx_PId ! {self(),reactivate},
 					U_S =S#state{
 						cycle_acc=U_CycleAcc,
@@ -314,6 +330,7 @@ ensure_live_scape_started() ->
 				ets:lookup_element(IdsNPIds,MappedScapeName,2)
     	end,
 		%fx:log(io_lib:format("Linking Sensor SId:~p to Scape:~p~n",[SId,Scape])),
+		agent_logger:log_message(self(), exoself, init_phase, sent, {SPId, init_sensor, SId, SName}),
 		SPId ! {self(),{SId,Cx_PId,Scape,SName,S#sensor.vl,S#sensor.parameters,Fanout_PIds,OpMode}},
 		%fx:log(io_lib:format("Linked Sensor SId:~p to SPId:~p, Cx_PId:~p, Scape:~p, Name:~p, VL:~p, Params:~p, Fanout_PIds:~p, OpMode:~p~n",[SId,SPId,Cx_PId,Scape,SName,S#sensor.vl,S#sensor.parameters,Fanout_PIds,OpMode])),
 		%fx:log(io_lib:format("Linking next Sensor Ids:~p, IDsNPIds:~p, OpMode:~p~n",[Sensor_Ids,IdsNPIds,OpMode])),
@@ -339,6 +356,7 @@ ensure_live_scape_started() ->
 				%fx:log(io_lib:format("Link Actuators: IdsNPIds:~p, ScapeName:~p -> Mapped:~p~n",[IdsNPIds,ScapeName,MappedScapeName])),
 				ets:lookup_element(IdsNPIds,MappedScapeName,2)
 		end,
+		agent_logger:log_message(self(), exoself, init_phase, sent, {APId, init_actuator, AId, AName}),
 		APId ! {self(),{AId,Cx_PId,Scape,AName,A#actuator.parameters,Fanin_PIds,OpMode}},
 		link_Actuators(Actuator_Ids,IdsNPIds,OpMode);
 	link_Actuators([],_IdsNPIds,_OpMode)->
@@ -386,6 +404,7 @@ ensure_live_scape_started() ->
 		MI_PIdPs = convert_IdPs2PIdPs(IdsNPIds,Input_IdPs_Modulation,[]),
 		O_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- Output_Ids],
 		RO_PIds = [ets:lookup_element(IdsNPIds,Id,2) || Id <- RO_Ids],
+		agent_logger:log_message(self(), exoself, init_phase, sent, {NPId, init_neuron, NId}),
 		NPId ! {self(),{NId,Cx_PId,AFName,PFName,AggrFName,HeredityType,SI_PIdPs,MI_PIdPs,O_PIds,RO_PIds}},
 		link_Neurons(Neuron_Ids,IdsNPIds,HeredityType);
 	link_Neurons([],_IdsNPIds,HeredityType)->
@@ -407,6 +426,7 @@ ensure_live_scape_started() ->
 		SPIds = [ets:lookup_element(IdsNPIds,SId,2) || SId <- SIds],
 		NPIds = [ets:lookup_element(IdsNPIds,NId,2) || NId <- NIds],
 		APIds = [ets:lookup_element(IdsNPIds,AId,2) || AId <- AIds],
+		agent_logger:log_message(self(), exoself, init_phase, sent, {Cx_PId, init_cortex, Cx_Id}),
 		Cx_PId ! {self(),Cx_Id,SPIds,NPIds,APIds},
 		%fx:log(io_lib:format("Linked Cortex:~p SIds:~p AIds:~p NIds:~p~n",[Cx_PId,SIds,AIds,NIds])),
 		{SPIds,NPIds,APIds}.
@@ -447,18 +467,26 @@ backup_genotype(IdsNPIds,NPIds)->
 	
 terminate_phenotype(Cx_PId,SPIds,NPIds,APIds,ScapePIds,CPP_PIds,CEP_PIds,Substrate_PId)->
 	%io:format("Terminating the phenotype:~nCx_PId:~p~nSPIds:~p~nNPIds:~p~nAPIds:~p~nScapePids:~p~n",[Cx_PId,SPIds,NPIds,APIds,ScapePIds]),
+	agent_logger:log_message(self(), exoself, termination, sending_terminate, {sensors, length(SPIds)}),
 	[PId ! {self(),terminate} || PId <- SPIds],
+	agent_logger:log_message(self(), exoself, termination, sending_terminate, {actuators, length(APIds)}),
 	[PId ! {self(),terminate} || PId <- APIds],
+	agent_logger:log_message(self(), exoself, termination, sending_terminate, {neurons, length(NPIds)}),
 	[PId ! {self(),terminate} || PId <- NPIds],
+	agent_logger:log_message(self(), exoself, termination, sending_terminate, {scapes, length(ScapePIds)}),
 	[PId ! {self(),terminate} || PId <- ScapePIds],
 	case Substrate_PId == undefined of
 		true ->
 			ok;
 		false ->
+			agent_logger:log_message(self(), exoself, termination, sending_terminate, {cpp, length(CPP_PIds)}),
 			[PId ! {self(),terminate} || PId <- CPP_PIds],
+			agent_logger:log_message(self(), exoself, termination, sending_terminate, {cep, length(CEP_PIds)}),
 			[PId ! {self(),terminate} || PId <- CEP_PIds],
+			agent_logger:log_message(self(), exoself, termination, sending_terminate, {substrate, Substrate_PId}),
 			Substrate_PId ! {self(),terminate}
 	end,
+	agent_logger:log_message(self(), exoself, termination, sending_terminate, {cortex, Cx_PId}),
 	Cx_PId ! {self(),terminate}.
 %The terminate_phenotype/5 function termiantes sensors, actuators, neurons, all private scapes, and the cortex which composes the NN based system.
 

@@ -17,10 +17,15 @@ prep(ExoSelf_PId) ->
 loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds)->
 	receive
 		{Cx_PId,sync}->
+			agent_logger:log_message(ExoSelf_PId, sensor, Id, received, {Cx_PId, sync}),
 			SensoryVector = sensor:SensorName(ExoSelf_PId,VL,Parameters,Scape),
-			[Pid ! {self(),forward,SensoryVector} || Pid <- Fanout_PIds],
+			[begin
+				Pid ! {self(),forward,SensoryVector},
+				agent_logger:log_message(ExoSelf_PId, sensor, Id, sent, {Pid, forward})
+			end || Pid <- Fanout_PIds],
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,SensorName,VL,Parameters,Fanout_PIds);
 		{ExoSelf_PId,terminate} ->
+			agent_logger:log_message(ExoSelf_PId, sensor, Id, received, {ExoSelf_PId, terminate}),
 			%io:format("Sensor:~p is terminating.~n",[Id]),
 			ok
 	end.
@@ -46,15 +51,19 @@ rng1(VL,Acc)->
 		case get(opmode) of
 			gt	->
 				%Normal, assuming we have 10000 rows, we start from 1000 to 200
+				agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PCI, sent_to_scape, {Scape, sense, graph_sensor}),
 				Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_start_index(),config:data_end_index()};
 		benchmark ->
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PCI, sent_to_scape, {Scape, sense, graph_sensor}),
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],config:data_end_index(),config:benchmark_end_index()};
 		live_trading ->
 			% In live trading, use offsets relative to the latest bar: start=0 (last), end=1000 (1000 bars window)
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PCI, sent_to_scape, {Scape, sense, graph_sensor}),
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,VRes,graph_sensor],0,config:benchmark_end_index()}
 	end,
 	receive 
 		{_From,Result}->
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PCI, received_from_scape, {_From, data_received}),
 			%fx:log(io_lib:format("***fx_PCI received: ~p~n", [{_From, Result}])),
 			Result
 	end.
@@ -67,16 +76,19 @@ rng1(VL,Acc)->
 		case get(opmode) of
 			gt	->
 				%Normal, assuming we have 10000 rows, we start from 1000 to 200
+				agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PLI, sent_to_scape, {Scape, sense, list_sensor}),
 				Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_start_index(),config:data_end_index()};
 		benchmark ->
-
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PLI, sent_to_scape, {Scape, sense, list_sensor}),
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],config:data_end_index(),config:benchmark_end_index()};
 		live_trading ->
 			% In live trading, use offsets relative to the latest bar: start=0 (last), end=1000 (1000 bars window)
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PLI, sent_to_scape, {Scape, sense, list_sensor}),
 			Scape ! {self(),sense,config:primary_currency_pair(),close,[HRes,list_sensor],0,config:benchmark_end_index()}
 	end,
 	receive 
 		{_From,Result}->
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_PLI, received_from_scape, {_From, data_size, length(Result)}),
 			%io:format("fx_PLI received: ~p~n", [{_From, Result}]),
 			%fx:log(io_lib:format("fx_PLI received: ~p~n", [{_From, Result}])),
 			normalize(Result)
@@ -87,8 +99,10 @@ rng1(VL,Acc)->
 		[Val/Normalizer || Val <- Vector].
 
 fx_Internals(Exoself_Id,VL,Parameters,Scape)->
+	agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_Internals, sent_to_scape, {Scape, sense, internals}),
 	Scape ! {self(),sense,internals,Parameters},
 	receive
 		{PId,Result}->
+			agent_logger:log_message(Exoself_Id, scape_interaction, sensor_fx_Internals, received_from_scape, {PId, data_received}),
 			Result
 	end.

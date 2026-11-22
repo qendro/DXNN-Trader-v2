@@ -9,6 +9,8 @@ make_all:all().
 # Build once
 ```bash
 docker build -t erlang-dev .
+docker build -t erlang-dev -f .devcontainer/Dockerfile . #Moved to .devcontainer folder
+
 
 # Run your neural network system
 docker run -it --rm -v ${PWD}:/app -w /app erlang-dev
@@ -43,6 +45,11 @@ find . -name "*.beam" -delete
 mnesia:stop().
 mnesia:delete_schema([node()]).
 q().
+
+
+c(launcher).
+c(fx).
+launcher:start().
 ```
 
 4. **Print the best genotype:**
@@ -71,7 +78,7 @@ q().
    exoself:start(Best_Agent_Id, self(),benchmark).
    exoself:start(Best_Agent_Id, self(),live_trading).
 
-
+    genotype:print({5.683653067369458e-10,agent})
    % 1. Load and start your best agent
    Best_Agent_Id = {5.693207755943648e-10,agent}.  % Update with your latest
    Agent_PId = exoself:start(Best_Agent_Id, self()).

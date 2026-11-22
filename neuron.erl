@@ -66,7 +66,10 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 	SOutput = functions:AF(SAggregation_Product),
 	
 	Output_PIds = S#state.output_pids,
-	[Output_PId ! {self(),forward,[SOutput]} || Output_PId <- Output_PIds],
+	[begin
+		Output_PId ! {self(),forward,[SOutput]},
+		agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, sent, {Output_PId, forward})
+	end || Output_PId <- Output_PIds],
 	
 	case PFName of
 		none ->
@@ -88,10 +91,13 @@ loop(S,ExoSelf_PId,[ok],[ok],SIAcc,MIAcc)->
 loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 	receive
 		{SI_PId,forward,Input}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {SI_PId, forward}),
 			loop(S,ExoSelf_PId,SI_PIds,[MI_PId|MI_PIds],[{SI_PId,Input}|SIAcc],MIAcc);
 		{MI_PId,forward,Input}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {MI_PId, forward_modulation}),
 			loop(S,ExoSelf_PId,[SI_PId|SI_PIds],MI_PIds,SIAcc,[{MI_PId,Input}|MIAcc]);
 		{ExoSelf_PId,weight_backup}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {ExoSelf_PId, weight_backup}),
 			U_S=case S#state.heredity_type of
 				darwinian ->
 					S#state{
@@ -106,6 +112,7 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 			end,
 			loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 		{ExoSelf_PId,weight_restore}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {ExoSelf_PId, weight_restore}),
 			U_S = S#state{
 				si_pidps_bl=S#state.si_pidps_backup,
 				si_pidps_current=S#state.si_pidps_backup,
@@ -113,6 +120,7 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 			},
 			loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 		{ExoSelf_PId,weight_perturb,Spread}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {ExoSelf_PId, weight_perturb, Spread}),
 			Perturbed_SIPIdPs=perturb_IPIdPs(Spread,S#state.si_pidps_backup),
 			Perturbed_MIPIdPs=perturb_IPIdPs(Spread,S#state.mi_pidps_backup),
 			U_S=S#state{
@@ -122,19 +130,24 @@ loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc)->
 			},
 			loop(U_S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 		{ExoSelf_PId,reset_prep}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {ExoSelf_PId, reset_prep}),
 			neuron:flush_buffer(),
 			ExoSelf_PId ! {self(),ready},
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, sent, {ExoSelf_PId, ready}),
 			RO_PIds = S#state.ro_pids,
 			receive 
 				{ExoSelf_PId, reset}->
+					agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {ExoSelf_PId, reset}),
 					fanout(RO_PIds,{self(),forward,[?RO_SIGNAL]})
 			end,
 			loop(S,ExoSelf_PId,S#state.si_pids,S#state.mi_pids,[],[]);
 		{ExoSelf_PId,get_backup}->
 			NId = S#state.id,
 			ExoSelf_PId ! {self(),NId,S#state.si_pidps_backup,S#state.mi_pidps_backup},
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, sent, {ExoSelf_PId, backup_data}),
 			loop(S,ExoSelf_PId,[SI_PId|SI_PIds],[MI_PId|MI_PIds],SIAcc,MIAcc);
 		{ExoSelf_PId,terminate}->
+			agent_logger:log_message(ExoSelf_PId, neuron, S#state.id, received, {ExoSelf_PId, terminate}),
 			%io:format("Neuron:~p is terminating.~n",[self()])
 			ok
 %		after 10000 ->

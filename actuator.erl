@@ -18,14 +18,18 @@ loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[From_PId|Fanin_PIds],MFanin_
 	%fx:log(io_lib:format("Loop Actuator:~p waiting for forward from ~p.~n",[Id,From_PId])),
 	receive
 		{From_PId,forward,Input} ->
+			agent_logger:log_message(ExoSelf_PId, actuator, Id, received, {From_PId, forward}),
 			%fx:log(io_lib:format("Actuator:~p received forward from ~p with input ~p.~n",[Id,From_PId,Input])),
 			loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{Fanin_PIds,MFanin_PIds},lists:append(Input,Acc));
 		{ExoSelf_PId,terminate} ->
+			agent_logger:log_message(ExoSelf_PId, actuator, Id, received, {ExoSelf_PId, terminate}),
 			%io:format("Actuator:~p is terminating.~n",[self()])
 			ok
 	end;
 loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{[],MFanin_PIds},Acc)->
+	agent_logger:log_message(ExoSelf_PId, actuator, Id, all_inputs_received, length(Acc)),
 	{Fitness,EndFlag} = actuator:AName(ExoSelf_PId,lists:reverse(Acc),Parameters,Scape),
+	agent_logger:log_message(ExoSelf_PId, actuator, Id, sent, {Cx_PId, sync, Fitness, EndFlag}),
 	Cx_PId ! {self(),sync,Fitness,EndFlag},
 	loop(Id,ExoSelf_PId,Cx_PId,Scape,AName,Parameters,{MFanin_PIds,MFanin_PIds},[]).
 %The actuator process gathers the control signals from the neurons, appending them to the accumulator. The order in which the signals are accumulated into a vector is in the same order as the neuron ids are stored within NIds. Once all the signals have been gathered, the actuator sends cortex the sync signal, executes its function, and then again begins to wait for the neural signals from the output layer by reseting the Fanin_PIds from the second copy of the list.
@@ -46,8 +50,10 @@ pts(ExoSelf_PId,Result,_Scape)->
 fx_Trade(ExoSelf_PId,Output,Parameters,Scape)->
 	[TradeSignal] = Output,
 	%io:format("[TRADE] ExoSelf=~p Pair=~p Signal=~p~n", [ExoSelf_PId, config:primary_currency_pair(), TradeSignal]),
+	agent_logger:log_message(ExoSelf_PId, scape_interaction, actuator_fx_Trade, sent_to_scape, {Scape, trade, functions:trinary(TradeSignal)}),
 	Scape ! {self(),trade,config:primary_currency_pair(),functions:trinary(TradeSignal)},
 	receive 
 		{Scape,Fitness,HaltFlag}->
+			agent_logger:log_message(ExoSelf_PId, scape_interaction, actuator_fx_Trade, received_from_scape, {Scape, fitness, Fitness, halt, HaltFlag}),
 			{Fitness,HaltFlag}
 	end.

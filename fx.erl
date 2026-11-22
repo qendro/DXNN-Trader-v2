@@ -755,6 +755,7 @@ heartbeat(FXTables_PId,TableNames,Time)->
 		insert_ForexRaw(?SOURCE_DIR++atom_to_list(TN)++".txt",update),
 		updater(TableNames);
 	updater([])->
+		launcher ! fx_updated,
 		ok.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% Table Commands %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

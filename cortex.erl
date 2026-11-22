@@ -12,10 +12,14 @@ prep(ExoSelf_PId) ->
 	random:seed(V1,V2,V3),
 	receive 
 		{ExoSelf_PId,Id,SPIds,NPIds,APIds} ->
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, received, {ExoSelf_PId, init}),
 			%fx:log(io_lib:format("Cortex ~p started~n",[Id])),
 			%fx:log(io_lib:format("ExoSelf_PId: ~p, Id: ~p, SPIds: ~p, NPIds: ~p, APIds: ~p~n",[ExoSelf_PId,Id,SPIds,NPIds,APIds])),
 			put(start_time,now()),
-			[SPId ! {self(),sync} || SPId <- SPIds],
+			[begin
+				SPId ! {self(),sync},
+				agent_logger:log_message(ExoSelf_PId, cortex, Id, sent, {SPId, sync})
+			end || SPId <- SPIds],
 			loop(Id,ExoSelf_PId,SPIds,{APIds,APIds},NPIds,1,0,0,active)
 	end.
 %The gen/2 function spawns the cortex element, which immediately starts to wait for a the state message from the same process that spawned it, exoself. The initial state message contains the sensor, actuator, and neuron PId lists. The message also specifies how many total Sense-Think-Act cycles the Cortex should execute before terminating the NN system. Once we implement the learning algorithm, the termination criteria will depend on the fitness of the NN, or some other useful property
@@ -24,6 +28,7 @@ loop(Id,ExoSelf_PId,SPIds,{[APId|APIds],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,
 	%fx:log(io_lib:format("Cortex:~p waiting for sync from ~p.~n",[Id,APId])),
 	receive 
 		{APId,sync,Fitness,EndFlag} ->%io:format("Fitness:~p~n",[Fitness]),
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, received, {APId, sync, Fitness, EndFlag}),
 			case Fitness == goal_reached of
 				true ->
 					put(goal_reached,true),
@@ -33,6 +38,7 @@ loop(Id,ExoSelf_PId,SPIds,{[APId|APIds],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,
 					loop(Id,ExoSelf_PId,SPIds,{APIds,MAPIds},NPIds,CycleAcc,FitnessAcc+Fitness,EFAcc+EndFlag,active)
 			end;
 		terminate ->
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, received, {ExoSelf_PId, terminate}),
 			%io:format("Cortex:~p is terminating.~n",[Id]),
 			[PId ! {self(),terminate} || PId <- SPIds],
 			[PId ! {self(),terminate} || PId <- MAPIds],
@@ -42,22 +48,33 @@ loop(Id,ExoSelf_PId,SPIds,{[],MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,active)->
 	case EFAcc > 0 of
 		true ->%Organism finished evaluation
 			%fx:log(io_lib:format("Cortex:~p evaluation completed with fitness ~p in ~p cycles.~n",[Id,FitnessAcc,CycleAcc])),
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, evaluation_complete, {fitness, FitnessAcc, cycles, CycleAcc}),
 			TimeDif=timer:now_diff(now(),get(start_time)),
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, sent, {ExoSelf_PId, evaluation_completed, CycleAcc}),
 			ExoSelf_PId ! {self(),evaluation_completed,FitnessAcc,CycleAcc,TimeDif,get(goal_reached)},
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,CycleAcc,FitnessAcc,EFAcc,inactive);
 		false ->
 			%fx:log(io_lib:format("Cortex:~p completed cycle ~p with fitness ~p.~n",[Id,CycleAcc,FitnessAcc])),
-			[PId ! {self(),sync} || PId <- SPIds],
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, cycle_complete, {cycle, CycleAcc, fitness, FitnessAcc}),
+			[begin
+				PId ! {self(),sync},
+				agent_logger:log_message(ExoSelf_PId, cortex, Id, sent, {PId, sync})
+			end || PId <- SPIds],
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,CycleAcc+1,FitnessAcc,EFAcc,active)
 	end;
 loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,_CycleAcc,_FitnessAcc,_EFAcc,inactive)->
 	%fx:log(io_lib:format("Cortex:~p is inactive, waiting for reactivation.~n",[Id])),
 	receive
 		{ExoSelf_PId,reactivate}->
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, received, {ExoSelf_PId, reactivate}),
 			put(start_time,now()),
-			[SPId ! {self(),sync} || SPId <- SPIds],
+			[begin
+				SPId ! {self(),sync},
+				agent_logger:log_message(ExoSelf_PId, cortex, Id, sent, {SPId, sync})
+			end || SPId <- SPIds],
 			cortex:loop(Id,ExoSelf_PId,SPIds,{MAPIds,MAPIds},NPIds,1,0,0,active);
 		{ExoSelf_PId,terminate}->
+			agent_logger:log_message(ExoSelf_PId, cortex, Id, received, {ExoSelf_PId, terminate}),
 			%io:format("Cortex:~p is terminating.~n",[Id]),
 			ok
 	end.
