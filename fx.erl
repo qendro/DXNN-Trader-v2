@@ -7,7 +7,7 @@
 
 -module(fx).
 -compile(export_all).
--define(ALL_TABLES,[metadata,'EURUSD1','EURUSD15','EURUSD30','EURUSD60']).
+-define(ALL_TABLES,[metadata,'EURUSD15','EURUSD30','EURUSD60']).
 %-define(T2D,[{'EURUSD1',1},{'EURUSD15',15},{'EURUSD30',30},{'EURUSD60',60}]).
 %-define(SOURCE_DIR,"/home/puter/.wine/dosdevices/c:/Program Files/MetaTrader - Alpari (US)/experts/files/").
 -define(FX_TABLES_DIR,"fx_tables/").
